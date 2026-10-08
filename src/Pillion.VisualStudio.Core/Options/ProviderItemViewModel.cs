@@ -162,6 +162,9 @@ public sealed class ProviderItemViewModel : ObservableObject
     /// <summary>Gets the credential target the key is stored under.</summary>
     public string CredentialTarget => CredentialManagerStore.TargetPrefix + Id;
 
+    /// <inheritdoc/>
+    public override string ToString() => Title;
+
     /// <summary>Creates an item for a provider read from settings.</summary>
     /// <param name="provider">The provider's settings object.</param>
     /// <returns>The item.</returns>
