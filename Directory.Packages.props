@@ -32,6 +32,12 @@
     <PackageVersion Include="MessagePack.Annotations" Version="2.5.307" />
     <PackageVersion Include="Microsoft.Bcl.AsyncInterfaces" Version="9.0.0" />
     <PackageVersion Include="System.Threading.Tasks.Extensions" Version="4.6.0" />
+    <!--
+      Also the exact version in the Microsoft.VisualStudio.SDK 17.14.40265 graph. Pillion.VisualStudio.Core compiles
+      against it and StreamJsonRpc with ExcludeAssets="runtime" (devenv.exe supplies both); the VSIX tests reference
+      them normally because they run outside Visual Studio.
+    -->
+    <PackageVersion Include="Microsoft.VisualStudio.Threading" Version="17.14.15" />
   </ItemGroup>
 
   <!-- Host. The abstractions packages are pinned to the same version as the hosting package that depends on them. -->

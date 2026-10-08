@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Tests for Pillion.VisualStudio.Core (the supervisor, launcher, RPC client and logger). net48, like the code under
+    test, which runs inside devenv.exe. StreamJsonRpc and Microsoft.VisualStudio.Threading are compile-only in Core
+    (Visual Studio supplies them); here they are referenced normally so the tests have them at run time.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="StreamJsonRpc" />
+    <PackageReference Include="MessagePack" />
+    <PackageReference Include="Microsoft.VisualStudio.Threading" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Pillion.VisualStudio.Core\Pillion.VisualStudio.Core.csproj" />
+    <!-- Build-order only: the real-process tests launch the fake host from its own output folder. -->
+    <ProjectReference Include="..\Pillion.FakeHost\Pillion.FakeHost.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" GlobalPropertiesToRemove="TargetFramework" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>FakeHostPath</_Parameter1>
+      <_Parameter2>$(MSBuildThisFileDirectory)..\Pillion.FakeHost\bin\$(Configuration)\net10.0\Pillion.FakeHost.exe</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

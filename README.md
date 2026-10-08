@@ -33,11 +33,14 @@ src/
   Pillion.ModelGateway/          Model providers and routing (net10.0, placeholder)
   Pillion.Host/                  Pillion Host console process (net10.0); see its README for the launch protocol
   Pillion.VisualStudio/          The Visual Studio extension (net48, produces Pillion.VisualStudio.vsix)
+  Pillion.VisualStudio.Core/     Host supervisor, RPC client and logger for the extension (net48, no VS SDK)
 tests/
   Pillion.Contracts.Tests/       Contract shape tests and MessagePack round trips for every DTO
   Pillion.Common.Tests/
   Pillion.ModelGateway.Tests/
   Pillion.Host.Tests/
+  Pillion.VisualStudio.Tests/    Supervisor, launch protocol and signature policy tests (net48)
+  Pillion.FakeHost/              Stand-in host process used by Pillion.VisualStudio.Tests (not a test project)
 ```
 
 ## Building and testing locally
@@ -65,6 +68,12 @@ The extension package is written to `src/Pillion.VisualStudio/bin/Release/net48/
 To debug the extension, open `PillionProgrammer.sln` in Visual Studio, set `Pillion.VisualStudio` as the startup
 project and press F5; it deploys to and starts the experimental instance (`/rootsuffix Exp`). Open any solution or
 folder, then check **View > Output > Pillion Programmer** and **Tools > Pillion: Show Status**.
+
+The extension launches Pillion Host when it loads and shows its state in the status bar ("Pillion: Ready",
+"Pillion: Restarting (2/3)", "Pillion: Failed, ..."). **Tools > Pillion: Retry** restarts it after a failure and
+**Tools > Pillion: Open Logs** opens `%LOCALAPPDATA%\PillionProgrammer\logs`, where the extension writes
+`vsix-YYYYMMDD.log`. Building the VSIX publishes the host self-contained (win-x64) with `dotnet publish` and packages
+it under `Host\` in the VSIX; that step is skipped when no host source has changed since the last publish.
 
 To publish Pillion Host as a self-contained win-x64 app:
 
