@@ -51,10 +51,12 @@ Work item 0.13 was added when the plan was laid out; the design doc's count of t
 | 2026-10-08 | The Model Gateway reads its settings through the connectivity monitor's settings provider, and the circuit breaker reports every counted failure and success to the monitor | One source of truth for Local-only (user setting or repository policy) between the router and the monitor; breaker evidence and probes share one reachability view, as section 11 describes |
 | 2026-10-08 | Feature flags: a `features` section in `settings.json` (chat, modelGateway, connectivityProbes, cloudProviders, ollamaProvider, openAICompatibleProvider; all default on), a `disabledFeatures` key in `.pillion/policy.json` (unioned, can only switch off), and a read-only virtual setting `effective.features` on `ISettingsService.GetAsync` | The Gate 0 criterion "every work item behind a feature flag" and the design rule "a feature flag gates every agent capability, so a policy file can switch individual tools off". No version bump: missing sections fill with defaults. The extension reads the effective flags from the host because only the host knows the repository policies |
 | 2026-10-08 | The pipe owner check in the extension accepts the user SID or the token owner SID | An elevated token owns the objects it creates as BUILTIN\Administrators; .NET's own `CurrentUserOnly` uses the token owner on both ends, so the extension follows it. Any other owner is still refused |
+| 2026-10-08 | Ghost text on Visual Studio 2022 requires IntelliCode with its automatic code completions on; a run-time check reports when it is missing or off; the self-drawn adornment fallback stays the phase 1 contingency | Product owner''s decision (option a) after the spike rerun showed IntelliCode supplies the proposal broker on 17.x |
+| 2026-10-08 | Gitflow branching: develop is the default and integration branch, eature/* per work item, elease/* and hotfix/*, main for tagged releases | Product owner''s decision |
 
 ## Working agreement
 
-- One branch and one pull request per work item, named `phase0/<slug>`; squash-merged to main once CI is green and the lead has reviewed it.
+- Gitflow (decided 2026-10-08): one `feature/<slug>` branch and one pull request per work item, branched from `develop` and merged back with a merge commit once CI is green and the lead has reviewed it; `main` holds tagged releases only. Phase 0 used `phase0/<slug>` branches stacked on an integration branch before this was adopted.
 - Each pull request carries its unit and component tests; nothing lands red.
 - Sub-agents do not change permissions, policy defaults or contracts without an entry in the decision log above or in the design document.
 - The product owner is asked only for decisions and gate reviews.
