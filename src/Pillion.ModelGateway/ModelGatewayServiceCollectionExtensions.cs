@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Pillion.Common.Secrets;
 using Pillion.Common.Settings;
 using Pillion.Contracts;
+using Pillion.ModelGateway.Providers.Ollama;
 
 namespace Pillion.ModelGateway;
 
@@ -29,7 +30,7 @@ public sealed class GatewayProviderTester : IProviderTester
 public static class ModelGatewayServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the Model Gateway: the catalog, prompt templates, provider registry, router,
+    /// Registers the Model Gateway: the catalog, prompt templates, provider registry (with the Ollama factory), router,
     /// circuit breakers, concurrency limiter, autocomplete cache, Outbound log and <see cref="IModelGateway"/>. The
     /// default <see cref="IProviderTester"/> is replaced by <see cref="GatewayProviderTester"/>. Extension points that
     /// later work items supply (<see cref="IProviderReachability"/>, <see cref="IProviderHealthSink"/>,
@@ -57,6 +58,7 @@ public static class ModelGatewayServiceCollectionExtensions
         services.TryAddSingleton<ICostGovernor, NoCostCaps>();
         services.TryAddSingleton<IGatewaySettingsSource>(sp => new SettingsStoreGatewaySettingsSource(sp.GetRequiredService<SettingsStore>()));
 
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IModelProviderFactory, OllamaProviderFactory>());
         services.TryAddSingleton(sp => new ProviderRegistry(
             sp.GetRequiredService<IGatewaySettingsSource>(),
             sp.GetRequiredService<ISecretStore>(),

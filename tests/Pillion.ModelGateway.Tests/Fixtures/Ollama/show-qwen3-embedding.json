@@ -1,0 +1,29 @@
+{
+ "license": "(trimmed)",
+ "modelfile": "(trimmed)",
+ "parameters": "",
+ "template": "{{ .Prompt }}",
+ "details": {
+  "parent_model": "/Users/ollama/.ollama/models/blobs/sha256-06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439",
+  "format": "gguf",
+  "family": "qwen3",
+  "families": [
+   "qwen3"
+  ],
+  "parameter_size": "595.78M",
+  "quantization_level": "Q8_0",
+  "context_length": 32768,
+  "embedding_length": 1024,
+  "runner": "ggml"
+ },
+ "model_info": {
+  "general.architecture": "qwen3",
+  "qwen3.context_length": 32768
+ },
+ "capabilities": [
+  "tools",
+  "thinking",
+  "embedding"
+ ],
+ "modified_at": "2026-10-06T18:17:23.9289225+01:00"
+}
