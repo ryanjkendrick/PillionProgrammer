@@ -31,7 +31,7 @@ src/
   Pillion.Contracts/             RPC interfaces and DTOs (netstandard2.0); see its README for the versioning rule
   Pillion.Common/                Host-side settings, secrets, redaction, connectivity (net10.0, placeholder)
   Pillion.ModelGateway/          Model providers and routing (net10.0, placeholder)
-  Pillion.Host/                  Pillion Host console process (net10.0)
+  Pillion.Host/                  Pillion Host console process (net10.0); see its README for the launch protocol
   Pillion.VisualStudio/          The Visual Studio extension (net48, produces Pillion.VisualStudio.vsix)
 tests/
   Pillion.Contracts.Tests/       Contract shape tests and MessagePack round trips for every DTO
