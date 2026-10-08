@@ -1,0 +1,51 @@
+<Project>
+  <!--
+    SDK-style VSIX project for the Gate 0 Proposals API spike.
+    The VSSDK build tools do not ship an MSBuild SDK, so the .NET SDK is imported explicitly and
+    Microsoft.VsSDK.targets is imported after it (VSToolsPath comes from the Microsoft.VSSDK.BuildTools package props).
+    Build with MSBuild from a Visual Studio install (dotnet build cannot create VSIX containers).
+  -->
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <RootNamespace>ProposalsSpike</RootNamespace>
+    <AssemblyName>ProposalsSpike</AssemblyName>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Version>0.0.1</Version>
+
+    <!-- VSIX settings -->
+    <GeneratePkgDefFile>false</GeneratePkgDefFile>
+    <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
+    <IncludeDebugSymbolsInVSIXContainer>true</IncludeDebugSymbolsInVSIXContainer>
+    <IncludeDebugSymbolsInLocalVSIXDeployment>true</IncludeDebugSymbolsInLocalVSIXDeployment>
+    <CopyBuildOutputToOutputDirectory>true</CopyBuildOutputToOutputDirectory>
+    <CopyOutputSymbolsToOutputDirectory>true</CopyOutputSymbolsToOutputDirectory>
+    <!-- Deploy to the Experimental Instance on build (devenv /rootsuffix Exp). Pass /p:DeployExtension=false to skip. -->
+    <DeployExtension Condition="'$(DeployExtension)' == ''">true</DeployExtension>
+    <VSSDKTargetPlatformRegRootSuffix>Exp</VSSDKTargetPlatformRegRootSuffix>
+    <StartAction>Program</StartAction>
+    <StartProgram>$(DevEnvDir)devenv.exe</StartProgram>
+    <StartArguments>/rootsuffix Exp</StartArguments>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 17.14 SDK = oldest supported VS (2022 17.14). Do not ship SDK assemblies in the VSIX. -->
+    <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="17.14.2142" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="source.extension.vsixmanifest" SubType="Designer" />
+    <Content Include="LICENSE.txt" IncludeInVSIX="true" />
+    <Reference Include="System.ComponentModel.Composition" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="WindowsBase" />
+  </ItemGroup>
+
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+  <Import Project="$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets" Condition="'$(VSToolsPath)' != '' And Exists('$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets')" />
+</Project>
