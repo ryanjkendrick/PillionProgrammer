@@ -27,7 +27,7 @@ The design document is the specification: https://claude.ai/code/artifact/02f3ee
 | 0.6 | Secret scanner and redaction round trip: patterns, structured placeholders, per-request restore, rejection of unresolved placeholders (section 12) | Common | 0.1 | Done, PR 5 |
 | 0.7 | Model Gateway core: Microsoft.Extensions.AI clients, FIM interface, capability descriptors, model catalog data, routing order, circuit breaker, concurrency and timeouts, redaction middleware, `IModelService` (section 6) | ModelGateway, Host | 0.3, 0.5, 0.6 | Done, PR 10 |
 | 0.8 | Ollama adapter: native API chat and FIM with `suffix`, `num_ctx` and `keep_alive` per profile, minimum version check, model listing (sections 6, 11) | ModelGateway | 0.7 | Done, PR 10 |
-| 0.9 | OpenAI-compatible cloud adapter: streaming chat, custom endpoint, proxy and CA bundle, key from Credential Manager, Test connection (section 6) | ModelGateway | 0.7 | In progress |
+| 0.9 | OpenAI-compatible cloud adapter: streaming chat, custom endpoint, proxy and CA bundle, key from Credential Manager, Test connection (section 6) | ModelGateway | 0.7 | Done, PR 12 |
 | 0.10 | Connectivity and Local-only mode: per-provider probes, network-change events, four states, policy file `localOnly` (section 11) | Common, Host | 0.7 | Done, PR 9 |
 | 0.11 | Chat tool window and Options pages: model picker, streaming replies naming the model, Outbound log entries, Providers and keys page, Local-only switch (section 5) | VSIX | 0.4, 0.7 | Done, PR 11 |
 | 0.12 | Proposals API spike on 17.14 and 18.x with findings and the fallback assessment (section 5) | Spike | | Viable on 18.10, PR 2; 17.14 run pending VS 2022 |
