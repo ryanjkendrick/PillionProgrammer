@@ -67,7 +67,7 @@ internal sealed class FakeLifecycle(string expectedToken, string mode) : IHostLi
 
         if (mode != "normal")
         {
-            return;
+            return; // "quiet" and "fail" do not call back into the VSIX.
         }
 
         try
