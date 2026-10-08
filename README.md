@@ -110,6 +110,21 @@ example `ollama pull gemma4:e2b`).
    ```
 
    Open any solution or folder; the status bar shows "Pillion: Ready, Online" once Pillion Host is up.
+
+   **Visual Studio 2022 17.14.** The build uses Visual Studio 2026's MSBuild, so its deployment reaches only the
+   Visual Studio 2026 Experimental Instance. For Visual Studio 2022, install the built VSIX with 2022's installer and
+   then rebuild that instance's configuration (without the second command, 17.14 kept its cached configuration and
+   did not load the package):
+
+   ```
+   "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\VSIXInstaller.exe" /quiet /rootSuffix:Exp src\Pillion.VisualStudio\bin\Release\net48\Pillion.VisualStudio.vsix
+   "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe" /rootsuffix Exp /updateconfiguration
+   ```
+
+   Remove it again with `VSIXInstaller.exe /quiet /rootSuffix:Exp /uninstall:PillionProgrammer.e4d0d8fe-694c-4b1f-bcb1-31b346cda51e`.
+   The Gate 0 script does all of this when given the 2022 `devenv.exe`:
+   `pwsh tools/gate0/Invoke-Gate0.ps1 -DevEnvPath "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe"`
+   (add `-UninstallAfter` to remove the extension at the end; see [docs/gate-0-report.md](docs/gate-0-report.md)).
 3. **Add a provider.** **Tools > Options > Pillion Programmer > Providers and keys** (in Visual Studio 2026 the
    Options window shows a **Providers and keys** link under Pillion Programmer that opens the page): **Add**, then set the kind to
    `ollama`, the endpoint to `http://localhost:11434` and the models to the model you pulled (for example

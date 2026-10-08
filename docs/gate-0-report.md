@@ -13,7 +13,7 @@ repository root:
 
 | Script | What it does | Who runs it |
 | --- | --- | --- |
-| `tools/gate0/Invoke-Gate0.ps1` | a. builds the full solution (Release, Visual Studio 2026 MSBuild) and deploys the VSIX to the Experimental Instance, recording the VSIX manifest version, `Pillion.Host.exe --version` and the Ollama version; b. `dotnet test PillionProgrammer.NoVsix.slnf` with TRX files and per-project counts; c. backs up `settings.json`; d. launches `devenv /rootsuffix Exp` on a scratch folder; e. local chat check; f. host-kill check; g. Local-only check; h. cloud chat check (only with `-CloudProviderId` and a stored key); i. closes the instance, checks that no `Pillion.Host.exe` survives and restores `settings.json` byte for byte | Anyone; the agents ran it |
+| `tools/gate0/Invoke-Gate0.ps1` | a. builds the full solution (Release, Visual Studio 2026 MSBuild) and deploys the VSIX to the Experimental Instance (with `-DevEnvPath`, to that Visual Studio's Experimental Instance through its own `VSIXInstaller.exe`, for example Visual Studio 2022), recording the VSIX manifest version, `Pillion.Host.exe --version` and the Ollama version; b. `dotnet test PillionProgrammer.NoVsix.slnf` with TRX files and per-project counts; c. backs up `settings.json`; d. launches `devenv /rootsuffix Exp` on a scratch folder; e. local chat check; f. host-kill check; g. Local-only check; h. cloud chat check (only with `-CloudProviderId` and a stored key); i. closes the instance, checks that no `Pillion.Host.exe` survives and restores `settings.json` byte for byte | Anyone; the agents ran it |
 | `tools/gate0/Invoke-OfflineRun.ps1` | Steps d to g with every network adapter that is Up disabled (design section 15, Offline run); expects the status to read Offline; re-enables the adapters in a `finally` block | The product owner, from an elevated prompt with `-IAmReady` |
 | `tools/gate0/Gate0.Checks.psm1` | The shared checks and helpers both scripts use | |
 
@@ -64,7 +64,7 @@ outlived the instance.
 | Killing the host never hangs Visual Studio | **Pass** (scripted); manual check **Pending product owner** | Step f: longest gap between two answered UI Automation polls 269 ms (limit 2000 ms) over 3 kills of 58 polls each; slowest single poll 3 ms; 0 WM_NULL timeouts | After each kill, every 250 ms for 15 s: read the main window's Name, the chat status line and the status bar through UI Automation (served by Visual Studio's UI thread) and send WM_NULL with `SendMessageTimeout` (2 s); record the longest gap between answered polls |
 | The supervisor restarts the host with backoff | **Pass** | Kill 1: Restarting (1/3) at 211 ms, Starting at 1270 ms, Ready at 1798 ms; kill 2: Restarting (2/3) at 188 ms, Starting at 5176 ms, Ready at 5703 ms (the 1 s and 5 s backoffs); a chat reply "pong" after each; new host pid each time; `vsix-log-excerpt.txt` has the `supervisor.state` lines | Status line and status bar sequences from the same polls, times relative to the kill; supervisor transitions from the extension log |
 | Failed after three crashes in five minutes, with Open Logs; Retry recovers | **Pass** | Kill 3 (37.9 s after kill 1): status line "Pillion Host failed: Pillion Host stopped 3 times within 5 minutes, so it will not be restarted automatically. ..." at 198 ms, status bar "Pillion: Failed, see Tools > Pillion: Open Logs", Open Logs link shown in the chat window, no host process running; **Tools > Pillion: Retry** gave Ready in 888 ms and a reply "pong"; screenshot `screenshots/host-failed.png` | UI Automation: Hyperlink "Open Logs" present in the chat window, status bar text, `Pillion.Host.exe` children of the instance; Retry invoked through the real Tools menu |
-| Proposals API spike green on VS 2022 17.14 and VS 2026 18.x | **Pending product owner** (18.10: viable, PR 2) | `spikes/ProposalsSpike/FINDINGS.md` on `phase0/proposals-spike`: viable on 18.10 with two caveats (IntelliSense-coupled proposals unproven, API drift) | 17.14 is now installed; a separate agent runs the 17.14 checklist |
+| Proposals API spike green on VS 2022 17.14 and VS 2026 18.x | **Fail** (18.10: viable; 17.14.41: not viable as installed) | `spikes/ProposalsSpike/FINDINGS.md` on `phase0/proposals-spike` (PR 2, commit `8c00bb4`), "Results on VS 2022 17.14.41": on Visual Studio 2022 17.14.41 with only the core editor workload, `%TEMP%\ProposalsSpike.log` stayed empty across all ten scenarios (the source provider is never created; Tab inserts indentation). 17.14 ships the Proposals contract (runtime API identical to the 17.14 SDK) but no proposal broker or inline-completions host; in 18.10 these are in the platform (`Microsoft.VisualStudio.Editor.Implementation.dll`). In 17.x they apparently come with IntelliCode, which is not installed here. See [Visual Studio 2022 17.14](#visual-studio-2022-1714) | The spike's ten scenarios driven in the 2022 Experimental Instance (DTE plus SendKeys), the spike log, screenshots, metadata scan of the 2022 and 2026 editor assemblies, and an API dump of the 17.14 runtime `Microsoft.VisualStudio.Language.dll` |
 | Secret scanner round trip: no placeholder reaches disk, originals restored in model output | **Pass** | `Pillion.Common.Tests` 741 passed, 0 failed, including the `Redaction` tests (round trip, session, edge cases, corpus, behaviour, performance); 616 passing tests whose names mention Redaction or SecretScanner across the TRX files; gateway redaction middleware tests in `Pillion.ModelGateway.Tests` (`GatewayTests`) | `dotnet test` in step b; TRX files in `tests/` |
 | Local-only mode routes nothing to a cloud provider and runs no probes | **Pass** (network on); with the adapter disabled **Pending product owner** | Step g: status "Ready. Local-only: nothing leaves this machine.", status bar "Pillion: Ready, Local-only"; the cloud entry "gpt-4o-mini (Gate 0 cloud placeholder), cloud model, unavailable: Local-only mode is on (Tools > Options > Pillion Programmer > Privacy)" disabled; Auto answered under "gemma4:e2b via Ollama, local"; 1 Outbound line, local; 0 probes in the 65 s Local-only window against 4 probe lines before it; host log `Connectivity Online -> LocalOnly: local-only mode turned on` then `LocalOnly -> Online` | `privacy.localOnly` set in `settings.json`, Refresh models, picker entries read through UI Automation, Outbound lines and Debug `Probed provider` lines read from the host log; held for one full probe cadence. The offline run (`Invoke-OfflineRun.ps1`) repeats it with the adapters disabled |
 | Every work item behind a feature flag | **Fail** | No feature-flag mechanism exists in phase 0 | Code search |
@@ -108,6 +108,94 @@ Extension log for kill 1 (`vsix-log-excerpt.txt`):
 2026-10-08T16:51:13.407Z info supervisor.state from=Starting to=Ready attempt=0 message="Pillion: Ready"
 ```
 
+## Visual Studio 2022 17.14
+
+Date: 2026-10-08. Branch `phase0/vs2022-verify` (from `phase0/integration`, commit `d15d0d3`).
+
+**Machine and versions.** Visual Studio Community 2022 **17.14.41** (September 2026), installation version
+17.14.37710.0, instance `cb15242f`, Experimental Instance hive `%LOCALAPPDATA%\Microsoft\VisualStudio\17.0_cb15242fExp`.
+Beside it, Visual Studio Community 2026 18.10.3, whose MSBuild builds the solution (the .NET 10 SDK needs MSBuild 18).
+VSIX manifest 0.1.0 (`InstallationTarget [17.14,)`); `Pillion.Host.exe --version`: `Pillion Host 0.1.0 (contract 1.1)`;
+Ollama 0.40.1 with `gemma4:e2b`; PowerShell 7.6.6; .NET SDK 10.0.401.
+
+**Workloads.** vswhere reports only the **core editor** workload (`Microsoft.VisualStudio.Workload.CoreEditor`) for
+this install. It does **not** have the *Visual Studio extension development* workload
+(`Microsoft.VisualStudio.Workload.VisualStudioExtension`), and it has no .NET or C++ workload, so no Roslyn, no managed
+project system, no IntelliCode and no GitHub Copilot (the title-bar badge offers "Install GitHub Copilot components").
+Nothing was installed. Building does not need the workload, because the 2026 MSBuild builds and 2022's own
+`VSIXInstaller.exe` installs; but the missing IntelliCode matters for the Proposals spike (below).
+
+### Proposals API spike on 17.14: Fail
+
+Full write-up: `spikes/ProposalsSpike/FINDINGS.md`, "Results on VS 2022 17.14.41" (PR 2, commit `8c00bb4` on
+`phase0/proposals-spike`). Summary:
+
+* The spike was built with the 2026 MSBuild against the 17.14 SDK and installed with 2022's
+  `VSIXInstaller.exe /quiet /rootSuffix:Exp`. Its DLL is in the Exp instance's MEF catalog.
+* All ten scenarios (multi-line, text right of the caret, multi-line right of the caret, replacement, virtual space
+  padded and unpadded, after indentation, Esc, two proposals with Alt+., IntelliSense list open) were driven in the 2022
+  Experimental Instance on a C# file in an open folder. **`%TEMP%\ProposalsSpike.log` stayed empty**: the proposal
+  source provider was never constructed and never asked for a proposal. No ghost text appeared; Tab inserted
+  indentation. A TextMate word-completion list was open in the IntelliSense case and still nothing was requested.
+* Cause: Visual Studio 2022 17.14 ships the Proposals **contract** (the runtime `Microsoft.VisualStudio.Language.dll`
+  17.14.305 has exactly the API of the 17.14.249 SDK package) but **no implementation** of the proposal broker, the
+  suggestion service or the inline-completions host in the platform: no assembly under the 2022 `Common7\IDE` defines
+  them or imports `ProposalSourceProviderBase`. In 18.10 they are in the platform
+  (`Microsoft.VisualStudio.Editor.Implementation.dll`). In 17.x they apparently come with IntelliCode (not verified:
+  the 17.14 IntelliCode package is not on this machine).
+* Coexistence: no inline-completion provider exists on this install (no IntelliCode, no Copilot), so there was nothing
+  to coexist with.
+* Verdict: **viable on 18.10, not viable on 17.14 as installed**; whether 17.14 with IntelliCode works is open. The
+  criterion row above is **Fail**.
+
+### The extension on 17.14: Pass (one unexplained empty reply, not reproduced)
+
+How: the Release build from this worktree (2026 MSBuild, `/p:DeployExtension=false`, 0 warnings, 0 errors), installed
+with `"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\VSIXInstaller.exe" /quiet /rootSuffix:Exp
+Pillion.VisualStudio.vsix`, then driven with UI Automation rooted at the launched 2022 `devenv.exe`, using the
+Gate 0 module. Scripted runs, all with `-DevEnvPath "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe"`:
+
+| Run folder (`tools/gate0/out/`) | Command | Result |
+| --- | --- | --- |
+| `20261008-182121-gate0` | `Invoke-Gate0.ps1 -SkipTests -DevEnvPath ...` | launch failed: package not loaded (configuration not refreshed, see below; fixed in the module) |
+| `20261008-182811-gate0` | `Invoke-Gate0.ps1 -SkipTests -DevEnvPath ...` | 1 failed (empty reply after Retry, see below), 1 pending (cloud); everything else Pass |
+| `20261008-183257-smoke2022` | smoke script on the module functions: launch, status bar, chat, one kill, chat again | Pass; its Options step could not find the native tree through UI Automation, so the Output pane and Options checks were finished by hand in a separate session |
+| `20261008-184307-gate0` | `Invoke-Gate0.ps1 -SkipBuild -SkipTests -UninstallAfter -DevEnvPath ...` | **Pass**, 0 failed, 1 pending (cloud): kills Ready in 1829 / 5726 ms, longest UI gap 264 ms, Retry to Ready in 928 ms and "pong" after it; the extension uninstalled at the end |
+
+Finding during setup: after `VSIXInstaller` reinstalled the extension, **17.14 did not load the package**: no Pillion
+commands on the Tools menu, no host process, no extension log lines. The activity log showed
+`PkgDefCache fast check: timestamps are current`, so devenv kept its cached configuration (`extensions.configurationchanged`
+in the hive was not touched by the reinstall). `devenv.exe /rootsuffix Exp /updateconfiguration` fixed it; the gate
+module now runs it after every install. The first gate run (`20261008-182121-gate0`) failed on exactly this
+("Pillion Host did not start as a child of the Experimental Instance within 90 s").
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Package loads with no error | **Pass** | Tools menu shows Pillion: Open Chat, Show Status, Retry, Open Logs; the Output window's "Pillion Programmer" pane shows the supervisor lines through `supervisor.state from=Starting to=Ready` (screenshot `output-pillion.png` in the smoke run folder). Every `warn`/`error` line in the extension log during the session comes from the deliberate host kills |
+| Status bar reaches "Pillion: Ready, Online" | **Pass** | Status bar "Pillion: Ready, Online" 9.3 s after launch (smoke run; host pid started as a child of the 2022 `devenv.exe` from `17.0_cb15242fExp\Extensions\...\Host\Pillion.Host.exe`) |
+| Tools > Pillion: Open Chat opens the window | **Pass** | UI Automation finds "Pillion Chat"; status line "Ready. Online." |
+| Ollama answers "Reply with the single word pong" | **Pass** | Header **"gemma4:e2b via Ollama, local"**, reply "pong" (gate run: 12.8 s cold; smoke run: 2.1 s). Outbound line `ollama/gemma4:e2b Chat local, prompt ~110 tokens, completion 147 tokens, 0 redactions, 12497 ms, Succeeded (none)` |
+| One host kill recovers to Ready | **Pass** | Smoke run: Restarting (1/3) at 233 ms, Starting at 1029 ms, **Ready, Online at 1819 ms**; longest UI gap 269 ms, 0 WM_NULL timeouts; "pong" afterwards. Gate run: Ready 1822 ms after kill 1 and 5958 ms after kill 2 (the 1 s and 5 s backoffs), Failed with Open Logs after kill 3, Retry to Ready in 996 ms |
+| Local-only (gate step g) | **Pass** | Status "Ready. Local-only: nothing leaves this machine."; the cloud placeholder greyed with the Local-only reason; Auto answered locally; 0 probes in 65 s |
+| Tools > Options > Pillion Programmer, both pages readable | **Pass** | Classic Options dialog (17.14 has no unified settings window, so the pages show directly, no link). Under the Dark theme the dialog stays light, and both pages render as dark text on a white background: **Providers and keys** (description, provider list, Add, Remove, Save, Reload, Id, Kind, Display name, Endpoint, Model ids) and **Privacy** (Local-only mode, Cloud use per task class with Chat, Inline edit, Autocomplete, Agent and their descriptions, Save, Reload). All text legible; both pages scroll vertically at the default dialog size. Screenshots `options-providers.png`, `options-privacy.png` in the smoke run folder |
+| Close; no `Pillion.Host.exe` remains | **Pass** | Every run: no surviving host (gate run pids seen 83624, 69084, 81792, 60792; smoke 80040, 75480; manual session 84796) |
+| Uninstall from the Exp instance | **Done** | `VSIXInstaller.exe /quiet /rootSuffix:Exp /uninstall:PillionProgrammer.e4d0d8fe-694c-4b1f-bcb1-31b346cda51e` (step i of the last gate run, `-UninstallAfter`), then `/updateconfiguration`; the hive's `Extensions` folder holds no Pillion files. Uninstalling while the instance is running only schedules the removal (exit 0, files stay until it closes) |
+
+**Open: one empty reply after Retry.** In the gate run, the reply sent after **Tools > Pillion: Retry** came back under
+the right header ("gemma4:e2b via Ollama, local") with **empty text**, although the host logged
+`Outbound ...: ollama/gemma4:e2b Chat local, prompt ~110 tokens, completion 102 tokens, ..., Succeeded (none)`. That
+made step f Fail ("no clean reply after Retry"); everything else in step f passed. The replies after kill 1 and kill 2,
+the smoke run's reply after its kill, the reply after Retry in the next gate run (`20261008-184307-gate0`) and every
+18.10 run were "pong". Not diagnosed: it may be the model emitting only
+non-content tokens, or a transcript rendering race after a restart. Worth a look in phase 1 (the transcript should say
+"empty reply" rather than show nothing).
+
+**Gate script.** `tools/gate0/Invoke-Gate0.ps1` now takes `-DevEnvPath` (and `-UninstallAfter`); see the script help
+and the README. With `-DevEnvPath` naming the 2022 `devenv.exe`, step a builds with the newest MSBuild and
+`/p:DeployExtension=false`, installs the VSIX with 2022's `VSIXInstaller.exe /quiet /rootSuffix:Exp` (uninstalling the
+previous copy first), runs `/updateconfiguration`, and the live checks drive the 2022 Experimental Instance
+(`Find-VisualStudio -DevEnvPath`).
+
 ## What the product owner must do
 
 1. **Cloud chat.** Store a key for one OpenAI-compatible provider on **Tools > Options > Pillion Programmer > Providers
@@ -116,8 +204,13 @@ Extension log for kill 1 (`vsix-log-excerpt.txt`):
    model, sends the same prompt and records the header ("... via <provider>, cloud") and the Outbound line with its
    redaction count. The script only asks `cmdkey /list:PillionProgrammer/<id>` whether the key exists; it never reads
    it. Add a screenshot from the Chat window for the gate review.
-2. **Proposals spike on Visual Studio 2022 17.14.** Visual Studio 2022 Community 17.14.41 is now installed; a separate
-   agent reruns the 17.14 checklist in `spikes/ProposalsSpike/FINDINGS.md` (PR 2). Review its findings.
+2. **Proposals spike on Visual Studio 2022 17.14.** It was rerun on 17.14.41 and failed: that install (core editor
+   workload only) has no proposal broker, so third-party proposals are never requested (see
+   [Visual Studio 2022 17.14](#visual-studio-2022-1714) and PR 2). To find out whether IntelliCode supplies the broker
+   on 17.x, add the **.NET desktop development** workload (or the IntelliCode component) to Visual Studio 2022 in the
+   Visual Studio Installer, then rerun the matrix in `spikes/ProposalsSpike/FINDINGS.md` (checklist steps 2 to 6;
+   `Run-Scenarios.ps1` works once the C# project system is installed). Then decide how ghost text should behave on
+   17.14: require IntelliCode, build the adornment fallback for 17.x, or offer ghost text on 18.x only.
 3. **Offline run.** From an elevated PowerShell 7 prompt in the repository root:
    `pwsh tools/gate0/Invoke-OfflineRun.ps1 -IAmReady`. It lists the adapters it disables (on this machine `Ethernet`
    and `vEthernet (Default Switch)`), takes about five minutes and puts the network back in a `finally` block. Dry run
