@@ -44,6 +44,7 @@ public sealed class PillionPackage : AsyncPackage
 
     private PillionLog? _log;
     private HostSupervisor? _supervisor;
+    private ChatAvailability? _chatAvailability;
     private OutputPaneWriter? _output;
     private IVsStatusbar? _statusBar;
 
@@ -69,6 +70,8 @@ public sealed class PillionPackage : AsyncPackage
         _log = log;
         var supervisor = CreateSupervisor(log);
         _supervisor = supervisor;
+        var chatAvailability = new ChatAvailability(supervisor, log);
+        _chatAvailability = chatAvailability;
         AddService(typeof(IHostConnection), (container, token, type) => Task.FromResult<object?>(supervisor), promote: true);
         Instance = this;
 
@@ -93,15 +96,17 @@ public sealed class PillionPackage : AsyncPackage
             commandService.AddCommand(new MenuCommand(OnShowStatus, new CommandID(PackageGuids.CommandSet, PackageIds.ShowStatusCommand)));
             commandService.AddCommand(new MenuCommand(OnRetryHost, new CommandID(PackageGuids.CommandSet, PackageIds.RetryHostCommand)));
             commandService.AddCommand(new MenuCommand(OnOpenLogs, new CommandID(PackageGuids.CommandSet, PackageIds.OpenLogsCommand)));
-            commandService.AddCommand(new MenuCommand(OnOpenChat, new CommandID(PackageGuids.CommandSet, PackageIds.OpenChatCommand)));
-            commandService.AddCommand(new MenuCommand(OnOpenChat, new CommandID(PackageGuids.CommandSet, PackageIds.ViewChatCommand)));
+            commandService.AddCommand(CreateOpenChatCommand(PackageIds.OpenChatCommand));
+            commandService.AddCommand(CreateOpenChatCommand(PackageIds.ViewChatCommand));
         }
 
         supervisor.StateChanged += OnHostStateChanged;
         supervisor.ConnectivityChanged += OnConnectivityChanged;
         SetStatusBarText(StatusBarText(supervisor));
 
-        // Returns at once: launching, connecting and the handshake run on the thread pool.
+        // Returns at once: launching, connecting and the handshake run on the thread pool. Availability follows the
+        // host's effective feature flags: it reads them whenever the host becomes ready.
+        chatAvailability.Start();
         supervisor.Start();
     }
 
@@ -126,7 +131,7 @@ public sealed class PillionPackage : AsyncPackage
         var viewModel = new ChatViewModel(
             _supervisor!,
             JoinableTaskFactory,
-            new ChatViewModelOptions { OpenLogs = OpenLogFolder, Log = _log });
+            new ChatViewModelOptions { OpenLogs = OpenLogFolder, Log = _log, Availability = _chatAvailability });
         return System.Threading.Tasks.Task.FromResult<object>(new ChatToolWindowState(viewModel));
     }
 
@@ -136,6 +141,12 @@ public sealed class PillionPackage : AsyncPackage
         if (disposing && ReferenceEquals(Instance, this))
         {
             Instance = null;
+        }
+
+        if (disposing)
+        {
+            _chatAvailability?.Dispose();
+            _chatAvailability = null;
         }
 
         if (disposing && _supervisor is { } supervisor)
@@ -293,6 +304,31 @@ public sealed class PillionPackage : AsyncPackage
         });
     }
 
+    /// <summary>
+    /// Creates an Open Chat command that is disabled while the chat feature flag is off (settings or repository policy).
+    /// Opening the Tools menu also asks the host again, so a change shows up without restarting Visual Studio.
+    /// </summary>
+    private OleMenuCommand CreateOpenChatCommand(int commandId)
+    {
+        var command = new OleMenuCommand(OnOpenChat, new CommandID(PackageGuids.CommandSet, commandId));
+        command.BeforeQueryStatus += (sender, args) =>
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var availability = _chatAvailability;
+            if (sender is OleMenuCommand menuCommand)
+            {
+                menuCommand.Enabled = availability?.IsEnabled ?? true;
+                menuCommand.Visible = true;
+            }
+
+            if (availability is not null)
+            {
+                _ = JoinableTaskFactory.RunAsync(() => availability.RefreshAsync(DisposalToken));
+            }
+        };
+        return command;
+    }
+
     private void OnOpenChat(object sender, EventArgs e)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
@@ -300,6 +336,16 @@ public sealed class PillionPackage : AsyncPackage
         {
             try
             {
+                if (_chatAvailability is { } availability)
+                {
+                    await availability.RefreshAsync(DisposalToken).ConfigureAwait(true);
+                    if (!availability.IsEnabled)
+                    {
+                        _output?.WriteLine(ChatAvailability.DisabledMessage + ".");
+                        return;
+                    }
+                }
+
                 var window = await ShowToolWindowAsync(typeof(ChatToolWindow), 0, create: true, DisposalToken).ConfigureAwait(true);
                 if (window?.Frame is null)
                 {

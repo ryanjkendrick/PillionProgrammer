@@ -26,6 +26,12 @@ public sealed class ChatViewModelOptions
 
     /// <summary>Gets or sets the request id factory (a new GUID by default).</summary>
     public Func<string>? NewRequestId { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether chat is available (the <c>chat</c> feature flag). When it is off the window shows
+    /// <see cref="ChatAvailability.DisabledMessage"/> and nothing can be sent. <see langword="null"/> means always available.
+    /// </summary>
+    public ChatAvailability? Availability { get; set; }
 }
 
 /// <summary>
@@ -50,6 +56,7 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
     private readonly PillionLog? _log;
     private readonly TimeSpan _flushInterval;
     private readonly Func<string> _newRequestId;
+    private readonly ChatAvailability? _availability;
     private readonly CancellationTokenSource _disposal = new();
     private readonly object _gate = new();
 
@@ -63,6 +70,7 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
     private int _connectivityVersion;
     private (int RestartAttempt, int MaxRestartAttempts, string? Reason) _lastChange;
     private string _statusText;
+    private bool _isChatEnabled = true;
     private bool _started;
     private bool _disposed;
 
@@ -78,6 +86,8 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         _log = options?.Log;
         _flushInterval = options?.FlushInterval ?? TimeSpan.FromMilliseconds(50);
         _newRequestId = options?.NewRequestId ?? (() => Guid.NewGuid().ToString("N"));
+        _availability = options?.Availability;
+        _isChatEnabled = _availability?.IsEnabled ?? true;
         _hostState = connection.State;
         _connectivity = connection.Connectivity;
         _statusText = FormatStatus(_hostState, 0, 0, reason: null, _connectivity);
@@ -147,6 +157,27 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _connectivity, value);
     }
 
+    /// <summary>Gets a value indicating whether chat is available (the <c>chat</c> feature flag, after policies).</summary>
+    public bool IsChatEnabled
+    {
+        get => _isChatEnabled;
+        private set
+        {
+            if (SetProperty(ref _isChatEnabled, value))
+            {
+                OnPropertyChanged(nameof(IsChatDisabled));
+                OnPropertyChanged(nameof(ChatDisabledMessage));
+                UpdateCommands();
+            }
+        }
+    }
+
+    /// <summary>Gets a value indicating whether the window shows <see cref="ChatDisabledMessage"/> instead of accepting messages.</summary>
+    public bool IsChatDisabled => !_isChatEnabled;
+
+    /// <summary>Gets the message shown while chat is disabled by settings or policy (empty while chat is available).</summary>
+    public string ChatDisabledMessage => IsChatDisabled ? ChatAvailability.DisabledMessage : string.Empty;
+
     /// <summary>Gets a value indicating whether the host can serve requests (Ready or Degraded).</summary>
     public bool IsHostUsable => IsUsable(HostState);
 
@@ -189,6 +220,12 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         }
 
         _started = true;
+        if (_availability is not null)
+        {
+            _availability.Changed += OnAvailabilityChanged;
+            IsChatEnabled = _availability.IsEnabled;
+        }
+
         _connection.StateChanged += OnHostStateChanged;
         _connection.ConnectivityChanged += OnConnectivityChanged;
         Connectivity = _connection.Connectivity;
@@ -284,6 +321,12 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         ModelPicker.BeginLoading();
 
         await TaskScheduler.Default;
+        if (_availability is not null)
+        {
+            // Refresh also re-reads the feature flags, so a change in settings or policy shows up without a restart.
+            await _availability.RefreshAsync(_disposal.Token).ConfigureAwait(false);
+        }
+
         IReadOnlyList<ModelOption>? options = null;
         RpcFailure? failure = null;
         try
@@ -339,6 +382,11 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         _disposed = true;
         _connection.StateChanged -= OnHostStateChanged;
         _connection.ConnectivityChanged -= OnConnectivityChanged;
+        if (_availability is not null)
+        {
+            _availability.Changed -= OnAvailabilityChanged;
+        }
+
         InFlight? flight;
         lock (_gate)
         {
@@ -399,6 +447,7 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
 
     private bool CanSend() =>
         !_disposed
+        && IsChatEnabled
         && IsHostUsable
         && !IsSending
         && !string.IsNullOrWhiteSpace(InputText)
@@ -657,6 +706,17 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
             return ReferenceEquals(_inFlight, flight);
         }
     }
+
+    /// <summary>Raised on any thread when the <c>chat</c> flag changed.</summary>
+    private void OnAvailabilityChanged(object? sender, EventArgs e) =>
+        Run(async () =>
+        {
+            await _joinableTaskFactory.SwitchToMainThreadAsync(_disposal.Token);
+            if (!_disposed)
+            {
+                IsChatEnabled = _availability!.IsEnabled;
+            }
+        });
 
     /// <summary>Raised on a background thread.</summary>
     private void OnHostStateChanged(object? sender, HostStateChangedEventArgs e)

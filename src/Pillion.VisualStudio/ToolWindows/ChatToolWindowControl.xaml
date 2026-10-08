@@ -117,6 +117,26 @@
 
     <DockPanel Margin="6" LastChildFill="True">
 
+        <!-- Shown instead of a working chat while the chat feature flag is off (settings or repository policy). -->
+        <TextBlock DockPanel.Dock="Top"
+                   Text="{Binding ChatDisabledMessage}"
+                   FontWeight="SemiBold"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,6"
+                   AutomationProperties.Name="{Binding ChatDisabledMessage}"
+                   AutomationProperties.LiveSetting="Polite">
+            <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsChatDisabled}" Value="True">
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TextBlock.Style>
+        </TextBlock>
+
         <!-- Model picker and conversation commands. -->
         <Grid DockPanel.Dock="Top" Margin="0,0,0,4">
             <Grid.ColumnDefinitions>
@@ -220,6 +240,7 @@
             <TextBox x:Name="Input"
                      Grid.Column="0"
                      Text="{Binding InputText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                     IsEnabled="{Binding IsChatEnabled}"
                      AcceptsReturn="True"
                      TextWrapping="Wrap"
                      MinHeight="48"
