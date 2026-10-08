@@ -1,0 +1,5 @@
+aws_access_key_id = <redacted:aws-access-key>
+Server=db;Password=<redacted:connection-string-password>;
+token: "<redacted:generic-high-entropy#2>"
+postgres://svc:<redacted:connection-string-password>@db.example.net/app
+Authorization: Bearer <redacted:jwt>

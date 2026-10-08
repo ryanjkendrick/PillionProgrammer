@@ -1,0 +1,9 @@
+"secretName": "my-application-secret-store-name-v2-production",
+"keyVaultUri": "https://myvault.vault.azure.net/",
+passwordResetEmailSubject: "Reset your password for the Pillion Programmer service account"
+token_url: https://example.com/oauth2/token
+secret_ref: projects/demo/secrets/my-secret/versions/latest
+key_file_path: /home/user/.config/gcloud/application_default_credentials.json
+credential_provider_class_name: com.example.security.providers.DefaultCredentialProvider
+ssh_key_fingerprint: SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8
+license_key_help: See the portal under Settings and copy the value from the License page

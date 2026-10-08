@@ -1,0 +1,14 @@
+api_key = "your-api-key-here-0123456789abcdef0123456789"
+token = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+secret = "00000000000000000000000000000000"
+Server=db;User Id=app;Password=changeme;
+Server=db;User Id=app;Password=password;
+Password=<your-password>;
+Password=********;
+DefaultEndpointsProtocol=https;AccountName=demo;AccountKey=<your-account-key>;
+OPENAI_API_KEY=sk-your-api-key-goes-here
+export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+url = "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
+DATABASE_URL=postgres://user:password@localhost:5432/app
+STRIPE_KEY=sk_test_xxxxxxxxxxxxxxxxxxxxxxxx
+client_secret: REPLACE_ME_WITH_YOUR_CLIENT_SECRET_VALUE_123

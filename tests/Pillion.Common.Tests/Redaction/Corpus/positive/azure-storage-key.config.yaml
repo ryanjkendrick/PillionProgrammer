@@ -1,0 +1,2 @@
+storageAccountKey: "{{azure-storage-key}}"
+storageAccountName: demo
