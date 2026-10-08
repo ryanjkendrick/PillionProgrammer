@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "comment": "The model catalog (design section 6): data, not code. 'profiles' maps each profile to a default model id per provider kind; routing.profiles in settings overrides it. 'families' lists capability descriptors for known model families, matched in order against the model id (case-insensitive, '*' is a wildcard); the last entry must be the '*' default. Providers that report capabilities themselves (Ollama's /api/show) override the chat, fim, vision, tools and embeddings flags and the context window.",
+  "profiles": {
+    "ollama": {
+      "LocalFast": "qwen2.5-coder:1.5b",
+      "LocalStrong": "qwen2.5-coder:14b"
+    },
+    "openai-compatible": {}
+  },
+  "families": [
+    {
+      "match": "qwen2.5-coder:1.5b*",
+      "contextWindow": 32768,
+      "maxOutputTokens": 4096,
+      "chat": true,
+      "fim": true,
+      "toolCalling": "none"
+    },
+    {
+      "match": "qwen2.5-coder:7b*",
+      "contextWindow": 32768,
+      "maxOutputTokens": 8192,
+      "chat": true,
+      "fim": true,
+      "toolCalling": "native"
+    },
+    {
+      "match": "qwen2.5-coder:14b*",
+      "contextWindow": 32768,
+      "maxOutputTokens": 8192,
+      "chat": true,
+      "fim": true,
+      "toolCalling": "native"
+    },
+    {
+      "match": "qwen2.5-coder:32b*",
+      "contextWindow": 32768,
+      "maxOutputTokens": 8192,
+      "chat": true,
+      "fim": true,
+      "toolCalling": "native"
+    },
+    {
+      "match": "qwen2.5-coder*",
+      "contextWindow": 32768,
+      "maxOutputTokens": 8192,
+      "chat": true,
+      "fim": true,
+      "toolCalling": "native"
+    },
+    {
+      "match": "devstral*",
+      "contextWindow": 131072,
+      "maxOutputTokens": 8192,
+      "chat": true,
+      "fim": false,
+      "toolCalling": "native"
+    },
+    {
+      "match": "qwen2.5vl*",
+      "contextWindow": 32768,
+      "maxOutputTokens": 4096,
+      "chat": true,
+      "vision": true,
+      "toolCalling": "none"
+    },
+    {
+      "match": "qwen3-embedding*",
+      "contextWindow": 32768,
+      "maxOutputTokens": 0,
+      "chat": false,
+      "embeddings": true,
+      "toolCalling": "none"
+    },
+    {
+      "match": "nomic-embed-text*",
+      "contextWindow": 8192,
+      "maxOutputTokens": 0,
+      "chat": false,
+      "embeddings": true,
+      "toolCalling": "none"
+    },
+    {
+      "match": "qwen3*",
+      "contextWindow": 40960,
+      "maxOutputTokens": 8192,
+      "chat": true,
+      "fim": false,
+      "toolCalling": "native"
+    },
+    {
+      "match": "gemma4*",
+      "contextWindow": 131072,
+      "maxOutputTokens": 8192,
+      "chat": true,
+      "vision": true,
+      "toolCalling": "native"
+    },
+    {
+      "match": "gemma*",
+      "contextWindow": 32768,
+      "maxOutputTokens": 8192,
+      "chat": true,
+      "vision": false,
+      "toolCalling": "none"
+    },
+    {
+      "match": "*",
+      "contextWindow": 4096,
+      "maxOutputTokens": 2048,
+      "chat": true,
+      "fim": false,
+      "toolCalling": "none"
+    }
+  ]
+}

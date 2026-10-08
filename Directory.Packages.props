@@ -47,6 +47,15 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
   </ItemGroup>
 
+  <!--
+    Model Gateway. Microsoft.Extensions.AI.Abstractions supplies IChatClient, ChatMessage and ChatResponseUpdate; only
+    the abstractions are referenced (adapters are Pillion's own). Pinned to the newest stable 10.x release; on net10.0
+    it has no dependencies beyond the shared framework.
+  -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.10.1" />
+  </ItemGroup>
+
   <!-- Tests. -->
   <ItemGroup>
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
