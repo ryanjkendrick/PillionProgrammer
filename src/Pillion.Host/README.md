@@ -106,7 +106,7 @@ Console (single line) plus a file sink writing one JSON object per line to `host
 `--log-dir`, default `%LOCALAPPDATA%\PillionProgrammer\logs`:
 
 ```json
-{"ts":"2026-10-08T14:42:13.338+01:00","level":"Information","category":"Pillion.Host.Rpc.RpcConnection","eventId":211,"eventName":"LogAccepted","message":"Connection 1 handshake accepted (client contract 1.0).","state":{"ConnectionId":"1","Major":"1","Minor":"0"}}
+{"ts":"2026-10-08T14:42:13.338+01:00","level":"Information","category":"Pillion.Host.Rpc.RpcConnection","eventId":211,"eventName":"LogAccepted","message":"Connection 1 handshake accepted (client contract 1.1).","state":{"ConnectionId":"1","Major":"1","Minor":"1"}}
 ```
 
 `exception` (with stack trace) is added when there is one. If another host process already has today's file

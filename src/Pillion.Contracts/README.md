@@ -29,6 +29,36 @@ Nothing else: no transport, no serializer, no implementation. The only package r
 fails the tests. When you change an interface deliberately, update that test and `ContractVersion` in the same
 commit.
 
+## Changelog
+
+### 1.1 (phase 0, wave 3)
+
+Additive only; a 1.0 peer is still accepted by the handshake and ignores the new fields, and a 1.1 peer reads their
+defaults from a 1.0 peer (`ContractV11Tests`, `HandshakeCompatibilityTests` in the host tests).
+
+| Type | Member | Order | Meaning |
+| --- | --- | --- | --- |
+| `ChatChunk` | `ModelId` | 3 | The provider's id of the model that produced the chunk; the reply header names it |
+| `ChatChunk` | `ProviderId` | 4 | The provider that produced the chunk |
+| `ChatChunk` | `PromptTokens` | 5 | Prompt tokens, on the final chunk (0 when unknown) |
+| `ChatChunk` | `CompletionTokens` | 6 | Generated tokens, on the final chunk (0 when unknown) |
+| `ChatChunk` | `Error` | 7 | `PillionError?`: the failure that ended the stream after some text, on the final chunk |
+| `CompletionChunk` | `ModelId`, `ProviderId`, `PromptTokens`, `CompletionTokens`, `Error` | 3-7 | As on `ChatChunk` |
+| `ModelDescriptor` | `ModelId` | 5 | The provider's own model id; `Id` is now `providerId/modelId`, unique across providers |
+| `ModelDescriptor` | `IsAvailable` | 6 | Whether the model can be used now (policy allows it, its provider is reachable, it is installed) |
+| `ModelDescriptor` | `ContextWindow` | 7 | Context window in tokens (0 when unknown) |
+| `ModelDescriptor` | `Digest` | 8 | `string?`: the model's content digest when the provider reports one (Ollama does) |
+| `ConnectivityState` (new enum) | `Online` 0, `Degraded` 1, `Offline` 2, `LocalOnly` 3 | | The argument of the host-to-VSIX notification `connectivityChanged` (an integer on the wire) |
+
+`connectivityChanged` is a notification, not a method on a contract interface, so the interface shape tests are
+unchanged. The host sends it once after every accepted handshake and on every transition; a 1.0 client registers no
+handler for it, and StreamJsonRpc ignores a notification nobody handles.
+
+### 1.0 (phase 0, wave 1)
+
+The initial contract: the five VSIX-to-host and three host-to-VSIX interfaces, their DTOs, `PillionError`, `HostState`
+and the `hostStateChanged` notification.
+
 ## DataContract convention
 
 - DTOs are `sealed` classes with public get/set properties, annotated with `[DataContract]`. Every property has
