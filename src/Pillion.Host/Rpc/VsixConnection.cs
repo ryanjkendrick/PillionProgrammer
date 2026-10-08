@@ -97,6 +97,36 @@ internal sealed class VsixConnection : IVsixConnection
         ConnectionChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>Sends a JSON-RPC notification with one positional argument to the current connection, if there is one.</summary>
+    /// <param name="method">The notification (method) name.</param>
+    /// <param name="argument">The single positional argument.</param>
+    /// <returns><see langword="true"/> when the notification was written; <see langword="false"/> when no VSIX is connected or the connection closed.</returns>
+    public async Task<bool> TryNotifyAsync(string method, object? argument)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(method);
+
+        JsonRpc rpc;
+        lock (_lock)
+        {
+            if (_current is not { Rpc.IsDisposed: false } current)
+            {
+                return false;
+            }
+
+            rpc = current.Rpc;
+        }
+
+        try
+        {
+            await rpc.NotifyAsync(method, argument).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex) when (ex is ObjectDisposedException or ConnectionLostException or IOException or OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
     private Proxies GetCurrent()
     {
         lock (_lock)

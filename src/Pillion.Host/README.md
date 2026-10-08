@@ -116,3 +116,43 @@ never touched. The default minimum level is Information (Microsoft.* at Warning)
 `Logging__LogLevel__Default=Debug` for more. Never log tokens or request payloads at Information or above.
 
 Event id ranges: 100-199 lifecycle, 200-299 RPC.
+
+## Connectivity
+
+`AddPillionConnectivity()` (in `Connectivity/`, namespace `Pillion.Host.Connectivity`) registers the
+`Pillion.Common.Connectivity.ConnectivityMonitor` (also as `IConnectivityMonitor`), an HTTP prober, the system
+network-change source and a hosted service that runs the monitor and tells the extension. It is not yet called from
+`AddPillionHost`; the composition root adds it with one line and gets `IConnectivityMonitor` for the Model Gateway.
+Every service is registered with `TryAdd`, so tests substitute `IConnectivitySettingsProvider`, `IProviderProber`
+and `INetworkChangeSource`.
+
+States (`Pillion.Contracts.ConnectivityState`, an integer on the wire): `Online` (0), `Degraded` (1), `Offline` (2),
+`LocalOnly` (3).
+
+- `LocalOnly`: the user's `privacy.localOnly` or any repository policy with `localOnly` (resolved through
+  `EffectiveSettings`). No probe is sent, the timers are stopped and probes in flight are cancelled.
+- Otherwise, over the enabled cloud providers: `Online` when all are reachable, `Degraded` when some are, `Offline`
+  when none is. **With no cloud provider configured the state is `Online`**: there is nothing to reach, and Offline
+  would wrongly grey out local models. A provider that has not been probed yet counts as reachable.
+- Local providers are never probed: Ollama, and an `openai-compatible` provider whose endpoint host is `localhost`,
+  a loopback address (`127.0.0.0/8`, `::1`) or a name ending in `.local` or `.localhost`. Disabled providers and
+  providers that are not in the settings are not probed either. A cloud provider with no usable endpoint (for example
+  Azure OpenAI before the user types one) is not probed and is not reported as down.
+- A probe is `GET /` on the endpoint's origin (scheme, host, port) with a 2 s timeout, through the system proxy. Any
+  HTTP answer, including 401, 403 and 404, means reachable. DNS, connection, TLS and proxy failures and timeouts mean
+  unreachable, with a category. No credentials or user data are sent.
+- Probe rounds run at start-up, every 60 s, 1 s after the last network-availability or address-change event, when
+  the monitored providers or the local-only flag change in the settings, and on `ProbeNowAsync`. Rounds never overlap.
+- Circuit-breaker evidence: three consecutive `ReportFailure(providerId)` calls mark the provider unreachable until
+  the next successful probe or `ReportSuccess(providerId)`. A success report in between resets the count.
+- `StateChanged` is raised once per transition with a reason such as `openai unreachable: timeout`. The monitor's
+  `Snapshot` holds, per monitored provider, reachable, last probe time, last error category and latency.
+
+Notification `connectivityChanged`, host to client, one positional argument: the `ConnectivityState` as an integer.
+It is sent once after every accepted handshake (with the state at that moment) and again on every transition. It may
+reach the client before the handshake response, so the client registers the handler before it handshakes, as it
+does for `hostStateChanged`. Nothing is sent before the handshake is accepted. The sender is
+`Connectivity/INotificationSender` over the connection `VsixConnection` holds (`TryNotifyAsync`).
+
+Repository policies: the monitor reads policies through `IRepositoryPolicyProvider`. `RepositoryPolicyRegistry` is
+the default; whatever knows the open repositories calls `SetPolicies(...)` on it when the set changes.
