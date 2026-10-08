@@ -1,0 +1,7 @@
+var apiKey = "{{generic-high-entropy:0}}";
+{ "clientSecret": "{{generic-high-entropy:1}}" }
+session_token: {{generic-high-entropy:2}}
+DB_CREDENTIAL={{generic-high-entropy:3}}
+<add key="ServiceApiKey" value="{{generic-high-entropy:4}}" />
+<ApiSecret>{{generic-high-entropy:5}}</ApiSecret>
+const authToken: string = '{{generic-high-entropy:6}}';

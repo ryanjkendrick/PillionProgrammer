@@ -1,0 +1,12 @@
+https://example.com:8080/path?x=1
+http://localhost:5000/api/token
+ssh://git@github.com/user/repo.git
+https://user@example.com/path
+https://github.com/org/repo/commit/0123456789abcdef0123456789abcdef01234567
+postgres://db.example.net:5432/app
+ftp://ftp.example.com/pub/
+https://login.example.com/oauth/token?grant_type=client_credentials
+git clone https://github.com/ryanjkendrick/PillionProgrammer.git
+mailto:someone@example.com
+https://example.com/a@b
+http://127.0.0.1:8080/

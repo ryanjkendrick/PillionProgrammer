@@ -1,0 +1,6 @@
+ghp: {{github-token:0}}
+gho: {{github-token:1}}
+ghu: {{github-token:2}}
+ghs: {{github-token:3}}
+ghr: {{github-token:4}}
+fine-grained: {{github-token:5}}
