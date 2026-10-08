@@ -132,6 +132,11 @@ and connects the Model Gateway to the monitor through three adapters in `Models/
 - `ConnectivityProviderHealthSink` (`IProviderHealthSink`): every failure the circuit breaker counts is
   `ReportFailure`, every success `ReportSuccess`, so three failures in a row mark a cloud provider unreachable.
 
+Feature flags (`IFeatureFlags`, registered by `AddPillionHost` over the same effective settings): `ModelRpcService`
+fails every call but cancel with `PolicyDenied` while `modelGateway` is off; the monitor and the provider registry read the flags from
+the effective settings they already have; `ISettingsService.GetAsync("effective.features")` returns the effective flags
+(read-only, writes to `effective.*` are refused). See the main README for the flag list.
+
 Every service is registered with `TryAdd`, so tests substitute `IConnectivitySettingsProvider`, `IProviderProber`
 and `INetworkChangeSource`.
 

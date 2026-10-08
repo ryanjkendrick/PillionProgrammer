@@ -121,6 +121,47 @@ example `ollama pull gemma4:e2b`).
 
 Logs for both processes are in `%LOCALAPPDATA%\PillionProgrammer\logs` (**Tools > Pillion: Open Logs**).
 
+## Feature flags
+
+Every capability sits behind a feature flag, so a user or a repository policy can switch it off. All flags default to
+on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgrammer\settings.json`:
+
+```json
+{
+  "features": {
+    "chat": true,
+    "modelGateway": true,
+    "connectivityProbes": true,
+    "cloudProviders": true,
+    "ollamaProvider": true,
+    "openAICompatibleProvider": true
+  }
+}
+```
+
+| Flag | When it is off |
+| --- | --- |
+| `chat` | **Tools > Pillion: Open Chat** and **View > Other Windows > Pillion Chat** are disabled, and an open chat window shows "Chat is disabled by settings or policy" and cannot send. Pillion Host keeps running. |
+| `modelGateway` | Every `IModelService` call (chat, completion, listing models) fails with `PolicyDenied` and a message that names the flag. Cancelling stays harmless. |
+| `connectivityProbes` | Cloud providers are not probed; the connectivity state stays as it is with no cloud provider (Online) and the cloud providers stay routable. |
+| `cloudProviders` | Every provider that does not run on this machine is hidden from routing (listed as unavailable with the reason) and nothing is probed. An OpenAI-compatible server on `localhost` or another loopback or `.local` address is local and stays. |
+| `ollamaProvider` | Providers of kind `ollama` are not built or routed to. |
+| `openAICompatibleProvider` | Providers of kind `openai-compatible` and `openai` (one adapter) are not built or routed to. |
+
+A repository can switch flags off for everyone who opens it with `disabledFeatures` in `.pillion/policy.json`, next to
+`localOnly`, `disabledTools`, `exclude` and `denyCommands`:
+
+```json
+{ "disabledFeatures": ["cloudProviders", "chat"] }
+```
+
+The lists of all policies in scope are unioned, and a policy can only turn a flag off, never on; names this version does
+not know are kept and ignored. Flags take effect on the next request: Pillion Host watches the settings file and the
+policies. The extension reads the result, with policies applied, through the read-only virtual setting
+`effective.features` of `ISettingsService.GetAsync`; it is re-read when Pillion Host becomes ready, on **Refresh** in the
+chat window and when the Tools menu opens. `settings.json` stays at version 1: a file without a `features` section gets
+the defaults when it is loaded, and unknown flags in the section are preserved.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
