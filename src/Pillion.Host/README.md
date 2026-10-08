@@ -47,7 +47,7 @@ Pillion.Host.exe --version
    matches (constant-time compare); `ClientProcessId` in the request equals the pipe client's process id;
    `ContractVersion.IsCompatible(major, minor)`. On failure the response has `Accepted = false` and a `Reason`
    naming the check (never the token), the rejection is logged, and the host closes the connection as soon as the
-   response has been sent. A connection that has not completed a handshake within 10 seconds is closed. A
+   response has been written to the pipe. A connection that has not completed a handshake within 10 seconds is closed. A
    repeated handshake on an accepted connection returns the same accepted response.
 5. **Before the handshake** every call to a registered method other than `HandshakeAsync` fails with
    `PillionError { Code = PolicyDenied, Message = "Handshake required" }` (unknown method names still get
