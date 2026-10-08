@@ -553,11 +553,26 @@ public sealed partial class ConnectivityMonitor : IConnectivityMonitor, IDisposa
         {
             using var timeout = new CancellationTokenSource(_options.ProbeTimeout, _time);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token);
-            var result = await _prober
-                .ProbeAsync(target, linked.Token)
-                .WaitAsync(_options.ProbeTimeout + HardCapGrace, _time, token)
-                .ConfigureAwait(false);
-            return result ?? ProbeResult.Failure(ProbeErrorCategory.Other);
+            Task<ProbeResult>? probe = null;
+            try
+            {
+                probe = _prober.ProbeAsync(target, linked.Token);
+                var result = await probe
+                    .WaitAsync(_options.ProbeTimeout + HardCapGrace, _time, token)
+                    .ConfigureAwait(false);
+                return result ?? ProbeResult.Failure(ProbeErrorCategory.Other);
+            }
+            finally
+            {
+                // WaitAsync registers on the round token after the linked source does, and cancellation callbacks run
+                // newest first: when the round is cancelled this method can resume and dispose the linked source (which
+                // unregisters it) before its own callback has run, so the prober would never be told. Cancel it here,
+                // before disposal, whenever the probe is still running (round cancelled or the hard cap hit).
+                if (probe is not { IsCompleted: true })
+                {
+                    CancelQuietly(linked, target.ProviderId);
+                }
+            }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
@@ -571,6 +586,19 @@ public sealed partial class ConnectivityMonitor : IConnectivityMonitor, IDisposa
         {
             LogProbeThrew(_logger, ex, target.ProviderId);
             return ProbeResult.Failure(ProbeErrorCategory.Other);
+        }
+    }
+
+    /// <summary>Cancels a probe's token; a cancellation callback that throws is logged, never propagated.</summary>
+    private void CancelQuietly(CancellationTokenSource source, string providerId)
+    {
+        try
+        {
+            source.Cancel();
+        }
+        catch (Exception ex)
+        {
+            LogProbeThrew(_logger, ex, providerId);
         }
     }
 #pragma warning restore CA1031
