@@ -1,0 +1,70 @@
+<Project>
+  <!-- Central package management: every package version used in the repository is pinned here. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <!--
+    Visual Studio SDK.
+    Pinned to the 17.14 line (the newest 17.14.x on nuget.org) rather than 18.x so that a single VSIX
+    built against these reference assemblies loads in both Visual Studio 2022 17.14 and Visual Studio 2026 (18.x).
+    Moving to 18.x packages would drop 17.14 support.
+  -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" />
+    <PackageVersion Include="Microsoft.VSSDK.BuildTools" Version="17.14.2142" />
+  </ItemGroup>
+
+  <!--
+    RPC stack.
+    StreamJsonRpc is pinned to exactly the version that Microsoft.VisualStudio.SDK 17.14.40265 depends on. The VSIX
+    runs inside devenv.exe, which ships (and binds to) its own copies of these assemblies, so the VSIX never carries
+    its own copy (ExcludeAssets="runtime") and compiles against the SDK's transitive versions (MessagePack 2.5.192).
+    MessagePack is pinned here to the latest patched 2.5.x release: central versions only apply to direct references,
+    which are the host and the tests (the host deserialises pipe traffic in its own process), while the VSIX keeps the
+    transitive 2.5.192 from the SDK graph. Both are 2.5.x, so the wire format is identical. Decision 2026-10-08.
+    Microsoft.Bcl.AsyncInterfaces and System.Threading.Tasks.Extensions are referenced by Pillion.Contracts
+    (compiled into the VSIX), so they are also pinned to the versions in the same 17.14 dependency graph.
+  -->
+  <ItemGroup>
+    <PackageVersion Include="StreamJsonRpc" Version="2.22.11" />
+    <PackageVersion Include="MessagePack" Version="2.5.307" />
+    <PackageVersion Include="MessagePack.Annotations" Version="2.5.307" />
+    <PackageVersion Include="Microsoft.Bcl.AsyncInterfaces" Version="9.0.0" />
+    <PackageVersion Include="System.Threading.Tasks.Extensions" Version="4.6.0" />
+    <!--
+      Also the exact version in the Microsoft.VisualStudio.SDK 17.14.40265 graph. Pillion.VisualStudio.Core compiles
+      against it and StreamJsonRpc with ExcludeAssets="runtime" (devenv.exe supplies both); the VSIX tests reference
+      them normally because they run outside Visual Studio.
+    -->
+    <PackageVersion Include="Microsoft.VisualStudio.Threading" Version="17.14.15" />
+    <!--
+      The version StreamJsonRpc 2.22.11 depends on in the same graph. Pillion.VisualStudio.Core uses it compile-only to
+      read and write the JSON that ISettingsService exchanges; devenv.exe supplies Newtonsoft.Json at run time.
+    -->
+    <PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <!-- Host. The abstractions packages are pinned to the same version as the hosting package that depends on them. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
+  </ItemGroup>
+
+  <!--
+    Model Gateway. Microsoft.Extensions.AI.Abstractions supplies IChatClient, ChatMessage and ChatResponseUpdate; only
+    the abstractions are referenced (adapters are Pillion's own). Pinned to the newest stable 10.x release; on net10.0
+    it has no dependencies beyond the shared framework.
+  -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.10.1" />
+  </ItemGroup>
+
+  <!-- Tests. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.0" />
+  </ItemGroup>
+</Project>

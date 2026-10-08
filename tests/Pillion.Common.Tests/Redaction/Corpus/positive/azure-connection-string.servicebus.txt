@@ -1,0 +1,1 @@
+Endpoint=sb://demo.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey={{azure-connection-string}}

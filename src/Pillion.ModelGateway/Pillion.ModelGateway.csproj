@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The Model Gateway: every model provider behind one interface used by Pillion Host. Routing by task class, profile,
+    policy, connectivity, capability and cost; resilience (circuit breaker, concurrency, timeouts, retries); redaction
+    at the model boundary; the autocomplete cache and the Outbound log. See README.md.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Pillion.ModelGateway</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Pillion.Contracts\Pillion.Contracts.csproj" />
+    <ProjectReference Include="..\Pillion.Common\Pillion.Common.csproj" />
+  </ItemGroup>
+
+  <!-- Data, not code: the model catalog and the prompt templates ship inside the assembly. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Catalog\catalog.json" LogicalName="Pillion.ModelGateway.catalog.json" />
+    <EmbeddedResource Include="Templates\*.json" LogicalName="Pillion.ModelGateway.Templates.%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Pillion.ModelGateway.Tests" />
+    <InternalsVisibleTo Include="Pillion.Host.Tests" />
+  </ItemGroup>
+
+</Project>

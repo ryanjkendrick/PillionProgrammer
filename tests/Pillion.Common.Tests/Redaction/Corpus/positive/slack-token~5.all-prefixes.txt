@@ -1,0 +1,5 @@
+xoxb: {{slack-token:0}}
+xoxp: {{slack-token:1}}
+xoxa: {{slack-token:2}}
+xoxr: {{slack-token:3}}
+xoxs: {{slack-token:4}}

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Shared RPC contracts compiled into both the VSIX (.NET Framework 4.8, in devenv.exe) and Pillion Host (.NET 10).
+    netstandard2.0 so one binary serves both. Deliberately free of MessagePack and StreamJsonRpc references:
+    DTOs use [DataContract]/[DataMember(Order = n)], which MessagePack-C#'s StandardResolver maps to integer keys.
+    See README.md for the versioning rule.
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>Pillion.Contracts</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" />
+    <PackageReference Include="System.Threading.Tasks.Extensions" />
+  </ItemGroup>
+
+</Project>

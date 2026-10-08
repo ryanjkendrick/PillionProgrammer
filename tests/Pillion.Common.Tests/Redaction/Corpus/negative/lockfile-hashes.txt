@@ -1,0 +1,5 @@
+"contentHash": "W9x4ViAOhd5bI+6qJDabOhfRfe8IQYoOELh068y+hg5fRvtWnpO/oG6QfkOZPp3Q20YZCwxoapfq6ZABWNi3w2==",
+integrity sha512-A8giamqcAg5gXmFmNg/m1/rXzBRfbKk7CnydIJQJVQzeIDwfATgaSaSb2fI4NtqU/e7kgoGPOi4G1mg8gIzfV+==
+checksum: sha256:fa377b7048cafde427b9b72e9290b74f9496aa7029341ec0a7400f56a8a67136
+resolution: "x@npm:1.0.0"
+checksum: 7349d6cefd9166749ee7f07d20a0c0d6d4796e1f5e851adf793e9f23155b81b5e950f2f7b0ee31c0e7985426453ab27debdbd04a18a085e24e118ab9cda36032

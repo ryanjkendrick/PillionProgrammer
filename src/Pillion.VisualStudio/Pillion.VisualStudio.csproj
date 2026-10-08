@@ -1,0 +1,65 @@
+<Project>
+
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+
+  <!--
+    Pillion Programmer Visual Studio extension: a classic in-process VSSDK package (AsyncPackage) in an
+    SDK-style project. Targets .NET Framework 4.8 and the 17.14 VS SDK so one VSIX runs on VS 2022 17.14+ and
+    VS 2026. Build it with Visual Studio's MSBuild.exe (the VSSDK targets do not run under `dotnet build`).
+    The SDK is imported explicitly so the VSSDK targets (from the Microsoft.VSSDK.BuildTools package, which sets
+    VSToolsPath) can be imported after the .NET SDK targets, as in a classic VSIX project.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>Pillion.VisualStudio</RootNamespace>
+    <AssemblyName>Pillion.VisualStudio</AssemblyName>
+    <!-- The chat tool window and the Options pages are WPF (views only; their view models are in Pillion.VisualStudio.Core). -->
+    <UseWPF>true</UseWPF>
+
+    <!-- VSIX packaging. -->
+    <GeneratePkgDefFile>true</GeneratePkgDefFile>
+    <UseCodebase>true</UseCodebase>
+    <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
+    <IncludeDebugSymbolsInVSIXContainer>false</IncludeDebugSymbolsInVSIXContainer>
+    <IncludeDebugSymbolsInLocalVSIXDeployment>true</IncludeDebugSymbolsInLocalVSIXDeployment>
+    <CopyBuildOutputToOutputDirectory>true</CopyBuildOutputToOutputDirectory>
+    <CopyOutputSymbolsToOutputDirectory>true</CopyOutputSymbolsToOutputDirectory>
+    <!-- Only deploy to the experimental instance when building inside Visual Studio (F5), never on the command line. -->
+    <DeployExtension Condition="'$(BuildingInsideVisualStudio)' != 'true'">false</DeployExtension>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Reference assemblies only: Visual Studio supplies these at run time. -->
+    <PackageReference Include="Microsoft.VisualStudio.SDK" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers; buildtransitive" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Pillion.Contracts\Pillion.Contracts.csproj" />
+    <ProjectReference Include="..\Pillion.VisualStudio.Core\Pillion.VisualStudio.Core.csproj" />
+    <!-- Pillion.Host is deliberately not referenced: it is published self-contained and packaged as content under
+         Host\ by PillionHost.targets. -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- OleMenuCommandService derives from System.ComponentModel.Design.MenuCommandService. -->
+    <Reference Include="System.Design" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="source.extension.vsixmanifest" SubType="Designer" />
+    <VSCTCompile Include="PillionPackage.vsct" ResourceName="Menus.ctmenu" />
+    <EmbeddedResource Update="VSPackage.resx">
+      <MergeWithCTO>true</MergeWithCTO>
+      <ManifestResourceName>VSPackage</ManifestResourceName>
+    </EmbeddedResource>
+    <Content Include="..\..\LICENSE" Link="LICENSE.txt" TargetPath="LICENSE.txt" IncludeInVSIX="true" />
+  </ItemGroup>
+
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+  <!-- MicrosoftVSSDKBuildToolsVersion is set by the package, so this imports the pinned package's targets (not ones
+       installed with Visual Studio) and is skipped during the first restore, before package imports exist. -->
+  <Import Project="$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets" Condition="'$(MicrosoftVSSDKBuildToolsVersion)' != '' and Exists('$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets')" />
+  <Import Project="PillionHost.targets" />
+
+</Project>

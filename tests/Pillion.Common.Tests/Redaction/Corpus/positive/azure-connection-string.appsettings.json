@@ -1,0 +1,5 @@
+{
+  "ConnectionStrings": {
+    "Blob": "DefaultEndpointsProtocol=https;AccountName=demo;AccountKey={{azure-connection-string}};EndpointSuffix=core.windows.net"
+  }
+}
