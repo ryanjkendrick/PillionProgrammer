@@ -22,6 +22,12 @@ public sealed partial class RepositoryPolicy
     /// <summary>Gets the tools that are disabled in this repository.</summary>
     public IReadOnlyList<string> DisabledTools { get; init; } = [];
 
+    /// <summary>
+    /// Gets the features (names from <see cref="FeatureNames"/>) that are switched off in this repository. A feature
+    /// can only be switched off, never on.
+    /// </summary>
+    public IReadOnlyList<string> DisabledFeatures { get; init; } = [];
+
     /// <summary>Gets glob patterns that are excluded from indexing and context in this repository.</summary>
     public IReadOnlyList<string> Exclude { get; init; } = [];
 
@@ -90,6 +96,7 @@ public sealed partial class RepositoryPolicy
             var warnings = new List<string>();
             var localOnly = false;
             IReadOnlyList<string> disabledTools = [];
+            IReadOnlyList<string> disabledFeatures = [];
             IReadOnlyList<string> exclude = [];
             IReadOnlyList<string> denyCommands = [];
 
@@ -110,6 +117,9 @@ public sealed partial class RepositoryPolicy
                         break;
                     case "disabledTools":
                         disabledTools = ReadStrings(property, warnings);
+                        break;
+                    case "disabledFeatures":
+                        disabledFeatures = ReadStrings(property, warnings);
                         break;
                     case "exclude":
                         exclude = ReadStrings(property, warnings);
@@ -132,6 +142,7 @@ public sealed partial class RepositoryPolicy
             {
                 LocalOnly = localOnly,
                 DisabledTools = disabledTools,
+                DisabledFeatures = disabledFeatures,
                 Exclude = exclude,
                 DenyCommands = denyCommands,
                 Warnings = warnings,

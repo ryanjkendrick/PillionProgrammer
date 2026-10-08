@@ -17,6 +17,10 @@ namespace Pillion.Common.Connectivity;
 /// settings change, and on <see cref="ProbeNowAsync"/>. Rounds never overlap.
 /// </para>
 /// <para>
+/// The feature flags <see cref="FeatureNames.ConnectivityProbes"/> and <see cref="FeatureNames.CloudProviders"/> switch
+/// probing off the same way: the state stays <see cref="ConnectivityState.Online"/>, as with no cloud provider configured.
+/// </para>
+/// <para>
 /// In <see cref="ConnectivityState.LocalOnly"/> (the user's <c>privacy.localOnly</c> or any repository policy with
 /// <c>localOnly</c>) nothing is probed, the timers are stopped, in-flight probes are cancelled and their results are
 /// discarded. Otherwise the state is <see cref="ConnectivityState.Online"/> when every monitored provider is
@@ -384,6 +388,11 @@ public sealed partial class ConnectivityMonitor : IConnectivityMonitor, IDisposa
         }
 
         var localOnly = effective.LocalOnly;
+
+        // Feature flags: with cloudProviders off there is nothing to reach, and with connectivityProbes off nothing is
+        // probed. Either way the state is what it is with no cloud provider configured (Online), until a flag changes.
+        var cloudEnabled = effective.IsFeatureEnabled(FeatureNames.CloudProviders);
+        var probesEnabled = cloudEnabled && effective.IsFeatureEnabled(FeatureNames.ConnectivityProbes);
         var local = new List<string>();
         var cloud = new List<string>();
         var targets = new List<ProbeTarget>();
@@ -400,8 +409,14 @@ public sealed partial class ConnectivityMonitor : IConnectivityMonitor, IDisposa
                 continue;
             }
 
+            if (!cloudEnabled)
+            {
+                continue;
+            }
+
             cloud.Add(provider.Id);
-            if (ProviderClassifier.TryGetProbeOrigin(provider, out var origin)
+            if (probesEnabled
+                && ProviderClassifier.TryGetProbeOrigin(provider, out var origin)
                 && !targets.Exists(t => string.Equals(t.ProviderId, provider.Id, StringComparison.OrdinalIgnoreCase)))
             {
                 targets.Add(new ProbeTarget(provider.Id, origin));

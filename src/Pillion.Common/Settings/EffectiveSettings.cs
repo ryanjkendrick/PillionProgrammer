@@ -8,10 +8,15 @@ namespace Pillion.Common.Settings;
 /// </summary>
 public sealed class EffectiveSettings
 {
-    private EffectiveSettings(PillionSettings settings, IReadOnlyList<string> disabledTools, IReadOnlyList<string> denyCommands)
+    private EffectiveSettings(
+        PillionSettings settings,
+        IReadOnlyList<string> disabledTools,
+        IReadOnlyList<string> disabledFeatures,
+        IReadOnlyList<string> denyCommands)
     {
         Settings = settings;
         DisabledTools = disabledTools;
+        DisabledFeatures = disabledFeatures;
         DenyCommands = denyCommands;
     }
 
@@ -27,11 +32,31 @@ public sealed class EffectiveSettings
     /// <summary>Gets the union of the tools disabled by all policies.</summary>
     public IReadOnlyList<string> DisabledTools { get; }
 
+    /// <summary>
+    /// Gets the union of the features disabled by all policies, as written in the policies (including names this
+    /// version does not know). The known ones are also switched off in <see cref="PillionSettings.Features"/>.
+    /// </summary>
+    public IReadOnlyList<string> DisabledFeatures { get; }
+
     /// <summary>Gets the union of the glob patterns excluded by the user and all policies.</summary>
     public IReadOnlyList<string> Exclude => Settings.Indexing.Exclude;
 
     /// <summary>Gets the union of the commands denied by all policies.</summary>
     public IReadOnlyList<string> DenyCommands { get; }
+
+    /// <summary>Determines whether a feature is on: the user has not switched it off and no policy disables it.</summary>
+    /// <param name="feature">A name from <see cref="FeatureNames"/>; case is ignored.</param>
+    /// <returns><see langword="true"/> when the feature is on. A feature this version does not know is on unless a policy lists it.</returns>
+    public bool IsFeatureEnabled(string feature)
+    {
+        ArgumentNullException.ThrowIfNull(feature);
+        return Settings.Features.IsEnabled(feature)
+            && !DisabledFeatures.Contains(feature.Trim(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Serialises the effective feature flags as a JSON object, for example <c>{"chat":true,"modelGateway":false,...}</c>.</summary>
+    /// <returns>The JSON text, with camelCase names as in <c>settings.json</c>.</returns>
+    public string FeaturesToJson() => JsonSerializer.Serialize(Settings.Features, SettingsJson.Options);
 
     /// <summary>Combines user settings with repository policies.</summary>
     /// <param name="userSettings">The user's settings (which already include defaults). They are not modified.</param>
@@ -48,6 +73,7 @@ public sealed class EffectiveSettings
 
         var exclude = new List<string>(copy.Indexing.Exclude);
         var disabledTools = new List<string>();
+        var disabledFeatures = new List<string>();
         var denyCommands = new List<string>();
 
         foreach (var policy in policies ?? [])
@@ -59,11 +85,17 @@ public sealed class EffectiveSettings
 
             AddDistinct(exclude, policy.Exclude);
             AddDistinct(disabledTools, policy.DisabledTools);
+            AddDistinct(disabledFeatures, policy.DisabledFeatures);
             AddDistinct(denyCommands, policy.DenyCommands);
         }
 
         copy.Indexing.Exclude = exclude.Distinct(StringComparer.Ordinal).ToList();
-        return new EffectiveSettings(copy, disabledTools, denyCommands);
+        foreach (var feature in disabledFeatures)
+        {
+            copy.Features.Disable(feature);
+        }
+
+        return new EffectiveSettings(copy, disabledTools, disabledFeatures, denyCommands);
     }
 
     private static void AddDistinct(List<string> target, IEnumerable<string> source)

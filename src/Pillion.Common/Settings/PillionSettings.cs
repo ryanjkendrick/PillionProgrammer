@@ -216,4 +216,7 @@ public sealed class PillionSettings : SettingsNode
 
     /// <summary>Gets or sets the logging settings.</summary>
     public LoggingSettings Logging { get; set; } = new();
+
+    /// <summary>Gets or sets the feature flags.</summary>
+    public FeatureSettings Features { get; set; } = new();
 }

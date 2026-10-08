@@ -30,6 +30,9 @@ public static class SettingsSections
     /// <summary>The logging section.</summary>
     public const string Logging = "logging";
 
+    /// <summary>The feature flags section.</summary>
+    public const string Features = "features";
+
     /// <summary>The sections that hold typed data, in the order they are written to a new file.</summary>
     internal static readonly string[] Known =
     [
@@ -41,5 +44,6 @@ public static class SettingsSections
         CostCaps,
         Indexing,
         Logging,
+        Features,
     ];
 }
