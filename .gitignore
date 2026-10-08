@@ -432,3 +432,6 @@ FodyWeavers.xsd
 TestResults/
 # Publish profiles in this repository contain no secrets; keep them under source control.
 !**/Properties/PublishProfiles/*.pubxml
+
+# Redaction test corpus: fabricated samples, never real secrets
+!tests/Pillion.Common.Tests/Redaction/Corpus/**/*.env
