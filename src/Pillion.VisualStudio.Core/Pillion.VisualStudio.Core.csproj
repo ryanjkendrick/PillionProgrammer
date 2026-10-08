@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The Visual Studio side of the process boundary that does not need the VS SDK: the Pillion Host supervisor
+    (launch, signature check, job object, restart policy), the StreamJsonRpc client, the IHostConnection service and
+    the VSIX logger. Kept separate from Pillion.VisualStudio so that it builds and tests with `dotnet build` /
+    `dotnet test` (the VSIX project needs Visual Studio's MSBuild).
+
+    Runs inside devenv.exe, which ships and binds its own StreamJsonRpc, MessagePack and Microsoft.VisualStudio.Threading,
+    so those are compile-time references only (ExcludeAssets="runtime") and do not flow to the VSIX (PrivateAssets="all").
+    The VSIX compiles against the same versions through Microsoft.VisualStudio.SDK. Do not add a reference to the VS SDK here.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>Pillion.VisualStudio.Core</RootNamespace>
+    <AssemblyName>Pillion.VisualStudio.Core</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="StreamJsonRpc" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.VisualStudio.Threading" ExcludeAssets="runtime" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Pillion.Contracts\Pillion.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Pillion.VisualStudio.Tests" />
+  </ItemGroup>
+
+</Project>
