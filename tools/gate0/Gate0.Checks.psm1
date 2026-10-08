@@ -212,16 +212,33 @@ function Write-Gate0Results {
 #region Prerequisites and versions
 
 function Find-VisualStudio {
-    <# Finds the newest Visual Studio with MSBuild through vswhere. Throws a clear message when there is none. #>
+    <#
+    Finds the Visual Studio to build with and the one to drive, through vswhere. Throws a clear message when there is none.
+
+    The build always uses the newest Visual Studio's MSBuild (the .NET 10 SDK needs MSBuild 18). The instance that is
+    launched and driven is the newest one too, unless -DevEnvPath names another devenv.exe (for example Visual Studio
+    2022's). When the two differ, DeployByBuild is false: the build cannot deploy into the other version's
+    Experimental Instance, so the caller installs the VSIX with the driven version's VSIXInstaller instead.
+    #>
+    param([string]$DevEnvPath)
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
     if (-not (Test-Path $vswhere)) { throw "Visual Studio not found: vswhere.exe is missing ($vswhere). Install Visual Studio 2026 with the extension development workload." }
     # Pick the newest Visual Studio by version (not by install date): with Visual Studio 2022 installed beside 2026,
-    # the run must still build with MSBuild 18 and drive the 2026 Experimental Instance.
+    # the run must still build with MSBuild 18.
     $json = & $vswhere -products * -requires Microsoft.Component.MSBuild -format json | ConvertFrom-Json
-    $vs = @($json) | Where-Object { $_ } | Sort-Object { [version]$_.installationVersion } -Descending | Select-Object -First 1
-    if (-not $vs) { throw 'Visual Studio not found: vswhere reports no instance with MSBuild. Install Visual Studio 2026 with the extension development workload.' }
-    $msbuild = Join-Path $vs.installationPath 'MSBuild\Current\Bin\MSBuild.exe'
+    $build = @($json) | Where-Object { $_ } | Sort-Object { [version]$_.installationVersion } -Descending | Select-Object -First 1
+    if (-not $build) { throw 'Visual Studio not found: vswhere reports no instance with MSBuild. Install Visual Studio 2026 with the extension development workload.' }
+    $msbuild = Join-Path $build.installationPath 'MSBuild\Current\Bin\MSBuild.exe'
     if (-not (Test-Path $msbuild)) { throw "MSBuild.exe not found at $msbuild." }
+
+    $vs = $build
+    if ($DevEnvPath) {
+        if (-not (Test-Path -LiteralPath $DevEnvPath -PathType Leaf)) { throw "-DevEnvPath: no file at '$DevEnvPath'." }
+        $full = (Resolve-Path -LiteralPath $DevEnvPath).Path
+        $all = & $vswhere -all -products * -format json | ConvertFrom-Json
+        $vs = @($all) | Where-Object { $_ -and $full.StartsWith((Join-Path $_.installationPath 'Common7\IDE\'), [StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1
+        if (-not $vs) { throw "-DevEnvPath: '$full' does not belong to any Visual Studio instance vswhere knows." }
+    }
     $devenv = Join-Path $vs.installationPath 'Common7\IDE\devenv.exe'
     if (-not (Test-Path $devenv)) { throw "Visual Studio found at $($vs.installationPath) but devenv.exe is missing." }
     $major = ($vs.installationVersion -split '\.')[0]
@@ -234,7 +251,11 @@ function Find-VisualStudio {
         Major       = $major
         Path        = $vs.installationPath
         DevEnv      = $devenv
+        VsixInstaller = Join-Path $vs.installationPath 'Common7\IDE\VSIXInstaller.exe'
         MSBuild     = $msbuild
+        BuildDisplayName = "$($build.displayName) $($build.catalog.productDisplayVersion)"
+        BuildMajor  = ($build.installationVersion -split '\.')[0]
+        DeployByBuild = $vs.instanceId -eq $build.instanceId
         ExpHive     = Join-Path $env:LOCALAPPDATA "Microsoft\VisualStudio\$major.0_$($vs.instanceId)Exp"
     }
 }
@@ -252,11 +273,15 @@ function Get-OllamaStatus {
 
 function Assert-Gate0Prerequisites {
     <# Checks PowerShell, Windows, Visual Studio, Ollama and the model, and that no Experimental Instance is running. #>
-    param([Parameter(Mandatory)][string]$Model, [string]$OllamaEndpoint = 'http://localhost:11434')
+    param([Parameter(Mandatory)][string]$Model, [string]$OllamaEndpoint = 'http://localhost:11434', [string]$DevEnvPath)
     if ($PSVersionTable.PSVersion.Major -lt 7 -or ($PSVersionTable.PSVersion.Major -eq 7 -and $PSVersionTable.PSVersion.Minor -lt 5)) { throw 'PowerShell 7.5 or later is required (run pwsh).' }
     if (-not $IsWindows) { throw 'These scripts run on Windows only.' }
-    $vs = Find-VisualStudio
-    if ([int]$vs.Major -lt 18) { Write-Gate0Log "Visual Studio $($vs.Version) found; the full solution needs MSBuild 18 (Visual Studio 2026)." -Level warn }
+    $vs = Find-VisualStudio -DevEnvPath $DevEnvPath
+    if ([int]$vs.BuildMajor -lt 18) { Write-Gate0Log "Building with $($vs.BuildDisplayName); the full solution needs MSBuild 18 (Visual Studio 2026)." -Level warn }
+    if (-not $vs.DeployByBuild) {
+        if (-not (Test-Path $vs.VsixInstaller)) { throw "VSIXInstaller.exe not found at $($vs.VsixInstaller); it installs the VSIX into the $($vs.DisplayName) Experimental Instance." }
+        Write-Gate0Log "Driving $($vs.DisplayName) $($vs.Version) ($($vs.DevEnv)); building with $($vs.BuildDisplayName); the VSIX is installed with $($vs.VsixInstaller) /rootSuffix:Exp."
+    }
     $ollama = Get-OllamaStatus -Endpoint $OllamaEndpoint -Model $Model
     if (-not $ollama.ModelPulled) { throw "The model '$Model' is not pulled in Ollama (installed: $($ollama.Models -join ', ')). Run: ollama pull $Model" }
     $exp = @(Get-CimInstance Win32_Process -Filter "Name='devenv.exe'" | Where-Object { $_.CommandLine -match '/rootsuffix\s+Exp\b' })
@@ -266,7 +291,8 @@ function Assert-Gate0Prerequisites {
     [pscustomobject]@{ VisualStudio = $vs; Ollama = $ollama }
 }
 
-function Get-VsixManifestVersion {
+function Get-VsixManifestIdentity {
+    <# The Identity element (Id, Version) of a .vsix's extension.vsixmanifest. #>
     param([Parameter(Mandatory)][string]$VsixPath)
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [System.IO.Compression.ZipFile]::OpenRead($VsixPath)
@@ -274,9 +300,47 @@ function Get-VsixManifestVersion {
         $entry = $zip.GetEntry('extension.vsixmanifest')
         $reader = [IO.StreamReader]::new($entry.Open())
         try { [xml]$xml = $reader.ReadToEnd() } finally { $reader.Dispose() }
-        return $xml.PackageManifest.Metadata.Identity.Version
+        $identity = $xml.PackageManifest.Metadata.Identity
+        return [pscustomobject]@{ Id = $identity.Id; Version = $identity.Version }
     }
     finally { $zip.Dispose() }
+}
+
+function Get-VsixManifestVersion {
+    param([Parameter(Mandatory)][string]$VsixPath)
+    return (Get-VsixManifestIdentity -VsixPath $VsixPath).Version
+}
+
+function Install-VsixToExp {
+    <#
+    Installs a .vsix into the Experimental Instance of the driven Visual Studio with that version's VSIXInstaller
+    (/quiet /rootSuffix:Exp), uninstalling an earlier copy of the same extension first so the new build replaces it.
+    Used when the build's own deployment cannot reach that instance (for example building with Visual Studio 2026's
+    MSBuild and driving Visual Studio 2022). Returns what was done.
+    #>
+    param([Parameter(Mandatory)]$VisualStudio, [Parameter(Mandatory)][string]$VsixPath)
+    $identity = Get-VsixManifestIdentity -VsixPath $VsixPath
+    $un =Start-Process -FilePath $VisualStudio.VsixInstaller -ArgumentList @('/quiet', '/rootSuffix:Exp', "/uninstall:$($identity.Id)") -PassThru -Wait
+    $in = Start-Process -FilePath $VisualStudio.VsixInstaller -ArgumentList @('/quiet', '/rootSuffix:Exp', "`"$VsixPath`"") -PassThru -Wait
+    Write-Gate0Log ("VSIXInstaller: uninstall {0} exit {1}; install exit {2} ({3})" -f $identity.Id, $un.ExitCode, $in.ExitCode, $VisualStudio.VsixInstaller)
+    if ($in.ExitCode -ne 0) { throw "VSIXInstaller failed to install $VsixPath into $($VisualStudio.ExpHive) (exit code $($in.ExitCode)); see the newest %TEMP%\dd_VSIXInstaller_*.log." }
+    # On Visual Studio 2022 17.14 the reinstall did not mark the Experimental Instance's configuration as changed, so
+    # devenv kept its cached pkgdef configuration and never loaded the package (no Pillion commands on the Tools menu).
+    # Rebuilding the configuration explicitly fixes that.
+    $cfg = Start-Process -FilePath $VisualStudio.DevEnv -ArgumentList @('/rootsuffix', 'Exp', '/updateconfiguration') -PassThru -Wait
+    Write-Gate0Log "devenv /rootsuffix Exp /updateconfiguration exit $($cfg.ExitCode)"
+    [ordered]@{ method = "$($VisualStudio.VsixInstaller) /quiet /rootSuffix:Exp, then devenv /rootsuffix Exp /updateconfiguration"; extensionId = $identity.Id; uninstallExitCode = $un.ExitCode; installExitCode = $in.ExitCode; updateConfigurationExitCode = $cfg.ExitCode }
+}
+
+function Uninstall-VsixFromExp {
+    <# Removes the extension (by its VSIX identity) from the driven Visual Studio's Experimental Instance. #>
+    param([Parameter(Mandatory)]$VisualStudio, [Parameter(Mandatory)][string]$ExtensionId)
+    $un = Start-Process -FilePath $VisualStudio.VsixInstaller -ArgumentList @('/quiet', '/rootSuffix:Exp', "/uninstall:$ExtensionId") -PassThru -Wait
+    Write-Gate0Log "VSIXInstaller: uninstall $ExtensionId from $($VisualStudio.ExpHive) exit $($un.ExitCode)"
+    # Drop the package from the cached configuration as well (see Install-VsixToExp).
+    $cfg = Start-Process -FilePath $VisualStudio.DevEnv -ArgumentList @('/rootsuffix', 'Exp', '/updateconfiguration') -PassThru -Wait
+    Write-Gate0Log "devenv /rootsuffix Exp /updateconfiguration exit $($cfg.ExitCode)"
+    return $un.ExitCode
 }
 
 function Find-DeployedExtension {
