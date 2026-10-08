@@ -1,0 +1,7 @@
+<Project>
+  <!--
+    Pillion.FakeHost is a helper executable for the VSIX tests, not a test project, so it skips tests/Directory.Build.props
+    (which adds the test SDK and xunit) and imports only the repository-wide settings.
+  -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)..\..'))" />
+</Project>
