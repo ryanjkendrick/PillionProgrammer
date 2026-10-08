@@ -3,8 +3,8 @@ using Pillion.Contracts;
 namespace Pillion.ModelGateway;
 
 /// <summary>
-/// Whether a provider is reachable now. The connectivity work item (section 11) supplies the real implementation;
-/// until then <see cref="AlwaysReachable"/> answers yes for every provider.
+/// Whether a provider is reachable now. Pillion Host supplies an implementation over its connectivity monitor
+/// (section 11); without one, <see cref="AlwaysReachable"/> answers yes for every provider.
 /// </summary>
 public interface IProviderReachability
 {

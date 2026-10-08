@@ -4,11 +4,21 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Pillion.ModelGateway;
 
 /// <summary>
-/// Receives provider health changes from the circuit breakers. The connectivity work item (section 11) turns these
-/// into the Online, Degraded and Offline states; until then <see cref="NoProviderHealthSink"/> ignores them.
+/// Receives provider health evidence from the circuit breakers: every request outcome that counts for or against a
+/// provider, and the circuit opening and closing. Pillion Host feeds it to the connectivity monitor (section 11), which
+/// turns repeated failures into the Online, Degraded and Offline states; <see cref="NoProviderHealthSink"/> ignores it.
+/// Calls are made outside the breaker's lock, on the thread that recorded the outcome, and must not block.
 /// </summary>
 public interface IProviderHealthSink
 {
+    /// <summary>Called for every request failure that counts against the provider (see <see cref="ProviderException.IsProviderFault"/>).</summary>
+    /// <param name="providerId">The provider id.</param>
+    void RequestFailed(string providerId);
+
+    /// <summary>Called for every successful request to the provider.</summary>
+    /// <param name="providerId">The provider id.</param>
+    void RequestSucceeded(string providerId);
+
     /// <summary>Called when a provider's circuit opens.</summary>
     /// <param name="providerId">The provider id.</param>
     /// <param name="retryAt">When the circuit lets a trial request through.</param>
@@ -22,6 +32,16 @@ public interface IProviderHealthSink
 /// <summary>An <see cref="IProviderHealthSink"/> that does nothing.</summary>
 public sealed class NoProviderHealthSink : IProviderHealthSink
 {
+    /// <inheritdoc/>
+    public void RequestFailed(string providerId)
+    {
+    }
+
+    /// <inheritdoc/>
+    public void RequestSucceeded(string providerId)
+    {
+    }
+
     /// <inheritdoc/>
     public void CircuitOpened(string providerId, DateTimeOffset retryAt)
     {
@@ -132,6 +152,7 @@ public sealed partial class CircuitBreakerRegistry
             entry.TrialInFlight = false;
         }
 
+        _health.RequestSucceeded(providerId);
         if (closed)
         {
             LogClosed(_logger, providerId);
@@ -157,6 +178,7 @@ public sealed partial class CircuitBreakerRegistry
             }
         }
 
+        _health.RequestFailed(providerId);
         if (openedUntil is { } until)
         {
             LogOpened(_logger, providerId, until);

@@ -120,7 +120,7 @@ public class GatewayTests
 
         Assert.Equal(3, harness.Cloud.ChatCalls);
         Assert.Equal(CircuitState.Open, harness.Breakers.GetState("cloud"));
-        Assert.Contains("opened:cloud", harness.Health.Events);
+        Assert.Equal(["failed:cloud", "failed:cloud", "failed:cloud", "opened:cloud"], harness.Health.Events);
 
         // While open, the provider is not called at all.
         await Assert.ThrowsAsync<PillionRpcException>(() => harness.Gateway.ChatAsync(GatewayHarness.ChatRequest("Hi"), TaskClass.Chat, CancellationToken.None).CollectAsync());
@@ -134,7 +134,7 @@ public class GatewayTests
 
         Assert.Equal("back", chunks[0].Text);
         Assert.Equal(CircuitState.Closed, harness.Breakers.GetState("cloud"));
-        Assert.Contains("closed:cloud", harness.Health.Events);
+        Assert.Equal(["failed:cloud", "failed:cloud", "failed:cloud", "opened:cloud", "succeeded:cloud", "closed:cloud"], harness.Health.Events);
     }
 
     [Fact]

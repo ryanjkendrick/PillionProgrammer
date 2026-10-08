@@ -197,6 +197,10 @@ internal sealed class RecordingHealthSink : IProviderHealthSink
 {
     public ConcurrentQueue<string> Events { get; } = new();
 
+    public void RequestFailed(string providerId) => Events.Enqueue("failed:" + providerId);
+
+    public void RequestSucceeded(string providerId) => Events.Enqueue("succeeded:" + providerId);
+
     public void CircuitOpened(string providerId, DateTimeOffset retryAt) => Events.Enqueue("opened:" + providerId);
 
     public void CircuitClosed(string providerId) => Events.Enqueue("closed:" + providerId);

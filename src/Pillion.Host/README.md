@@ -121,8 +121,17 @@ Event id ranges: 100-199 lifecycle, 200-299 RPC.
 
 `AddPillionConnectivity()` (in `Connectivity/`, namespace `Pillion.Host.Connectivity`) registers the
 `Pillion.Common.Connectivity.ConnectivityMonitor` (also as `IConnectivityMonitor`), an HTTP prober, the system
-network-change source and a hosted service that runs the monitor and tells the extension. It is not yet called from
-`AddPillionHost`; the composition root adds it with one line and gets `IConnectivityMonitor` for the Model Gateway.
+network-change source and a hosted service that runs the monitor and tells the extension. `AddPillionHost` calls it
+and connects the Model Gateway to the monitor through three adapters in `Models/`:
+
+- `ConnectivityGatewaySettingsSource`: the gateway reads the same `IConnectivitySettingsProvider` as the monitor
+  (user settings plus repository policies), so the router's Local-only check and the monitor's `LocalOnly` state come
+  from one source of truth.
+- `ConnectivityProviderReachability` (`IProviderReachability`): routing skips a cloud provider the monitor has found
+  unreachable, and every cloud provider in Local-only. Providers the monitor does not track count as reachable.
+- `ConnectivityProviderHealthSink` (`IProviderHealthSink`): every failure the circuit breaker counts is
+  `ReportFailure`, every success `ReportSuccess`, so three failures in a row mark a cloud provider unreachable.
+
 Every service is registered with `TryAdd`, so tests substitute `IConnectivitySettingsProvider`, `IProviderProber`
 and `INetworkChangeSource`.
 

@@ -73,8 +73,9 @@ when settings change and reused when their entry did not.
 
 | Interface | Default | Supplied by |
 | --- | --- | --- |
-| `IProviderReachability` | `AlwaysReachable` | Connectivity (0.10) |
-| `IProviderHealthSink` | `NoProviderHealthSink` | Connectivity (0.10) |
+| `IProviderReachability` | `AlwaysReachable` | Pillion Host: `ConnectivityProviderReachability` over the connectivity monitor (0.10) |
+| `IProviderHealthSink` | `NoProviderHealthSink` | Pillion Host: `ConnectivityProviderHealthSink`; each counted failure and success goes to the monitor's `ReportFailure` / `ReportSuccess` (0.10) |
+| `IGatewaySettingsSource` | `SettingsStoreGatewaySettingsSource` (no policies) | Pillion Host: `ConnectivityGatewaySettingsSource`, the monitor's effective settings, so Local-only has one source |
 | `IProgressSink` | `NoProgressSink` | Chat window (0.11) |
 | `ICostGovernor` | `NoCostCaps` | Cost governance (phase 1) |
 | `IOutboundLog` | `InMemoryOutboundLog` | Persistence with the audit trail |

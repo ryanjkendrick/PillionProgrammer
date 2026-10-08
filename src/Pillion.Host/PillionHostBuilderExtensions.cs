@@ -1,6 +1,9 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Pillion.Common.Connectivity;
 using Pillion.Contracts;
+using Pillion.Host.Connectivity;
 using Pillion.Host.Lifecycle;
 using Pillion.Host.Logging;
 using Pillion.Host.Models;
@@ -57,6 +60,19 @@ internal static class PillionHostBuilderExtensions
         // Settings (work item 0.5): the store, Credential Manager secrets and the ISettingsService RPC target.
         builder.Services.AddPillionSettingsRpc();
         builder.Services.AddRpcTarget<ISettingsService>(sp => sp.GetRequiredService<ISettingsService>());
+
+        // Connectivity (work item 0.10): the monitor, its probes and the connectivityChanged notification.
+        builder.Services.AddPillionConnectivity();
+
+        // The gateway reads the same effective settings as the monitor (one source of truth for Local-only), asks the
+        // monitor which providers are reachable, and reports circuit-breaker evidence back to it. Registered before
+        // AddPillionModelGateway, whose TryAdd defaults (AlwaysReachable, NoProviderHealthSink) then stay out.
+        builder.Services.TryAddSingleton<IGatewaySettingsSource>(sp =>
+            new ConnectivityGatewaySettingsSource(sp.GetRequiredService<IConnectivitySettingsProvider>()));
+        builder.Services.TryAddSingleton<IProviderReachability>(sp =>
+            new ConnectivityProviderReachability(sp.GetRequiredService<IConnectivityMonitor>()));
+        builder.Services.TryAddSingleton<IProviderHealthSink>(sp =>
+            new ConnectivityProviderHealthSink(sp.GetRequiredService<IConnectivityMonitor>()));
 
         // Model Gateway (work items 0.7 and 0.8): providers, routing and the IModelService RPC target. It also
         // replaces the settings' NoProviderTester with one that probes the named provider (Test connection).
