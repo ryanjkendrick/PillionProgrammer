@@ -4,7 +4,9 @@ Phase 0 closes at Gate 0 ([phase-0-plan.md](phase-0-plan.md)). This report colle
 says how it was measured and lists what only the product owner can do. Work item 0.13.
 
 Date: 2026-10-08. Machine: the reference development machine (design document section 17). Code: branch
-`phase0/gate0-evidence`, which is `phase0/integration` (PR 8, all of phase 0) plus the scripts in `tools/gate0/`.
+`phase0/gate0-evidence`, which is `phase0/integration` (PR 8, all of phase 0) plus the scripts in `tools/gate0/`. The two Gate 0
+failures (CI, feature flags) and the duplicate picker entries were fixed afterwards in PR 15 (`phase0/gate0-fixes`); the rows
+below say where they changed.
 
 ## How the evidence is produced
 
@@ -67,9 +69,9 @@ outlived the instance.
 | Proposals API spike green on VS 2022 17.14 and VS 2026 18.x | **Pending product owner** (18.10: viable, PR 2) | `spikes/ProposalsSpike/FINDINGS.md` on `phase0/proposals-spike`: viable on 18.10 with two caveats (IntelliSense-coupled proposals unproven, API drift) | 17.14 is now installed; a separate agent runs the 17.14 checklist |
 | Secret scanner round trip: no placeholder reaches disk, originals restored in model output | **Pass** | `Pillion.Common.Tests` 741 passed, 0 failed, including the `Redaction` tests (round trip, session, edge cases, corpus, behaviour, performance); 616 passing tests whose names mention Redaction or SecretScanner across the TRX files; gateway redaction middleware tests in `Pillion.ModelGateway.Tests` (`GatewayTests`) | `dotnet test` in step b; TRX files in `tests/` |
 | Local-only mode routes nothing to a cloud provider and runs no probes | **Pass** (network on); with the adapter disabled **Pending product owner** | Step g: status "Ready. Local-only: nothing leaves this machine.", status bar "Pillion: Ready, Local-only"; the cloud entry "gpt-4o-mini (Gate 0 cloud placeholder), cloud model, unavailable: Local-only mode is on (Tools > Options > Pillion Programmer > Privacy)" disabled; Auto answered under "gemma4:e2b via Ollama, local"; 1 Outbound line, local; 0 probes in the 65 s Local-only window against 4 probe lines before it; host log `Connectivity Online -> LocalOnly: local-only mode turned on` then `LocalOnly -> Online` | `privacy.localOnly` set in `settings.json`, Refresh models, picker entries read through UI Automation, Outbound lines and Debug `Probed provider` lines read from the host log; held for one full probe cadence. The offline run (`Invoke-OfflineRun.ps1`) repeats it with the adapters disabled |
-| Every work item behind a feature flag | **Fail** | No feature-flag mechanism exists in phase 0 | Code search |
-| Unit and component tests green | **Pass** | Step b: 1400 passed, 0 failed, 3 skipped (Contracts 178, Common 741, Host 128, ModelGateway 200 + 3 skipped, VisualStudio 153). The 3 skips are the OpenAI-compatible live tests (no endpoint configured). Ollama live tests including fill-in-the-middle: **Pass** with `qwen2.5-coder:1.5b` pulled: `dotnet test tests\Pillion.ModelGateway.Tests --filter Category=Live` on `phase0/integration` passed the four Ollama live tests (run by the lead) | `dotnet test PillionProgrammer.NoVsix.slnf -c Release --logger trx` |
-| Main builds on CI on 17.14 and 18.x | **Fail** | CI is red on every phase 0 pull request (for example PR 8, run 37807700407: 5 failures in `Pillion.VisualStudio.Tests`, see Open issues); there is no 17.14 CI leg; nothing from phase 0 has reached `main` yet. The full solution builds locally with 0 warnings and 0 errors (`build.log`) | `gh run list`, `gh run view --log-failed` |
+| Every work item behind a feature flag | **Pass** (PR 15) | Six flags in the `features` section of `settings.json`, all default on: `chat`, `modelGateway`, `connectivityProbes`, `cloudProviders`, `ollamaProvider`, `openAICompatibleProvider`; a repository policy switches any of them off with `disabledFeatures`. `chat` off disables the Open Chat commands and the window says "Chat is disabled by settings or policy"; `modelGateway` off fails every model call with `PolicyDenied`; `cloudProviders` off hides every non-local provider; `connectivityProbes` off stops probing; the two provider flags skip their factories. The effective flags (policies applied) are readable as `effective.features`. Tests: `FeatureFlagTests` in Common (defaults, policy union, effective resolution, migration of a file without the section, monitor effects), ModelGateway (factories skipped, cloud hidden), Host (each flag through the composed host, the virtual key, the real settings store) and VisualStudio (`ChatAvailabilityTests`: command state and window follow the flag). Documented in the README ("Feature flags") | `dotnet test PillionProgrammer.NoVsix.slnf`; the flag list is `FeatureNames.All` in `Pillion.Common` |
+| Unit and component tests green | **Pass** | Step b: 1400 passed, 0 failed, 3 skipped (Contracts 178, Common 741, Host 128, ModelGateway 200 + 3 skipped, VisualStudio 153). The 3 skips are the OpenAI-compatible live tests (no endpoint configured). After PR 15 (feature flags, owner check, Ollama de-duplication) the same command gives 1460 passed, 0 failed, 3 skipped locally (Contracts 178, Common 758, Host 139, ModelGateway 209 + 3 skipped, VisualStudio 176); the same projects pass on CI (run 37815739685). Ollama live tests including fill-in-the-middle: **Pass** with `qwen2.5-coder:1.5b` pulled: `dotnet test tests\Pillion.ModelGateway.Tests --filter Category=Live` on `phase0/integration` passed the four Ollama live tests (run by the lead) | `dotnet test PillionProgrammer.NoVsix.slnf -c Release --logger trx` |
+| Main builds on CI on 17.14 and 18.x | **Pass** for the red CI (PR 15, 18.x); the 17.14 leg and a run on `main` are still **Pending** | CI was red on every phase 0 pull request (PR 8, run 37807700407: 5 failures in `Pillion.VisualStudio.Tests`, "Pillion Host's pipe is owned by another user"). Cause confirmed as the elevated hosted runner: its objects are owned by `BUILTIN\Administrators`, and `HostProcessLauncher.VerifyServer` compared the owner only with the user SID. Fixed in PR 15 (the token owner is accepted too, any other SID is still refused). CI is green on PR 15: https://github.com/ryanjkendrick/PillionProgrammer/actions/runs/37815739685 (Build and test, 4m48s: full solution Release build with MSBuild 18, then Common 758, Contracts 178, ModelGateway 205 with 7 skipped live tests, Host 139, VisualStudio 176, all passing). There is still no 17.14 CI leg, and nothing from phase 0 has reached `main` yet, so the criterion is met for the build the PR runs on, not yet on `main` | `gh pr checks 15`, `gh run view 37815739685` |
 
 ## Results of the best run
 
@@ -129,8 +131,8 @@ Extension log for kill 1 (`vsix-log-excerpt.txt`):
 5. **Manual host-kill check.** The criterion asks for a manual check beside the scripted one: in the Experimental
    Instance, kill `Pillion.Host.exe` in Task Manager while a reply is streaming and confirm the reply is marked
    Interrupted with Retry, typing stays responsive, and the status bar goes Restarting then Ready.
-6. **CI.** Decide how to get CI green (see Open issues): the `Pillion.VisualStudio.Tests` failures on the hosted runner
-   come from the pipe-owner check when the process is elevated.
+6. **CI.** Review and merge PR 15 into `phase0/integration` (it fixes the pipe-owner check that made CI red), then decide
+   whether a Visual Studio 2022 17.14 CI leg is wanted before the first merge to `main`.
 7. **Gate decision.** Record pass or fail in the decision log.
 
 ## Open issues known from phase 0
@@ -142,21 +144,23 @@ Extension log for kill 1 (`vsix-log-excerpt.txt`):
   and layout time. Fine for phase 0; needs a virtualising panel before the chat is used for long sessions.
 - **Azure OpenAI is deferred.** The OpenAI-compatible adapter covers OpenAI, OpenRouter, enterprise gateways and local
   OpenAI-compatible servers; Azure OpenAI's deployment-based URLs and `api-key` header follow later.
-- **CI is red on every phase 0 pull request.** `Pillion.VisualStudio.Tests` fails five tests on the GitHub-hosted
-  runner (for example PR 8, run 37807700407): `HostProcessLauncher.VerifyServer` throws "Pillion Host's pipe is owned by
-  another user", and the other four failures follow from it. The likely cause (not yet confirmed on the runner): the
-  runner's process is elevated, so objects it creates, including the host's pipe, are owned by `BUILTIN\Administrators`
-  rather than by the user SID the check compares with. The same tests pass on this machine, which is not elevated. If
-  that is the cause, it is a product bug as well as a CI problem: the extension would refuse its own host in a Visual
-  Studio started with Run as administrator. The fix would be to accept the token's default owner (the Administrators
-  group for an elevated token) as well as the user SID.
-- **No feature flags exist yet.** The criterion "every work item behind a feature flag" is not met: phase 0 has no flag
-  mechanism; the features are always on in this early build.
+- **Closed in PR 15: CI was red on every phase 0 pull request.** `Pillion.VisualStudio.Tests` failed five tests on the
+  GitHub-hosted runner (PR 8, run 37807700407): `HostProcessLauncher.VerifyServer` threw "Pillion Host's pipe is owned
+  by another user". The runner's process is elevated, so the host's pipe is owned by `BUILTIN\Administrators` rather
+  than by the user SID the check compared with; Visual Studio started with Run as administrator would have refused its
+  own host the same way. `VerifyServer` now accepts the user SID or the token owner SID and still refuses any other.
+  The host needed no change: .NET's `CurrentUserOnly` owns and grants the pipe as the token owner on the server and
+  compares the remote owner with the token owner on the client, so both ends agree. Not reproduced locally (this
+  machine's prompt is not elevated and a UAC prompt could not be answered); the evidence is the unit tests with an
+  injected Administrators owner and the green CI run 37815739685 on PR 15.
+- **Closed in PR 15: no feature flags existed.** See the feature flag row above. Not yet covered by a flag: the editor
+  and workspace services and the stubs for later phases (they have no behaviour in phase 0).
 - **`main` has not been built by CI with phase 0 merged.** Nothing from phase 0 has been squash-merged to `main` yet;
   `phase0/integration` (PR 8) carries it. CI targets 18.x only (`windows-latest`); a 17.14 CI leg does not exist.
-- **Duplicate picker entries.** Ollama on this machine lists `gemma4:e2b` twice (two digests under one name), and the
-  picker shows two identical "gemma4:e2b (Ollama)" entries. The tooltip shows the digest, but the entries look the
-  same. Minor; worth deduplicating or showing a short digest.
+- **Closed in PR 15: duplicate picker entries.** Ollama on this machine listed `gemma4:e2b` twice (two digests under
+  one name) and the picker showed two identical entries. The Ollama provider now lists each name once, keeping the
+  first entry of `/api/tags` (the digest the tag currently points at; `:latest` and no tag are the same name). Fixture
+  test `ListModels_DeduplicatesByName_KeepingTheFirstEntryTheCurrentDigest`.
 - **Worktree metadata.** The phase 0 worktrees under `D:\Development\PillionProgrammer-wt` were created with MSYS-style
   paths (`/d/Development/...`) in their `.git` files, which Windows Git cannot resolve (`git worktree list` marks them
   prunable). Running `git worktree prune` in the main checkout would drop them. The gate0 worktree's `.git` file was

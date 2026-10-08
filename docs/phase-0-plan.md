@@ -31,7 +31,7 @@ The design document is the specification: https://claude.ai/code/artifact/02f3ee
 | 0.10 | Connectivity and Local-only mode: per-provider probes, network-change events, four states, policy file `localOnly` (section 11) | Common, Host | 0.7 | Done, PR 9 |
 | 0.11 | Chat tool window and Options pages: model picker, streaming replies naming the model, Outbound log entries, Providers and keys page, Local-only switch (section 5) | VSIX | 0.4, 0.7 | Done, PR 11 |
 | 0.12 | Proposals API spike on 17.14 and 18.x with findings and the fallback assessment (section 5) | Spike | | Viable on 18.10, PR 2; 17.14 run pending VS 2022 |
-| 0.13 | Gate 0 evidence: host-kill integration test, offline run script, gate report | Tests | all | Done, PR 14 (report: [gate-0-report.md](gate-0-report.md)) |
+| 0.13 | Gate 0 evidence: host-kill integration test, offline run script, gate report | Tests | all | Done, PR 14; Gate 0 failures fixed in PR 15 (report: [gate-0-report.md](gate-0-report.md)) |
 
 Work item 0.13 was added when the plan was laid out; the design doc's count of twelve is indicative.
 
@@ -49,6 +49,8 @@ Work item 0.13 was added when the plan was laid out; the design doc's count of t
 | 2026-10-08 | The minimum Ollama version is 0.6.4, checked before the first request and by Test connection rather than at start-up | 0.6.4 is the first release whose `api/show` returns `capabilities`, which the gateway uses to tell chat, FIM, vision and embedding models apart; checking lazily lets Ollama start after Pillion |
 | 2026-10-08 | Connectivity reads Online when no cloud provider is configured, and a cloud provider that has not been probed yet counts as reachable | Offline with nothing to reach would grey out or warn about local-only setups for no reason, and treating unprobed providers as down would block the first request after start-up or a settings change; probes and three circuit-breaker failures correct the state within seconds |
 | 2026-10-08 | The Model Gateway reads its settings through the connectivity monitor's settings provider, and the circuit breaker reports every counted failure and success to the monitor | One source of truth for Local-only (user setting or repository policy) between the router and the monitor; breaker evidence and probes share one reachability view, as section 11 describes |
+| 2026-10-08 | Feature flags: a `features` section in `settings.json` (chat, modelGateway, connectivityProbes, cloudProviders, ollamaProvider, openAICompatibleProvider; all default on), a `disabledFeatures` key in `.pillion/policy.json` (unioned, can only switch off), and a read-only virtual setting `effective.features` on `ISettingsService.GetAsync` | The Gate 0 criterion "every work item behind a feature flag" and the design rule "a feature flag gates every agent capability, so a policy file can switch individual tools off". No version bump: missing sections fill with defaults. The extension reads the effective flags from the host because only the host knows the repository policies |
+| 2026-10-08 | The pipe owner check in the extension accepts the user SID or the token owner SID | An elevated token owns the objects it creates as BUILTINAdministrators; .NET's own `CurrentUserOnly` uses the token owner on both ends, so the extension follows it. Any other owner is still refused |
 
 ## Working agreement
 
