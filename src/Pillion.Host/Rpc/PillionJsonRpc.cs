@@ -46,7 +46,13 @@ internal sealed partial class PillionJsonRpc : JsonRpc
         _logger = logger;
     }
 
-    /// <summary>Raised after a response (result or error) has been written to the transport.</summary>
+    /// <summary>
+    /// Raised after a response (result or error) has been written to the transport and the write has completed.
+    /// </summary>
+    /// <remarks>
+    /// Not StreamJsonRpc's own <c>ResponseSent</c> event (<c>JsonRpc.OnResponseSent</c>): that one is raised when the
+    /// response is serialised, before it is written, so closing the connection from it can cut the response off.
+    /// </remarks>
     public event EventHandler<JsonRpcMessage>? ResponseSent;
 
     /// <summary>Gets a value indicating whether no request is being dispatched or waiting for its response to be sent.</summary>
@@ -99,16 +105,28 @@ internal sealed partial class PillionJsonRpc : JsonRpc
     }
 
     /// <inheritdoc/>
-    protected override void OnResponseSent(JsonRpcMessage response)
+    protected override async ValueTask SendAsync(JsonRpcMessage message, CancellationToken cancellationToken)
     {
-        base.OnResponseSent(response);
-
-        if (response is IJsonRpcMessageWithId { RequestId: var id })
+        // The base call starts the write before its first yield, which keeps outgoing messages in order.
+        var isResponse = message is JsonRpcResult or JsonRpcError;
+        var delivered = false;
+        try
         {
-            _awaitingResponse.TryRemove(id, out _);
+            await base.SendAsync(message, cancellationToken).ConfigureAwait(false);
+            delivered = true;
+        }
+        finally
+        {
+            if (isResponse && message is IJsonRpcMessageWithId { RequestId: var id })
+            {
+                _awaitingResponse.TryRemove(id, out _);
+            }
         }
 
-        ResponseSent?.Invoke(this, response);
+        if (delivered && isResponse)
+        {
+            ResponseSent?.Invoke(this, message);
+        }
     }
 
     /// <inheritdoc/>

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Pipelines;
 using System.IO.Pipes;
 using System.Threading.Channels;
 using MessagePack;
@@ -77,7 +78,15 @@ internal sealed partial class RpcConnection : IAsyncDisposable
 
         // MessagePack is binary, so frames are length-prefixed (4-byte big-endian length, then the message).
         // HeaderDelimitedMessageHandler only supports text formatters and throws NotSupportedException with MessagePack.
-        var handler = new LengthHeaderMessageHandler(pipe, pipe, formatter);
+        //
+        // The writer is created here, over the stream, rather than letting StreamJsonRpc do it: StreamJsonRpc's own
+        // stream adapter writes from a background pump, so SendAsync completes (and ResponseSent is raised) while the
+        // message is still queued, and closing the connection then discards it. PipeWriter.Create writes to the pipe
+        // inside FlushAsync, so a completed send means the bytes are in the pipe.
+        var handler = new LengthHeaderMessageHandler(
+            PipeWriter.Create(pipe, new StreamPipeWriterOptions(leaveOpen: false)),
+            PipeReader.Create(pipe, new StreamPipeReaderOptions(leaveOpen: false)),
+            formatter);
         _rpc = new PillionJsonRpc(handler, () => IsAccepted, _logger)
         {
             CancelLocallyInvokedMethodsWhenConnectionIsClosed = true,
@@ -255,7 +264,7 @@ internal sealed partial class RpcConnection : IAsyncDisposable
     {
         if (message is JsonRpcResult { Result: HandshakeResponse { Accepted: false } })
         {
-            // The rejection has left the host; close the connection.
+            // The rejection response has been written to the pipe (not merely serialised); close the connection.
             _ = Task.Run(Close);
         }
     }
