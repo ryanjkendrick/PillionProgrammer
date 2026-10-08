@@ -26,4 +26,10 @@ internal static class PackageIds
 {
     /// <summary>The "Pillion: Show Status" command.</summary>
     public const int ShowStatusCommand = 0x0100;
+
+    /// <summary>The "Pillion: Retry" command: resets the crash counter and relaunches Pillion Host.</summary>
+    public const int RetryHostCommand = 0x0101;
+
+    /// <summary>The "Pillion: Open Logs" command: opens the log folder in File Explorer.</summary>
+    public const int OpenLogsCommand = 0x0102;
 }

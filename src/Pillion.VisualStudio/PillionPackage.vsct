@@ -18,6 +18,20 @@
           <ButtonText>Pillion: Show Status</ButtonText>
         </Strings>
       </Button>
+
+      <Button guid="guidPillionCommandSet" id="cmdidRetryHost" priority="0x0101" type="Button">
+        <Parent guid="guidPillionCommandSet" id="PillionToolsMenuGroup" />
+        <Strings>
+          <ButtonText>Pillion: Retry</ButtonText>
+        </Strings>
+      </Button>
+
+      <Button guid="guidPillionCommandSet" id="cmdidOpenLogs" priority="0x0102" type="Button">
+        <Parent guid="guidPillionCommandSet" id="PillionToolsMenuGroup" />
+        <Strings>
+          <ButtonText>Pillion: Open Logs</ButtonText>
+        </Strings>
+      </Button>
     </Buttons>
   </Commands>
 
@@ -28,6 +42,8 @@
     <GuidSymbol name="guidPillionCommandSet" value="{444aebc2-1c36-43a9-ab09-2c2d4e04a11d}">
       <IDSymbol name="PillionToolsMenuGroup" value="0x1020" />
       <IDSymbol name="cmdidShowStatus" value="0x0100" />
+      <IDSymbol name="cmdidRetryHost" value="0x0101" />
+      <IDSymbol name="cmdidOpenLogs" value="0x0102" />
     </GuidSymbol>
   </Symbols>
 

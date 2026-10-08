@@ -1,0 +1,69 @@
+<Project>
+
+  <!--
+    Packages Pillion Host into the VSIX under Host\ (design doc section 4): the supervisor launches
+    <extension install directory>\Host\Pillion.Host.exe.
+
+    Before the VSIX source items are collected, `dotnet publish` runs on src/Pillion.Host with its win-x64 publish
+    profile (self-contained, see Properties/PublishProfiles/win-x64.pubxml), always in Release. It runs as a separate
+    `dotnet publish` process with its own artifacts path, so its RID-specific restore and build of Pillion.Host and
+    its project references never touch the obj\ and bin\ folders that the solution build writes to in parallel (/m).
+    The published files become VSIXSourceItems; the host is content only and never an assembly reference of the VSIX.
+
+    The publish is incremental: it is skipped when no source, project or build-settings file under src\ (outside the
+    VSIX projects) or at the repository root is newer than the stamp written after the last publish. Clean deletes
+    the publish folder.
+  -->
+  <PropertyGroup>
+    <PillionHostProject>$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)..\Pillion.Host\Pillion.Host.csproj'))</PillionHostProject>
+    <PillionHostWorkDir>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)', 'host'))</PillionHostWorkDir>
+    <!-- No trailing backslash: these are passed to dotnet inside quotes. -->
+    <PillionHostPublishDir>$(PillionHostWorkDir)publish</PillionHostPublishDir>
+    <PillionHostArtifactsDir>$(PillionHostWorkDir)artifacts</PillionHostArtifactsDir>
+    <PillionHostStamp>$(PillionHostWorkDir)publish.stamp</PillionHostStamp>
+    <PillionDotnet Condition="'$(DOTNET_HOST_PATH)' != '' and Exists('$(DOTNET_HOST_PATH)')">"$(DOTNET_HOST_PATH)"</PillionDotnet>
+    <PillionDotnet Condition="'$(PillionDotnet)' == ''">dotnet</PillionDotnet>
+    <GetVsixSourceItemsDependsOn>$(GetVsixSourceItemsDependsOn);IncludePillionHostInVsix</GetVsixSourceItemsDependsOn>
+  </PropertyGroup>
+
+  <Target Name="_CollectPillionHostInputs">
+    <PropertyGroup>
+      <_PillionSrcDir>$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)..'))</_PillionSrcDir>
+      <_PillionRepoDir>$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)..', '..'))</_PillionRepoDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <PillionHostPublishInput
+        Include="$(_PillionSrcDir)**\*.cs;$(_PillionSrcDir)**\*.csproj;$(_PillionSrcDir)**\*.props;$(_PillionSrcDir)**\*.targets;$(_PillionSrcDir)**\*.pubxml;$(_PillionSrcDir)**\*.json;$(_PillionSrcDir)**\*.resx"
+        Exclude="$(_PillionSrcDir)Pillion.VisualStudio\**;$(_PillionSrcDir)Pillion.VisualStudio.Core\**;$(_PillionSrcDir)**\bin\**;$(_PillionSrcDir)**\obj\**" />
+      <PillionHostPublishInput Include="$(_PillionRepoDir)Directory.Build.props;$(_PillionRepoDir)Directory.Build.targets;$(_PillionRepoDir)Directory.Packages.props;$(_PillionRepoDir)global.json" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="PublishPillionHost"
+          DependsOnTargets="_CollectPillionHostInputs"
+          Inputs="@(PillionHostPublishInput);$(MSBuildThisFileFullPath)"
+          Outputs="$(PillionHostStamp)">
+    <Message Importance="high" Text="Publishing Pillion Host (self-contained win-x64) to $(PillionHostPublishDir)" />
+    <!-- Start from an empty folder so files the host no longer ships do not linger in the VSIX. -->
+    <RemoveDir Directories="$(PillionHostPublishDir)" />
+    <Exec Command="$(PillionDotnet) publish &quot;$(PillionHostProject)&quot; -p:PublishProfile=win-x64 -c Release --artifacts-path &quot;$(PillionHostArtifactsDir)&quot; -p:PublishDir=&quot;$(PillionHostPublishDir)&quot; -nologo -v:minimal"
+          WorkingDirectory="$(MSBuildThisFileDirectory)" />
+    <Error Condition="!Exists('$(PillionHostPublishDir)\Pillion.Host.exe')" Text="dotnet publish did not produce $(PillionHostPublishDir)\Pillion.Host.exe." />
+    <Touch Files="$(PillionHostStamp)" AlwaysCreate="true" />
+  </Target>
+
+  <Target Name="IncludePillionHostInVsix" DependsOnTargets="PublishPillionHost">
+    <ItemGroup>
+      <_PillionHostFile Include="$(PillionHostPublishDir)\**\*" />
+      <VSIXSourceItem Include="@(_PillionHostFile)">
+        <VSIXSubPath>Host\%(_PillionHostFile.RecursiveDir)</VSIXSubPath>
+      </VSIXSourceItem>
+    </ItemGroup>
+    <Message Importance="normal" Text="Including @(_PillionHostFile->Count()) Pillion Host files in the VSIX under Host\." />
+  </Target>
+
+  <Target Name="CleanPillionHost" AfterTargets="Clean">
+    <RemoveDir Directories="$(PillionHostWorkDir)" />
+  </Target>
+
+</Project>
