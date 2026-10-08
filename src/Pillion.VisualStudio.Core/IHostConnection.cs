@@ -24,6 +24,15 @@ public interface IHostConnection
     event EventHandler<HostStateChangedEventArgs>? StateChanged;
 
     /// <summary>
+    /// Gets how well the connected host can reach the cloud providers, from its <c>connectivityChanged</c> notification,
+    /// or <see langword="null"/> when no host is connected or it has not reported yet.
+    /// </summary>
+    ConnectivityState? Connectivity { get; }
+
+    /// <summary>Raised on a background thread whenever <see cref="Connectivity"/> changes.</summary>
+    event EventHandler<HostConnectivityChangedEventArgs>? ConnectivityChanged;
+
+    /// <summary>
     /// Gets the RPC proxy for a host service interface (for example <see cref="IModelService"/>) on the live connection.
     /// </summary>
     /// <typeparam name="T">A host service interface from Pillion.Contracts.</typeparam>

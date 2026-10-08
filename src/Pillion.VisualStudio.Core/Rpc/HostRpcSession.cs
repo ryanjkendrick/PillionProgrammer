@@ -24,6 +24,9 @@ internal sealed class HostRpcSession : IHostSession
     /// <summary>The JSON-RPC notification the host sends when its state changes.</summary>
     public const string HostStateChangedMethod = "hostStateChanged";
 
+    /// <summary>The JSON-RPC notification the host sends with its <see cref="ConnectivityState"/> after the handshake and on every change.</summary>
+    public const string ConnectivityChangedMethod = "connectivityChanged";
+
     private static readonly TimeSpan ExitCodeGrace = TimeSpan.FromMilliseconds(500);
 
     private readonly HostProcess _process;
@@ -36,6 +39,7 @@ internal sealed class HostRpcSession : IHostSession
     private readonly TaskCompletionSource<string> _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _hostStateNotified;
     private int _latestHostState = (int)HostState.Starting;
+    private int _latestConnectivity = -1;
     private int _disposed;
 
     /// <summary>Initializes a new instance of the <see cref="HostRpcSession"/> class and starts listening.</summary>
@@ -58,6 +62,9 @@ internal sealed class HostRpcSession : IHostSession
         _rpc.AddLocalRpcTarget<IApprovalService>(localTargets.Approval, options: null);
         _rpc.AddLocalRpcTarget<IWorkspaceQueryService>(localTargets.WorkspaceQuery, options: null);
         _rpc.AddLocalRpcMethod(HostStateChangedMethod, new Action<HostState>(OnHostStateChanged));
+
+        // Registered before the handshake: the host may send it before the handshake response arrives.
+        _rpc.AddLocalRpcMethod(ConnectivityChangedMethod, new Action<ConnectivityState>(OnConnectivityChanged));
         _rpc.Disconnected += OnDisconnected;
 
         _ = _process.Exited.ContinueWith(
@@ -73,6 +80,9 @@ internal sealed class HostRpcSession : IHostSession
     /// <inheritdoc/>
     public event EventHandler<HostState>? HostStateChanged;
 
+    /// <inheritdoc/>
+    public event EventHandler<ConnectivityState>? ConnectivityChanged;
+
     /// <summary>Creates the wire framing and serializer shared with Pillion Host.</summary>
     /// <param name="pipe">The connected pipe.</param>
     /// <returns>A <see cref="LengthHeaderMessageHandler"/> with a default <see cref="MessagePackFormatter"/>.</returns>
@@ -84,6 +94,16 @@ internal sealed class HostRpcSession : IHostSession
 
     /// <inheritdoc/>
     public HostState LatestHostState => (HostState)Volatile.Read(ref _latestHostState);
+
+    /// <inheritdoc/>
+    public ConnectivityState? LatestConnectivity
+    {
+        get
+        {
+            var value = Volatile.Read(ref _latestConnectivity);
+            return value < 0 ? null : (ConnectivityState)value;
+        }
+    }
 
     /// <inheritdoc/>
     public Task<string> Completion => _completion.Task;
@@ -277,6 +297,13 @@ internal sealed class HostRpcSession : IHostSession
         Volatile.Write(ref _latestHostState, (int)state);
         _log.Info("host.state", "The host reported its state.", ("pid", _process.Id), ("state", state));
         HostStateChanged?.Invoke(this, state);
+    }
+
+    private void OnConnectivityChanged(ConnectivityState state)
+    {
+        Volatile.Write(ref _latestConnectivity, (int)state);
+        _log.Info("host.connectivity", "The host reported its connectivity.", ("pid", _process.Id), ("connectivity", state));
+        ConnectivityChanged?.Invoke(this, state);
     }
 
     private void OnDisconnected(object? sender, JsonRpcDisconnectedEventArgs e)

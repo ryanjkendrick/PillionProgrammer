@@ -28,6 +28,7 @@ public sealed class HostSupervisor : IHostConnection, IDisposable
     private readonly List<TaskCompletionSource<bool>> _readyWaiters = [];
 
     private HostState _state = HostState.Starting;
+    private ConnectivityState? _connectivity;
     private int _restartAttempt;
     private string? _failureReason;
     private IHostSession? _session;
@@ -53,6 +54,21 @@ public sealed class HostSupervisor : IHostConnection, IDisposable
 
     /// <inheritdoc/>
     public event EventHandler<HostStateChangedEventArgs>? StateChanged;
+
+    /// <inheritdoc/>
+    public event EventHandler<HostConnectivityChangedEventArgs>? ConnectivityChanged;
+
+    /// <inheritdoc/>
+    public ConnectivityState? Connectivity
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _connectivity;
+            }
+        }
+    }
 
     /// <inheritdoc/>
     public HostState State
@@ -405,8 +421,15 @@ public sealed class HostSupervisor : IHostConnection, IDisposable
         }
 
         session.HostStateChanged += OnSessionHostStateChanged;
+        session.ConnectivityChanged += OnSessionConnectivityChanged;
         try
         {
+            // The connectivity notification may have arrived during the handshake, before this subscription.
+            if (session.LatestConnectivity is { } connectivity)
+            {
+                OnSessionConnectivityChanged(session, connectivity);
+            }
+
             OnSessionHostStateChanged(session, session.LatestHostState);
 
             var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -433,6 +456,8 @@ public sealed class HostSupervisor : IHostConnection, IDisposable
         finally
         {
             session.HostStateChanged -= OnSessionHostStateChanged;
+            session.ConnectivityChanged -= OnSessionConnectivityChanged;
+            SetConnectivity(session, null, force: true);
             var owned = false;
             lock (_gate)
             {
@@ -510,6 +535,47 @@ public sealed class HostSupervisor : IHostConnection, IDisposable
         }
 
         SetState(Mirror(hostState), restartAttempt: 0, reason: null);
+    }
+
+    private void OnSessionConnectivityChanged(object? sender, ConnectivityState connectivity) =>
+        SetConnectivity(sender, connectivity, force: false);
+
+    /// <summary>Records the connectivity the current session reported (or forgets it when the session ends) and raises the event.</summary>
+    private void SetConnectivity(object? session, ConnectivityState? connectivity, bool force)
+    {
+        HostConnectivityChangedEventArgs change;
+        lock (_gate)
+        {
+            // Only the current session may report; when a session ends (force) the value is cleared regardless.
+            if ((!force && !ReferenceEquals(session, _session)) || _connectivity == connectivity)
+            {
+                return;
+            }
+
+            change = new HostConnectivityChangedEventArgs(_connectivity, connectivity);
+            _connectivity = connectivity;
+        }
+
+        _log.Info("supervisor.connectivity", "Connectivity changed.", ("from", change.Previous), ("to", change.Current));
+        var handlers = ConnectivityChanged;
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (EventHandler<HostConnectivityChangedEventArgs> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(this, change);
+            }
+#pragma warning disable CA1031 // A faulty subscriber must not break supervision.
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                _log.Error("supervisor.connectivity_handler_failed", "A ConnectivityChanged handler threw.", ("error", ex.GetType().Name), ("detail", ex.Message));
+            }
+        }
     }
 
     private void EnterFailed(string reason)

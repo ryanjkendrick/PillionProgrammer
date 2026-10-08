@@ -56,6 +56,54 @@ public sealed class HostSupervisorTests : IDisposable
     }
 
     [Fact]
+    public async Task Connectivity_FollowsTheSession_AndIsForgottenWhenItEnds()
+    {
+        var reported = new List<HostConnectivityChangedEventArgs>();
+        _supervisor.ConnectivityChanged += (_, e) =>
+        {
+            lock (reported)
+            {
+                reported.Add(e);
+            }
+        };
+        _launcher.InitialState = HostState.Starting;
+
+        _supervisor.Start();
+        await Wait.UntilAsync(() => _supervisor.HostProcessId is not null, "connected");
+        Assert.Null(_supervisor.Connectivity);
+
+        var first = _launcher.LastSession;
+        first.ReportConnectivity(ConnectivityState.Online);
+        Assert.Equal(ConnectivityState.Online, _supervisor.Connectivity);
+        first.ReportConnectivity(ConnectivityState.LocalOnly);
+        first.ReportConnectivity(ConnectivityState.LocalOnly); // No change, no event.
+        Assert.Equal(ConnectivityState.LocalOnly, _supervisor.Connectivity);
+
+        first.Crash();
+        await Wait.UntilAsync(() => _supervisor.Connectivity is null, "connectivity forgotten with the session");
+        lock (reported)
+        {
+            Assert.Equal(
+                [(null, ConnectivityState.Online), (ConnectivityState.Online, ConnectivityState.LocalOnly), (ConnectivityState.LocalOnly, (ConnectivityState?)null)],
+                reported.Select(e => (e.Previous, e.Current)));
+        }
+    }
+
+    [Fact]
+    public async Task Connectivity_ReportedBeforeTheSessionIsAdopted_IsPickedUp()
+    {
+        _launcher.Behaviour = (launch, _) =>
+        {
+            var session = _launcher.CreateSession(launch);
+            session.ReportConnectivity(ConnectivityState.Offline); // During the handshake, before the supervisor subscribes.
+            return Task.FromResult<IHostSession>(session);
+        };
+
+        _supervisor.Start();
+        await Wait.UntilAsync(() => _supervisor.Connectivity == ConnectivityState.Offline, "the early report is used");
+    }
+
+    [Fact]
     public async Task Start_LaunchesAndMirrorsTheHostState()
     {
         _launcher.InitialState = HostState.Starting;

@@ -22,7 +22,36 @@ internal sealed class FakeHostConnection : IHostConnection
         _state = state;
     }
 
+    private ConnectivityState? _connectivity;
+
     public event EventHandler<HostStateChangedEventArgs>? StateChanged;
+
+    public event EventHandler<HostConnectivityChangedEventArgs>? ConnectivityChanged;
+
+    public ConnectivityState? Connectivity
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _connectivity;
+            }
+        }
+    }
+
+    /// <summary>Changes the connectivity and raises <see cref="ConnectivityChanged"/> on a thread-pool thread, as the supervisor does.</summary>
+    public Task SetConnectivityAsync(ConnectivityState? connectivity)
+    {
+        ConnectivityState? previous;
+        lock (_gate)
+        {
+            previous = _connectivity;
+            _connectivity = connectivity;
+        }
+
+        var args = new HostConnectivityChangedEventArgs(previous, connectivity);
+        return Task.Run(() => ConnectivityChanged?.Invoke(this, args));
+    }
 
     public HostState State
     {
@@ -91,6 +120,10 @@ internal sealed class ChatScript
 
     public void Send(string text, bool isFinal = false, string? requestId = null) =>
         Push(new ChatChunk { Text = text, IsFinal = isFinal, RequestId = requestId ?? string.Empty });
+
+    /// <summary>Sends a chunk that names the model that answered, as contract 1.1 hosts do.</summary>
+    public void SendFrom(string providerId, string modelId, string text, bool isFinal = false, PillionError? error = null) =>
+        Push(new ChatChunk { Text = text, IsFinal = isFinal, ProviderId = providerId, ModelId = modelId, Error = error });
 
     public void Fail(Exception exception) => Push(exception);
 
@@ -245,28 +278,35 @@ internal static class TestModels
     public static ModelDescriptor Local { get; } = new()
     {
         Id = "qwen2.5-coder:7b",
+        ModelId = "qwen2.5-coder:7b",
         DisplayName = "Qwen2.5 Coder 7B",
         ProviderId = "ollama",
         IsLocal = true,
         Capabilities = ModelCapabilities.Chat | ModelCapabilities.Fim,
+        IsAvailable = true,
+        Digest = "sha256:2b0496514337",
     };
 
     public static ModelDescriptor Cloud { get; } = new()
     {
         Id = "gpt-test",
+        ModelId = "gpt-test",
         DisplayName = "GPT Test",
         ProviderId = "openrouter",
         IsLocal = false,
         Capabilities = ModelCapabilities.Chat,
+        IsAvailable = true,
     };
 
     public static ModelDescriptor EmbeddingOnly { get; } = new()
     {
         Id = "nomic-embed",
+        ModelId = "nomic-embed",
         DisplayName = "Nomic Embed",
         ProviderId = "ollama",
         IsLocal = true,
         Capabilities = ModelCapabilities.Embeddings,
+        IsAvailable = true,
     };
 
     public static string Providers { get; } =

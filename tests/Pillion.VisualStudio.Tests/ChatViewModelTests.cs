@@ -331,7 +331,7 @@ public sealed class ChatViewModelTests : IDisposable
         Assert.Equal("Waiting for Pillion Host.", vm.ModelPicker.Message);
 
         await connection.SetStateAsync(HostState.Ready);
-        await Wait.UntilAsync(() => vm.ModelPicker.Models.Count == 2, "models listed once ready");
+        await Wait.UntilAsync(() => vm.ModelPicker.Models.Count == 3, "Auto and the models listed once ready");
         Assert.Equal("Ready.", vm.StatusText);
 
         await connection.SetStateAsync(HostState.Failed, reason: "the host crashed 3 times in 5 minutes");
@@ -363,6 +363,157 @@ public sealed class ChatViewModelTests : IDisposable
         Assert.Equal("Pillion Host is restarting (2/3)...", ChatViewModel.FormatStatus(HostState.Restarting, 2, 3, null));
         Assert.Equal("Pillion Host is restarting...", ChatViewModel.FormatStatus(HostState.Restarting, 0, 3, null));
         Assert.Equal("Pillion Host failed.", ChatViewModel.FormatStatus(HostState.Failed, 0, 0, null));
+    }
+
+    [Fact]
+    public async Task ReplyHeader_NamesTheModelTheChunksReport_NotThePick()
+    {
+        using var vm = await StartAsync();
+        var script = _models.Next();
+        vm.InputText = "Hi";
+
+        var send = vm.SendAsync();
+        await script.Started.Task.WithTimeout(Timeout);
+        Assert.Equal("Qwen2.5 Coder 7B via Ollama, local", vm.Last().Header);
+
+        // The host fell back to another model: the header follows the chunks.
+        script.SendFrom("openrouter", "gpt-test", "From the cloud.");
+        await Wait.UntilAsync(() => vm.Last().Text.Length > 0, "the first chunk is shown");
+        Assert.Equal("GPT Test via OpenRouter, cloud", vm.Last().Header);
+        Assert.Equal("Reply from GPT Test via OpenRouter, cloud. Answering...", vm.Last().AutomationName);
+
+        script.SendFrom("openrouter", "gpt-test", string.Empty, isFinal: true);
+        await send.WithTimeout(Timeout);
+        Assert.Equal("GPT Test via OpenRouter, cloud", vm.Last().Header);
+        Assert.Equal(TestModels.Local.Id, vm.Last().ModelId); // Retry asks for the picked model again.
+    }
+
+    [Fact]
+    public async Task ReplyHeader_NamesAnUnlistedModelByItsIds()
+    {
+        using var vm = await StartAsync();
+        var script = _models.Next();
+        vm.InputText = "Hi";
+
+        var send = vm.SendAsync();
+        await script.Started.Task.WithTimeout(Timeout);
+        script.SendFrom("ollama", "gemma4:e2b", "pong", isFinal: true);
+        await send.WithTimeout(Timeout);
+
+        Assert.Equal("gemma4:e2b via Ollama, local", vm.Last().Header);
+    }
+
+    [Fact]
+    public async Task Auto_SendsNoModelId_AndTheHeaderNamesTheModelThatAnswered()
+    {
+        using var vm = await StartAsync();
+        var auto = vm.ModelPicker.Models[0];
+        Assert.True(auto.IsAuto);
+        Assert.Equal(ModelOption.AutoGroup, auto.Group);
+        Assert.True(auto.IsAvailable);
+        vm.ModelPicker.SelectedModel = auto;
+        var script = _models.Next();
+        vm.InputText = "Choose for me";
+
+        var send = vm.SendAsync();
+        var request = await script.Started.Task.WithTimeout(Timeout);
+        Assert.Null(request.ModelId);
+        Assert.Equal(Profile.Auto, request.Profile);
+        Assert.Equal("Auto (choosing a model)", vm.Last().Header);
+
+        script.SendFrom("ollama", "qwen2.5-coder:7b", "Done.", isFinal: true);
+        await send.WithTimeout(Timeout);
+        Assert.Equal("Qwen2.5 Coder 7B via Ollama, local", vm.Last().Header);
+        Assert.Equal(ModelOption.AutoId, vm.Last().ModelId);
+    }
+
+    [Fact]
+    public async Task Auto_IsKeptAcrossARefresh_AndUsedByRetry()
+    {
+        using var vm = await StartAsync();
+        vm.ModelPicker.SelectedModel = vm.ModelPicker.Models.Single(m => m.IsAuto);
+        await vm.RefreshModelsAsync().WithTimeout(Timeout);
+        Assert.True(vm.ModelPicker.SelectedModel?.IsAuto);
+
+        var failing = _models.Next();
+        vm.InputText = "Hi";
+        var send = vm.SendAsync();
+        await failing.Started.Task.WithTimeout(Timeout);
+        failing.Fail(new PillionRpcException(new PillionError { Code = PillionErrorCode.ProviderUnavailable, Message = "down" }));
+        await send.WithTimeout(Timeout);
+
+        var retry = _models.Next();
+        var retried = vm.RetryAsync(vm.Last());
+        var request = await retry.Started.Task.WithTimeout(Timeout);
+        Assert.Null(request.ModelId);
+        retry.Send("ok", isFinal: true);
+        await retried.WithTimeout(Timeout);
+    }
+
+    [Fact]
+    public async Task AnErrorOnTheFinalChunk_KeepsTheTextAndShowsTheErrorInline()
+    {
+        using var vm = await StartAsync();
+        var script = _models.Next();
+        vm.InputText = "Explain";
+
+        var send = vm.SendAsync();
+        await script.Started.Task.WithTimeout(Timeout);
+        script.SendFrom("ollama", "qwen2.5-coder:7b", "It starts by ");
+        script.SendFrom(
+            "ollama",
+            "qwen2.5-coder:7b",
+            "reading",
+            isFinal: true,
+            error: new PillionError { Code = PillionErrorCode.ProviderUnavailable, Message = "Ollama stopped responding.", RetryHint = "Check that Ollama is running." });
+        await send.WithTimeout(Timeout);
+
+        var reply = vm.Last();
+        Assert.Equal(ChatTurnState.Failed, reply.State);
+        Assert.Equal("It starts by reading", reply.Text);
+        Assert.Equal("Ollama stopped responding.", reply.ErrorMessage);
+        Assert.Equal("Check that Ollama is running.", reply.ErrorHint);
+        Assert.True(reply.CanRetry);
+        Assert.False(vm.IsSending);
+    }
+
+    [Fact]
+    public async Task StatusLine_ShowsConnectivity_AndAChangeListsTheModelsAgain()
+    {
+        using var vm = await StartAsync();
+        Assert.Null(vm.Connectivity);
+        Assert.Equal("Ready.", vm.StatusText);
+
+        await _connection.SetConnectivityAsync(ConnectivityState.Online);
+        await Wait.UntilAsync(() => vm.Connectivity == ConnectivityState.Online, "online shown");
+        Assert.Equal("Ready. Online.", vm.StatusText);
+        var listed = Volatile.Read(ref _models.ListCalls);
+
+        _settings.Values["privacy.localOnly"] = "true";
+        await _connection.SetConnectivityAsync(ConnectivityState.LocalOnly);
+        await Wait.UntilAsync(() => vm.StatusText == "Ready. Local-only: nothing leaves this machine.", "local-only shown");
+        await Wait.UntilAsync(() => Volatile.Read(ref _models.ListCalls) > listed, "the models are listed again");
+        await Wait.UntilAsync(
+            () => vm.ModelPicker.Models.SingleOrDefault(m => m.Id == TestModels.Cloud.Id)?.UnavailableReason == ChatModelPolicy.LocalOnlyReason,
+            "the cloud model is greyed out");
+
+        await _connection.SetConnectivityAsync(ConnectivityState.Offline);
+        await Wait.UntilAsync(() => vm.StatusText == "Ready. Offline: cloud providers cannot be reached; local models still work.", "offline shown");
+
+        await _connection.SetStateAsync(HostState.Restarting, attempt: 1);
+        await Wait.UntilAsync(() => vm.HostState == HostState.Restarting, "restarting");
+        Assert.Equal("Pillion Host is restarting (1/3)...", vm.StatusText); // No connectivity while the host is not usable.
+    }
+
+    [Fact]
+    public void FormatStatus_AddsConnectivityOnlyWhileTheHostIsUsable()
+    {
+        Assert.Equal("Ready. Online.", ChatViewModel.FormatStatus(HostState.Ready, 0, 0, null, ConnectivityState.Online));
+        Assert.Equal("Ready. Degraded: some cloud providers cannot be reached.", ChatViewModel.FormatStatus(HostState.Ready, 0, 0, null, ConnectivityState.Degraded));
+        Assert.Equal("Ready. Offline: cloud providers cannot be reached; local models still work.", ChatViewModel.FormatStatus(HostState.Ready, 0, 0, null, ConnectivityState.Offline));
+        Assert.Equal("Ready. Local-only: nothing leaves this machine.", ChatViewModel.FormatStatus(HostState.Ready, 0, 0, null, ConnectivityState.LocalOnly));
+        Assert.Equal("Ready.", ChatViewModel.FormatStatus(HostState.Ready, 0, 0, null, null));
+        Assert.Equal("Starting Pillion Host...", ChatViewModel.FormatStatus(HostState.Starting, 0, 0, null, ConnectivityState.Online));
     }
 
     private async Task<ChatViewModel> StartAsync()

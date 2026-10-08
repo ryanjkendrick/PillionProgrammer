@@ -7,7 +7,8 @@ using StreamJsonRpc;
 
 // Usage (the launch protocol): Pillion.FakeHost --pipe <name> --parent-pid <pid> --token-handle <handle> [--log-dir <dir>]
 // Serves IHostLifecycleService, IModelService (FakeModelService: two canned models, a streamed reply naming the model,
-// cancellation) and ISettingsService (FakeSettingsService: in-memory settings JSON).
+// cancellation) and ISettingsService (FakeSettingsService: in-memory settings JSON). After the handshake it sends
+// connectivityChanged (PILLION_FAKEHOST_CONNECTIVITY: Online by default, or Degraded, Offline, LocalOnly).
 // PILLION_FAKEHOST_MODE selects the behaviour:
 //   normal (default)  accept the handshake, report Ready, call the VSIX's services and print the results to stderr
 //   quiet             like normal, but without calling the VSIX's services

@@ -167,11 +167,16 @@ public sealed class RealProcessTests : IDisposable
         supervisor.Start();
         await supervisor.WhenReadyAsync(CancellationToken.None).WithTimeout(TimeSpan.FromSeconds(30));
 
+        // connectivityChanged reaches the supervisor (its handler is registered before the handshake).
+        await Wait.UntilAsync(() => supervisor.Connectivity == ConnectivityState.Online, "the host reports its connectivity", timeoutMs: 30000);
+
         using var chat = new ChatViewModel(supervisor, uiContext.Factory, new ChatViewModelOptions { Log = _log });
         chat.Start();
-        await Wait.UntilAsync(() => chat.ModelPicker.Models.Count == 2, "the fake host's models are listed", timeoutMs: 30000);
-        Assert.Equal(["fake-local-coder", "fake-cloud-chat"], chat.ModelPicker.Models.Select(m => m.Id));
+        await Wait.UntilAsync(() => chat.ModelPicker.Models.Count == 3, "Auto and the fake host's models are listed", timeoutMs: 30000);
+        Assert.Equal([ModelOption.AutoId, "ollama/fake-local-coder", "fake-cloud/fake-cloud-chat"], chat.ModelPicker.Models.Select(m => m.Id));
         Assert.Equal("Ollama (fake)", chat.ModelPicker.SelectedModel?.ProviderName);
+        Assert.Contains("Digest: sha256:fake0local0digest", chat.ModelPicker.SelectedModel?.ToolTip, StringComparison.Ordinal);
+        Assert.Equal("Ready. Online.", chat.StatusText);
 
         // A full streamed reply (IAsyncEnumerable over MessagePack) that names the model.
         chat.InputText = "Hello";
@@ -182,8 +187,24 @@ public sealed class RealProcessTests : IDisposable
         Assert.StartsWith("Hello from Fake Local Coder (model fake-local-coder", reply.Text, StringComparison.Ordinal);
         Assert.Contains(reply.Segments, s => s.IsCode && s.Language == "csharp" && s.Text.Contains("Console.WriteLine"));
 
+        // Auto sends no model id; the header names the model the host says answered.
+        chat.ModelPicker.SelectedModel = chat.ModelPicker.Models.Single(m => m.IsAuto);
+        chat.InputText = "Pick one for me";
+        await chat.SendAsync().WithTimeout(TimeSpan.FromSeconds(30));
+        Assert.Equal(ChatTurnState.Complete, chat.Turns.Last().State);
+        Assert.Equal("Fake Local Coder via Ollama (fake), local", chat.Turns.Last().Header);
+
+        // A stream that fails after some text keeps the text and shows the error inline.
+        chat.InputText = "/partial please";
+        await chat.SendAsync().WithTimeout(TimeSpan.FromSeconds(30));
+        var partial = chat.Turns.Last();
+        Assert.Equal(ChatTurnState.Failed, partial.State);
+        Assert.StartsWith("Hello from Fake", partial.Text, StringComparison.Ordinal);
+        Assert.Contains("dropped the connection part way", partial.ErrorMessage, StringComparison.Ordinal);
+        Assert.True(partial.CanRetry);
+
         // The cloud model, then Stop part-way through.
-        chat.ModelPicker.SelectedModel = chat.ModelPicker.Models.Single(m => !m.IsLocal);
+        chat.ModelPicker.SelectedModel = chat.ModelPicker.Models.Single(m => !m.IsLocal && !m.IsAuto);
         chat.InputText = "Tell me more";
         var send = chat.SendAsync();
         await Wait.UntilAsync(() => chat.Turns.Last().Text.Length > 0, "the cloud reply starts streaming", timeoutMs: 30000);
@@ -227,7 +248,7 @@ public sealed class RealProcessTests : IDisposable
 
         // Local-only now greys the cloud model out in the picker.
         await chat.RefreshModelsAsync();
-        Assert.Equal(ChatModelPolicy.LocalOnlyReason, chat.ModelPicker.Models.Single(m => !m.IsLocal).UnavailableReason);
+        Assert.Equal(ChatModelPolicy.LocalOnlyReason, chat.ModelPicker.Models.Single(m => !m.IsLocal && !m.IsAuto).UnavailableReason);
         Assert.DoesNotContain("sk-test-not-a-real-key", LogText);
 
         await supervisor.ShutdownAsync(TimeSpan.FromSeconds(2));

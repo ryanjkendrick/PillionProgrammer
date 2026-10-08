@@ -29,6 +29,12 @@ public interface IHostSession : IDisposable
     /// <summary>Raised on a background thread when the host sends <c>hostStateChanged</c>.</summary>
     event EventHandler<HostState>? HostStateChanged;
 
+    /// <summary>Gets the latest connectivity the host reported (<c>connectivityChanged</c>), or <see langword="null"/> before the first report.</summary>
+    ConnectivityState? LatestConnectivity { get; }
+
+    /// <summary>Raised on a background thread when the host sends <c>connectivityChanged</c>.</summary>
+    event EventHandler<ConnectivityState>? ConnectivityChanged;
+
     /// <summary>
     /// Gets a task that completes when the connection is lost or the process exits. Its result describes what
     /// happened (for example "host process exited with code 3").

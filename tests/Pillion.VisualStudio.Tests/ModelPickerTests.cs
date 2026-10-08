@@ -15,10 +15,12 @@ public sealed class ModelPickerTests : IDisposable
     private static readonly ModelDescriptor SecondLocal = new()
     {
         Id = "llama3.2:3b",
+        ModelId = "llama3.2:3b",
         DisplayName = "Llama 3.2 3B",
         ProviderId = "ollama",
         IsLocal = true,
         Capabilities = ModelCapabilities.Chat,
+        IsAvailable = true,
     };
 
     private readonly JoinableTaskContext _context = Task.Run(() => new JoinableTaskContext()).Result;
@@ -114,9 +116,9 @@ public sealed class ModelPickerTests : IDisposable
         using var vm = new ChatViewModel(connection, _context.Factory);
 
         vm.Start();
-        await Wait.UntilAsync(() => vm.ModelPicker.Models.Count == 2, "models listed");
+        await Wait.UntilAsync(() => vm.ModelPicker.Models.Count == 3, "Auto and the models listed");
 
-        var cloud = vm.ModelPicker.Models.Single(m => !m.IsLocal);
+        var cloud = vm.ModelPicker.Models.Single(m => !m.IsLocal && !m.IsAuto);
         Assert.Equal("OpenRouter", cloud.ProviderName);
         Assert.Equal(ChatModelPolicy.LocalOnlyReason, cloud.UnavailableReason);
         Assert.Equal("Ollama", vm.ModelPicker.SelectedModel?.ProviderName);
@@ -129,8 +131,77 @@ public sealed class ModelPickerTests : IDisposable
         using var vm = new ChatViewModel(connection, _context.Factory);
 
         vm.Start();
-        await Wait.UntilAsync(() => vm.ModelPicker.Models.Count == 2, "models listed");
+        await Wait.UntilAsync(() => vm.ModelPicker.Models.Count == 3, "Auto and the models listed");
 
         Assert.All(vm.ModelPicker.Models, m => Assert.True(m.IsAvailable));
+    }
+
+    [Fact]
+    public void Build_GreysOutModelsTheHostListsAsUnavailable_WithTheDigestInTheTooltip()
+    {
+        var missing = new ModelDescriptor
+        {
+            Id = "ollama/gemma4:e2b",
+            ModelId = "gemma4:e2b",
+            ProviderId = "ollama",
+            IsLocal = true,
+            Capabilities = ModelCapabilities.Chat,
+            IsAvailable = false,
+            Digest = "sha256:7fbdbf8f5e45",
+        };
+        var unreachable = new ModelDescriptor { Id = "openrouter/gpt-test", ModelId = "gpt-test", ProviderId = "openrouter", Capabilities = ModelCapabilities.Chat, IsAvailable = false };
+
+        var options = ModelOption.Build([missing, unreachable, TestModels.Local], ChatModelPolicy.Default);
+
+        var local = options.Single(o => o.Id == missing.Id);
+        Assert.False(local.IsAvailable);
+        Assert.Equal(ChatModelPolicy.LocalUnavailableReason, local.UnavailableReason);
+        Assert.Equal("gemma4:e2b", local.DisplayName); // No display name: the provider's model id.
+        Assert.Equal("gemma4:e2b", local.ModelId);
+        Assert.Equal("ollama/gemma4:e2b" + Environment.NewLine + "Digest: sha256:7fbdbf8f5e45" + Environment.NewLine + ChatModelPolicy.LocalUnavailableReason, local.ToolTip);
+        Assert.Equal(ChatModelPolicy.CloudUnavailableReason, options.Single(o => o.Id == unreachable.Id).UnavailableReason);
+        Assert.True(options.Single(o => o.Id == TestModels.Local.Id).IsAvailable);
+
+        // The settings' reasons are more precise, so they win over the host's flag.
+        var localOnly = ModelOption.Build([unreachable], new ChatModelPolicy(localOnly: true, cloudChat: true, providers: null)).Single();
+        Assert.Equal(ChatModelPolicy.LocalOnlyReason, localOnly.UnavailableReason);
+    }
+
+    [Fact]
+    public void Picker_PutsAutoFirst_AvailableWhenAnyModelIs()
+    {
+        var picker = new ModelPickerViewModel();
+
+        picker.SetModels(ModelOption.Build([TestModels.Cloud, TestModels.Local], ChatModelPolicy.Default));
+
+        var auto = picker.Models[0];
+        Assert.True(auto.IsAuto);
+        Assert.Equal(ModelOption.AutoId, auto.Id);
+        Assert.Equal(ModelOption.AutoGroup, auto.Group);
+        Assert.Equal("Auto (Pillion picks the model)", auto.DisplayText);
+        Assert.True(auto.IsAvailable);
+        Assert.Equal(TestModels.Local.Id, picker.SelectedModel?.Id); // The default pick is still the first local model.
+        Assert.Equal(3, picker.Models.Count);
+
+        picker.SelectedModel = auto;
+        picker.SetModels(ModelOption.Build([TestModels.Cloud, TestModels.Local], ChatModelPolicy.Default));
+        Assert.True(picker.SelectedModel?.IsAuto);
+        Assert.Equal(1, picker.Models.Count(m => m.IsAuto));
+
+        // Nothing usable: Auto is greyed out with a reason and nothing is picked.
+        picker.SetModels(ModelOption.Build([TestModels.Cloud], new ChatModelPolicy(true, true, null)));
+        Assert.False(picker.Models[0].IsAvailable);
+        Assert.Equal(ModelOption.AutoUnavailableReason, picker.Models[0].UnavailableReason);
+        Assert.Null(picker.SelectedModel);
+    }
+
+    [Fact]
+    public void ReplyHeaderFor_UsesTheListedEntry_OrTheIds()
+    {
+        var options = ModelOption.Build([TestModels.Local, TestModels.Cloud], new ChatModelPolicy(false, true, [new ProviderSummary("ollama", "Ollama", true)]));
+
+        Assert.Equal("Qwen2.5 Coder 7B via Ollama, local", ModelOption.ReplyHeaderFor(options, "ollama", "qwen2.5-coder:7b"));
+        Assert.Equal("gemma4:e2b via Ollama, local", ModelOption.ReplyHeaderFor(options, "ollama", "gemma4:e2b"));
+        Assert.Equal("m via elsewhere", ModelOption.ReplyHeaderFor(options, "elsewhere", "m"));
     }
 }

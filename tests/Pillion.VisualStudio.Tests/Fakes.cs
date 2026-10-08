@@ -123,11 +123,23 @@ internal sealed class FakeSession(int processId, HostState initialState) : IHost
     private readonly TaskCompletionSource<string> _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private volatile HostState _latest = initialState;
 
+    private ConnectivityState? _connectivity;
+
     public event EventHandler<HostState>? HostStateChanged;
+
+    public event EventHandler<ConnectivityState>? ConnectivityChanged;
 
     public int ProcessId { get; } = processId;
 
     public HostState LatestHostState => _latest;
+
+    public ConnectivityState? LatestConnectivity => _connectivity;
+
+    public void ReportConnectivity(ConnectivityState connectivity)
+    {
+        _connectivity = connectivity;
+        ConnectivityChanged?.Invoke(this, connectivity);
+    }
 
     public Task<string> Completion => _completion.Task;
 

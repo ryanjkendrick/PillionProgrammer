@@ -132,7 +132,7 @@
                       ItemsSource="{Binding Source={StaticResource GroupedModels}}"
                       SelectedItem="{Binding ModelPicker.SelectedModel, Mode=TwoWay}"
                       AutomationProperties.Name="Model"
-                      AutomationProperties.HelpText="Local models first, then cloud models. Unavailable models say why.">
+                      AutomationProperties.HelpText="Auto lets Pillion pick the model; then local models, then cloud models. Unavailable models say why.">
                 <ComboBox.GroupStyle>
                     <GroupStyle>
                         <GroupStyle.HeaderTemplate>

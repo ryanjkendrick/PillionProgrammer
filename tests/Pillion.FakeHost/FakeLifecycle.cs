@@ -61,6 +61,15 @@ internal sealed class FakeLifecycle(string expectedToken, string mode) : IHostLi
     private async Task AfterHandshakeAsync()
     {
         var rpc = Rpc!;
+
+        // Like Pillion Host, report connectivity once after the handshake, possibly before the client has the response.
+        // PILLION_FAKEHOST_CONNECTIVITY picks the state (Online by default).
+        var connectivity = Enum.TryParse<ConnectivityState>(Environment.GetEnvironmentVariable("PILLION_FAKEHOST_CONNECTIVITY"), ignoreCase: true, out var configured)
+            ? configured
+            : ConnectivityState.Online;
+        await rpc.NotifyAsync("connectivityChanged", connectivity).ConfigureAwait(false);
+        Console.Error.WriteLine("fakehost: connectivity " + connectivity);
+
         await Task.Delay(100).ConfigureAwait(false);
         _state = mode == "fail" ? HostState.Failed : HostState.Ready;
         await rpc.NotifyAsync("hostStateChanged", _state).ConfigureAwait(false);

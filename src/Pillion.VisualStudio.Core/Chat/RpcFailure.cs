@@ -74,9 +74,20 @@ public sealed class RpcFailure
         }
     }
 
-    private static RpcFailure FromError(PillionError error) => new(
-        string.IsNullOrWhiteSpace(error.Message) ? error.Code.ToString() : error.Message,
-        string.IsNullOrWhiteSpace(error.RetryHint) ? null : error.RetryHint,
-        error.Code,
-        hostLost: error.Code == PillionErrorCode.HostRestarting);
+    /// <summary>Describes an error the host sent, for example on the final chunk of a stream that failed part way.</summary>
+    /// <param name="error">The error.</param>
+    /// <returns>The description.</returns>
+    public static RpcFailure FromError(PillionError error)
+    {
+        if (error is null)
+        {
+            throw new ArgumentNullException(nameof(error));
+        }
+
+        return new(
+            string.IsNullOrWhiteSpace(error.Message) ? error.Code.ToString() : error.Message,
+            string.IsNullOrWhiteSpace(error.RetryHint) ? null : error.RetryHint,
+            error.Code,
+            hostLost: error.Code == PillionErrorCode.HostRestarting);
+    }
 }

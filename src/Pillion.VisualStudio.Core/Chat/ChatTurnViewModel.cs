@@ -42,10 +42,12 @@ public sealed class ChatTurnViewModel : ObservableObject
     private string? _errorHint;
     private bool _canRetry;
 
+    private string _header;
+
     private ChatTurnViewModel(ChatTurnRole role, string header, string? modelId, ChatTurnState state)
     {
         Role = role;
-        Header = header;
+        _header = header;
         ModelId = modelId;
         _state = state;
     }
@@ -56,10 +58,23 @@ public sealed class ChatTurnViewModel : ObservableObject
     /// <summary>Gets a value indicating whether the developer wrote the turn.</summary>
     public bool IsUser => Role == ChatTurnRole.User;
 
-    /// <summary>Gets the turn's header: "You", or the model and provider that answered.</summary>
-    public string Header { get; }
+    /// <summary>
+    /// Gets the turn's header: "You", or the model and provider that answered. For a reply it starts as the picked
+    /// model and changes to the model the host names in the streamed chunks.
+    /// </summary>
+    public string Header
+    {
+        get => _header;
+        private set
+        {
+            if (SetProperty(ref _header, value))
+            {
+                OnPropertyChanged(nameof(AutomationName));
+            }
+        }
+    }
 
-    /// <summary>Gets the id of the model that answered, for assistant turns.</summary>
+    /// <summary>Gets the picker id of the model the reply was requested from (Auto included), for Retry.</summary>
     public string? ModelId { get; }
 
     /// <summary>Gets the text so far.</summary>
@@ -185,6 +200,16 @@ public sealed class ChatTurnViewModel : ObservableObject
         }
 
         return new ChatTurnViewModel(ChatTurnRole.Assistant, model.ReplyHeader, model.Id, ChatTurnState.Streaming);
+    }
+
+    /// <summary>Names the model that is answering. Call on the UI thread.</summary>
+    /// <param name="header">The reply header, for example "gemma4:e2b via Ollama, local".</param>
+    internal void SetHeader(string header)
+    {
+        if (!string.IsNullOrWhiteSpace(header))
+        {
+            Header = header;
+        }
     }
 
     /// <summary>Appends streamed text. Call on the UI thread.</summary>

@@ -15,6 +15,15 @@ public sealed class ModelOption
     /// <summary>The group name of cloud models.</summary>
     public const string CloudGroup = "Cloud";
 
+    /// <summary>The group name of the Auto entry.</summary>
+    public const string AutoGroup = "Automatic";
+
+    /// <summary>The picker id of the Auto entry. It is never sent to the host: Auto sends no model id.</summary>
+    public const string AutoId = "(auto)";
+
+    /// <summary>The reason shown on the Auto entry when no model can be used.</summary>
+    public const string AutoUnavailableReason = "No model can be used right now; hover over a model to see why.";
+
     /// <summary>Initializes a new instance of the <see cref="ModelOption"/> class.</summary>
     /// <param name="descriptor">The model as the host described it.</param>
     /// <param name="providerName">The provider's display name.</param>
@@ -27,15 +36,37 @@ public sealed class ModelOption
         }
 
         Id = descriptor.Id ?? string.Empty;
-        DisplayName = string.IsNullOrWhiteSpace(descriptor.DisplayName) ? Id : descriptor.DisplayName;
+        ModelId = string.IsNullOrWhiteSpace(descriptor.ModelId) ? Id : descriptor.ModelId;
+        DisplayName = string.IsNullOrWhiteSpace(descriptor.DisplayName) ? ModelId : descriptor.DisplayName;
         ProviderId = descriptor.ProviderId ?? string.Empty;
         ProviderName = string.IsNullOrWhiteSpace(providerName) ? ProviderId : providerName!;
         IsLocal = descriptor.IsLocal;
+        Digest = string.IsNullOrWhiteSpace(descriptor.Digest) ? null : descriptor.Digest;
         UnavailableReason = unavailableReason;
     }
 
-    /// <summary>Gets the model id.</summary>
+    private ModelOption(string? unavailableReason)
+    {
+        Id = AutoId;
+        ModelId = string.Empty;
+        DisplayName = "Auto";
+        ProviderId = string.Empty;
+        ProviderName = string.Empty;
+        IsAuto = true;
+        UnavailableReason = unavailableReason;
+    }
+
+    /// <summary>Gets the picker's id for the model: <c>providerId/modelId</c> from the host, or <see cref="AutoId"/>.</summary>
     public string Id { get; }
+
+    /// <summary>Gets the provider's own id for the model (for example <c>gemma4:e2b</c>); empty for Auto.</summary>
+    public string ModelId { get; }
+
+    /// <summary>Gets a value indicating whether this is the Auto entry, which lets Pillion Host choose the model.</summary>
+    public bool IsAuto { get; }
+
+    /// <summary>Gets the model's content digest when the provider reports one, for the tooltip.</summary>
+    public string? Digest { get; }
 
     /// <summary>Gets the model's display name.</summary>
     public string DisplayName { get; }
@@ -49,8 +80,8 @@ public sealed class ModelOption
     /// <summary>Gets a value indicating whether the model runs on this machine.</summary>
     public bool IsLocal { get; }
 
-    /// <summary>Gets <see cref="LocalGroup"/> or <see cref="CloudGroup"/>.</summary>
-    public string Group => IsLocal ? LocalGroup : CloudGroup;
+    /// <summary>Gets <see cref="AutoGroup"/>, <see cref="LocalGroup"/> or <see cref="CloudGroup"/>.</summary>
+    public string Group => IsAuto ? AutoGroup : IsLocal ? LocalGroup : CloudGroup;
 
     /// <summary>Gets why the model cannot be used now, or <see langword="null"/> when it can.</summary>
     public string? UnavailableReason { get; }
@@ -59,21 +90,71 @@ public sealed class ModelOption
     public bool IsAvailable => UnavailableReason is null;
 
     /// <summary>Gets the text shown in the picker.</summary>
-    public string DisplayText => DisplayName + " (" + ProviderName + ")";
+    public string DisplayText => IsAuto ? "Auto (Pillion picks the model)" : DisplayName + " (" + ProviderName + ")";
 
-    /// <summary>Gets the reply header naming the model and provider, for example "llama3.2 via Ollama, local".</summary>
-    public string ReplyHeader => DisplayName + " via " + ProviderName + (IsLocal ? ", local" : ", cloud");
+    /// <summary>
+    /// Gets the reply header naming the model and provider, for example "llama3.2 via Ollama, local". For Auto it is
+    /// a placeholder until the first chunk names the model that answered.
+    /// </summary>
+    public string ReplyHeader => IsAuto ? "Auto (choosing a model)" : FormatReplyHeader(DisplayName, ProviderName, IsLocal);
 
     /// <summary>Gets the name a screen reader announces for the entry, including why it is unavailable.</summary>
     public string AutomationName => string.Format(
         CultureInfo.CurrentCulture,
-        "{0}, {1} model{2}",
+        "{0}, {1}{2}",
         DisplayText,
-        IsLocal ? "local" : "cloud",
+        IsAuto ? "Pillion Host chooses a model for each message" : IsLocal ? "local model" : "cloud model",
         IsAvailable ? string.Empty : ", unavailable: " + UnavailableReason);
 
-    /// <summary>Gets the tooltip: the model id, and the reason when unavailable.</summary>
-    public string ToolTip => IsAvailable ? Id : Id + Environment.NewLine + UnavailableReason;
+    /// <summary>Gets the tooltip: the model id and digest (or what Auto does), and the reason when unavailable.</summary>
+    public string ToolTip
+    {
+        get
+        {
+            var text = IsAuto
+                ? "Pillion Host picks a model for each message from the task, the Privacy settings and what is reachable. The reply names the model that answered."
+                : Id + (Digest is null ? string.Empty : Environment.NewLine + "Digest: " + Digest);
+            return IsAvailable ? text : text + Environment.NewLine + UnavailableReason;
+        }
+    }
+
+    /// <summary>Formats a reply header, for example "gemma4:e2b via Ollama, local".</summary>
+    /// <param name="model">The model's name.</param>
+    /// <param name="provider">The provider's name.</param>
+    /// <param name="isLocal">Whether the model is local, or <see langword="null"/> when not known.</param>
+    /// <returns>The header.</returns>
+    public static string FormatReplyHeader(string model, string provider, bool? isLocal) =>
+        model + (string.IsNullOrEmpty(provider) ? string.Empty : " via " + provider)
+        + (isLocal is null ? string.Empty : isLocal.Value ? ", local" : ", cloud");
+
+    /// <summary>Creates the Auto entry; it is available when any listed model is.</summary>
+    /// <param name="models">The entries from <see cref="Build"/>.</param>
+    /// <returns>The Auto entry.</returns>
+    public static ModelOption CreateAuto(IEnumerable<ModelOption>? models) =>
+        new((models ?? []).Any(m => m is { IsAuto: false, IsAvailable: true }) ? null : AutoUnavailableReason);
+
+    /// <summary>
+    /// Gets the reply header for the model a chunk names: the listed entry with that provider and model id when there
+    /// is one, otherwise the ids themselves.
+    /// </summary>
+    /// <param name="models">The picker's entries.</param>
+    /// <param name="providerId">The chunk's provider id.</param>
+    /// <param name="modelId">The chunk's model id.</param>
+    /// <returns>The header.</returns>
+    public static string ReplyHeaderFor(IEnumerable<ModelOption>? models, string? providerId, string modelId)
+    {
+        var entries = (models ?? []).Where(m => !m.IsAuto).ToList();
+        var match = entries.FirstOrDefault(m =>
+            string.Equals(m.ProviderId, providerId ?? string.Empty, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(m.ModelId, modelId, StringComparison.OrdinalIgnoreCase));
+        if (match is not null)
+        {
+            return match.ReplyHeader;
+        }
+
+        var provider = entries.FirstOrDefault(m => string.Equals(m.ProviderId, providerId ?? string.Empty, StringComparison.OrdinalIgnoreCase));
+        return FormatReplyHeader(modelId, provider?.ProviderName ?? providerId ?? string.Empty, provider?.IsLocal);
+    }
 
     /// <inheritdoc/>
     public override string ToString() => DisplayText;
@@ -102,7 +183,8 @@ public sealed class ModelOption
 
 /// <summary>
 /// What the host's settings say about the models in the picker: Local-only mode, the chat cloud switch, and the
-/// configured providers' names and enabled flags. (The model list itself has no availability field yet.)
+/// configured providers' names and enabled flags. These give a precise reason; a model the host itself lists as not
+/// available (<see cref="ModelDescriptor.IsAvailable"/>) is greyed out too.
 /// </summary>
 public sealed class ChatModelPolicy
 {
@@ -111,6 +193,12 @@ public sealed class ChatModelPolicy
 
     /// <summary>The reason shown when the chat cloud switch is off.</summary>
     public const string CloudChatOffReason = "Cloud chat is switched off (Tools > Options > Pillion Programmer > Privacy).";
+
+    /// <summary>The reason shown when Pillion Host lists a local model as not available.</summary>
+    public const string LocalUnavailableReason = "Not available right now: the model is not installed or its provider is not running.";
+
+    /// <summary>The reason shown when Pillion Host lists a cloud model as not available.</summary>
+    public const string CloudUnavailableReason = "Not available right now: its provider cannot be reached or is over its limits.";
 
     private readonly Dictionary<string, ProviderSummary> _providers = new(StringComparer.OrdinalIgnoreCase);
 
@@ -163,12 +251,25 @@ public sealed class ChatModelPolicy
             return "The provider " + ProviderName(model.ProviderId) + " is disabled (Tools > Options > Pillion Programmer > Providers and keys).";
         }
 
-        if (model.IsLocal)
+        if (!model.IsLocal)
         {
-            return null;
+            if (LocalOnly)
+            {
+                return LocalOnlyReason;
+            }
+
+            if (!CloudChat)
+            {
+                return CloudChatOffReason;
+            }
         }
 
-        return LocalOnly ? LocalOnlyReason : CloudChat ? null : CloudChatOffReason;
+        if (!model.IsAvailable)
+        {
+            return model.IsLocal ? LocalUnavailableReason : CloudUnavailableReason;
+        }
+
+        return null;
     }
 }
 

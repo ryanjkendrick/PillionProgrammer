@@ -6,8 +6,9 @@ using System.Linq;
 namespace Pillion.VisualStudio.Core;
 
 /// <summary>
-/// The chat window's model picker: the models the host listed, local first, with cloud models greyed out and a
-/// reason when the settings rule them out. The view groups <see cref="Models"/> by <see cref="ModelOption.Group"/>.
+/// The chat window's model picker: Auto first, then the models the host listed, local first, with models greyed out
+/// and a reason when the settings rule them out or the host lists them as not available. The view groups
+/// <see cref="Models"/> by <see cref="ModelOption.Group"/>.
 /// </summary>
 public sealed class ModelPickerViewModel : ObservableObject
 {
@@ -75,12 +76,16 @@ public sealed class ModelPickerViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Replaces the list. Keeps the picked model when it is still listed and available; otherwise picks the first
-    /// available local model, then the first available cloud model. Call on the UI thread.
+    /// Replaces the list, with the Auto entry first whenever the host lists any model. Keeps the picked entry when it
+    /// is still listed and available; otherwise picks the first available local model, then the first available cloud
+    /// model, then Auto. Call on the UI thread.
     /// </summary>
-    /// <param name="models">The new entries, already ordered by <see cref="ModelOption.Build"/>.</param>
-    internal void SetModels(IReadOnlyList<ModelOption> models)
+    /// <param name="listed">The new entries, already ordered by <see cref="ModelOption.Build"/>.</param>
+    internal void SetModels(IReadOnlyList<ModelOption> listed)
     {
+        IReadOnlyList<ModelOption> models = listed.Count > 0 && !listed.Any(m => m.IsAuto)
+            ? [ModelOption.CreateAuto(listed), .. listed]
+            : listed;
         var previousId = SelectedModel?.Id;
         Models.Clear();
         foreach (var model in models)
@@ -89,7 +94,8 @@ public sealed class ModelPickerViewModel : ObservableObject
         }
 
         var next = models.FirstOrDefault(m => m.IsAvailable && string.Equals(m.Id, previousId, StringComparison.Ordinal))
-            ?? models.FirstOrDefault(m => m.IsAvailable && m.IsLocal)
+            ?? models.FirstOrDefault(m => m.IsAvailable && !m.IsAuto && m.IsLocal)
+            ?? models.FirstOrDefault(m => m.IsAvailable && !m.IsAuto)
             ?? models.FirstOrDefault(m => m.IsAvailable);
 
         // Always raise: the old instance has left the list even when the id is the same.

@@ -59,6 +59,9 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
     private string _inputText = string.Empty;
     private bool _isSending;
     private HostState _hostState;
+    private ConnectivityState? _connectivity;
+    private int _connectivityVersion;
+    private (int RestartAttempt, int MaxRestartAttempts, string? Reason) _lastChange;
     private string _statusText;
     private bool _started;
     private bool _disposed;
@@ -76,7 +79,8 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         _flushInterval = options?.FlushInterval ?? TimeSpan.FromMilliseconds(50);
         _newRequestId = options?.NewRequestId ?? (() => Guid.NewGuid().ToString("N"));
         _hostState = connection.State;
-        _statusText = FormatStatus(_hostState, 0, 0, reason: null);
+        _connectivity = connection.Connectivity;
+        _statusText = FormatStatus(_hostState, 0, 0, reason: null, _connectivity);
 
         SendCommand = new DelegateCommand(() => Run(SendAsync), CanSend);
         StopCommand = new DelegateCommand(() => Run(StopAsync), () => IsSending);
@@ -136,6 +140,13 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>Gets the host's connectivity shown on the status line, or <see langword="null"/> when it has not reported one.</summary>
+    public ConnectivityState? Connectivity
+    {
+        get => _connectivity;
+        private set => SetProperty(ref _connectivity, value);
+    }
+
     /// <summary>Gets a value indicating whether the host can serve requests (Ready or Degraded).</summary>
     public bool IsHostUsable => IsUsable(HostState);
 
@@ -179,6 +190,8 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
 
         _started = true;
         _connection.StateChanged += OnHostStateChanged;
+        _connection.ConnectivityChanged += OnConnectivityChanged;
+        Connectivity = _connection.Connectivity;
         ApplyHostState(_connection.State, 0, 0, reason: null);
         if (IsHostUsable)
         {
@@ -325,6 +338,7 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
 
         _disposed = true;
         _connection.StateChanged -= OnHostStateChanged;
+        _connection.ConnectivityChanged -= OnConnectivityChanged;
         InFlight? flight;
         lock (_gate)
         {
@@ -356,6 +370,31 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         _ => state.ToString(),
     };
 
+    /// <summary>Formats the status line with the host's connectivity, which is shown while the host is usable.</summary>
+    /// <param name="state">The host state.</param>
+    /// <param name="restartAttempt">The restart attempt, or 0.</param>
+    /// <param name="maxRestartAttempts">The crash limit, or 0.</param>
+    /// <param name="reason">Why the host failed, when known.</param>
+    /// <param name="connectivity">The host's connectivity, or <see langword="null"/> when unknown.</param>
+    /// <returns>The text, for example "Ready. Offline: cloud providers cannot be reached; local models still work."</returns>
+    public static string FormatStatus(HostState state, int restartAttempt, int maxRestartAttempts, string? reason, ConnectivityState? connectivity)
+    {
+        var text = FormatStatus(state, restartAttempt, maxRestartAttempts, reason);
+        if (connectivity is not { } value || !IsUsable(state))
+        {
+            return text;
+        }
+
+        return text + " " + value switch
+        {
+            ConnectivityState.Online => "Online.",
+            ConnectivityState.Degraded => "Degraded: some cloud providers cannot be reached.",
+            ConnectivityState.Offline => "Offline: cloud providers cannot be reached; local models still work.",
+            ConnectivityState.LocalOnly => "Local-only: nothing leaves this machine.",
+            _ => HostStatusText.ConnectivityName(value) + ".",
+        };
+    }
+
     private static bool IsUsable(HostState state) => state is HostState.Ready or HostState.Degraded;
 
     private bool CanSend() =>
@@ -372,6 +411,7 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
     {
         var messages = BuildHistory();
         var requestId = _newRequestId();
+        var listed = ModelPicker.Models.ToList(); // On the UI thread: names the model a chunk reports.
         var reply = ChatTurnViewModel.ForAssistant(model);
         reply.RequestId = requestId;
         reply.RetryCommand = RetryCommand;
@@ -398,12 +438,13 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
             {
                 RequestId = requestId,
                 Messages = messages,
-                ModelId = model.Id,
+                ModelId = model.IsAuto ? null : model.Id, // Auto: no model id, so the host's router decides.
                 Profile = Profile.Auto,
             };
 
             var service = _connection.GetProxy<IModelService>();
             var sinceFlush = Stopwatch.StartNew();
+            string? answeredBy = null;
             await foreach (var chunk in service.ChatAsync(request, token).WithCancellation(token).ConfigureAwait(false))
             {
                 if (chunk is null || (!string.IsNullOrEmpty(chunk.RequestId) && !string.Equals(chunk.RequestId, requestId, StringComparison.Ordinal)))
@@ -416,13 +457,32 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
                     break; // Stopped, cleared or interrupted: later chunks are stale.
                 }
 
+                // The header names the model the host says answered (it can differ from the pick after a fallback).
+                if (!string.IsNullOrEmpty(chunk.ModelId))
+                {
+                    var identity = chunk.ProviderId + "/" + chunk.ModelId;
+                    if (!string.Equals(identity, answeredBy, StringComparison.Ordinal))
+                    {
+                        answeredBy = identity;
+                        flight.PendingHeader = ModelOption.ReplyHeaderFor(listed, chunk.ProviderId, chunk.ModelId);
+                    }
+                }
+
                 pending.Append(chunk.Text);
                 if (chunk.IsFinal)
                 {
+                    if (chunk.Error is { } error)
+                    {
+                        // The stream failed after some text: keep the text and show the error under it.
+                        failure = RpcFailure.FromError(error);
+                        outcome = failure.HostLost ? ChatTurnState.Interrupted : ChatTurnState.Failed;
+                        _log?.Warning("chat.reply.failed", "A chat reply failed part way.", ("request", requestId), ("code", error.Code.ToString()));
+                    }
+
                     break;
                 }
 
-                if (pending.Length > 0 && sinceFlush.Elapsed >= _flushInterval)
+                if ((pending.Length > 0 || flight.PendingHeader is not null) && sinceFlush.Elapsed >= _flushInterval)
                 {
                     await FlushAsync(flight, pending).ConfigureAwait(false);
                     sinceFlush.Restart();
@@ -459,7 +519,13 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
     {
         var text = pending.ToString();
         pending.Clear();
+        var header = flight.TakePendingHeader();
         await _joinableTaskFactory.SwitchToMainThreadAsync(_disposal.Token);
+        if (header is not null)
+        {
+            flight.Reply.SetHeader(header);
+        }
+
         flight.Reply.Append(text);
         await TaskScheduler.Default;
     }
@@ -474,6 +540,11 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         {
             flight.Dispose();
             return;
+        }
+
+        if (flight.TakePendingHeader() is { } header)
+        {
+            flight.Reply.SetHeader(header);
         }
 
         if (pending.Length > 0)
@@ -626,7 +697,39 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
     private void ApplyHostState(HostState state, int restartAttempt, int maxRestartAttempts, string? reason)
     {
         HostState = state;
-        StatusText = FormatStatus(state, restartAttempt, maxRestartAttempts, reason);
+        _lastChange = (restartAttempt, maxRestartAttempts, reason);
+        StatusText = FormatStatus(state, restartAttempt, maxRestartAttempts, reason, Connectivity);
+    }
+
+    /// <summary>Raised on a background thread. Updates the status line and lists the models again (availability follows connectivity).</summary>
+    private void OnConnectivityChanged(object? sender, HostConnectivityChangedEventArgs e)
+    {
+        var version = Interlocked.Increment(ref _connectivityVersion);
+        Run(async () =>
+        {
+            await _joinableTaskFactory.SwitchToMainThreadAsync(_disposal.Token);
+            if (version != Volatile.Read(ref _connectivityVersion) || _disposed)
+            {
+                return; // A newer change is on its way.
+            }
+
+            var current = _connection.Connectivity;
+            if (current == Connectivity)
+            {
+                return;
+            }
+
+            var previous = Connectivity;
+            Connectivity = current;
+            StatusText = FormatStatus(HostState, _lastChange.RestartAttempt, _lastChange.MaxRestartAttempts, _lastChange.Reason, current);
+
+            // The first report after a (re)connect arrives with the model list already loading; later changes can
+            // grey models out or bring them back.
+            if (IsHostUsable && previous is not null && current is not null)
+            {
+                await RefreshModelsAsync().ConfigureAwait(true);
+            }
+        });
     }
 
     private void UpdateRetry()
@@ -677,6 +780,7 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         private readonly object _gate = new();
         private readonly CancellationTokenSource _cancellation = new();
         private int _endState = -1;
+        private string? _pendingHeader;
         private bool _disposed;
 
         public InFlight(string requestId, ChatTurnViewModel reply)
@@ -692,6 +796,13 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
 
         public CancellationToken Token { get; }
 
+        /// <summary>Gets or sets a reply header not yet shown (set on the stream's thread, taken by the flush).</summary>
+        public string? PendingHeader
+        {
+            get => Volatile.Read(ref _pendingHeader);
+            set => Volatile.Write(ref _pendingHeader, value);
+        }
+
         public ChatTurnState? EndState
         {
             get
@@ -700,6 +811,8 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
                 return value < 0 ? null : (ChatTurnState)value;
             }
         }
+
+        public string? TakePendingHeader() => Interlocked.Exchange(ref _pendingHeader, null);
 
         /// <summary>Records how the reply ended; the first caller wins.</summary>
         public bool TryEnd(ChatTurnState state, bool cancel)

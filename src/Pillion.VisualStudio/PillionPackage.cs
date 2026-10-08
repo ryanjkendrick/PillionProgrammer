@@ -98,7 +98,8 @@ public sealed class PillionPackage : AsyncPackage
         }
 
         supervisor.StateChanged += OnHostStateChanged;
-        SetStatusBarText(HostStatusText.Format(supervisor.State, supervisor.RestartAttempt, supervisor.MaxRestartAttempts));
+        supervisor.ConnectivityChanged += OnConnectivityChanged;
+        SetStatusBarText(StatusBarText(supervisor));
 
         // Returns at once: launching, connecting and the handshake run on the thread pool.
         supervisor.Start();
@@ -141,6 +142,7 @@ public sealed class PillionPackage : AsyncPackage
         {
             _supervisor = null;
             supervisor.StateChanged -= OnHostStateChanged;
+            supervisor.ConnectivityChanged -= OnConnectivityChanged;
             try
             {
                 // Visual Studio is closing: give the host up to 2 s to exit, then kill its process tree.
@@ -208,19 +210,31 @@ public sealed class PillionPackage : AsyncPackage
                 + $"Use Tools > Pillion: Retry to start it again, or Tools > Pillion: Open Logs for details ({PillionLog.DefaultDirectory}).");
         }
 
-        var text = HostStatusText.Format(e);
-        _ = JoinableTaskFactory.RunAsync(async () =>
+        _ = JoinableTaskFactory.RunAsync(RefreshStatusBarAsync);
+    }
+
+    /// <summary>Raised on a background thread when the host reports a new connectivity state.</summary>
+    private void OnConnectivityChanged(object? sender, HostConnectivityChangedEventArgs e) =>
+        _ = JoinableTaskFactory.RunAsync(RefreshStatusBarAsync);
+
+    private static string StatusBarText(HostSupervisor supervisor) =>
+        HostStatusText.Format(supervisor.State, supervisor.RestartAttempt, supervisor.MaxRestartAttempts, supervisor.Connectivity);
+
+    /// <summary>Shows the supervisor's current state and connectivity, read on the UI thread so the latest change always wins.</summary>
+    private async Task RefreshStatusBarAsync()
+    {
+        try
         {
-            try
+            await JoinableTaskFactory.SwitchToMainThreadAsync(DisposalToken);
+            if (_supervisor is { } supervisor)
             {
-                await JoinableTaskFactory.SwitchToMainThreadAsync(DisposalToken);
-                SetStatusBarText(text);
+                SetStatusBarText(StatusBarText(supervisor));
             }
-            catch (OperationCanceledException)
-            {
-                // Visual Studio is shutting down.
-            }
-        });
+        }
+        catch (OperationCanceledException)
+        {
+            // Visual Studio is shutting down.
+        }
     }
 
     private void SetStatusBarText(string text)
@@ -242,7 +256,7 @@ public sealed class PillionPackage : AsyncPackage
         ThreadHelper.ThrowIfNotOnUIThread();
 
         var host = _supervisor is { } supervisor
-            ? HostStatusText.Format(supervisor.State, supervisor.RestartAttempt, supervisor.MaxRestartAttempts)
+            ? StatusBarText(supervisor)
                 + (supervisor.HostProcessId is { } pid ? $" (pid {pid})" : string.Empty)
                 + (supervisor.FailureReason is { } reason ? Environment.NewLine + reason : string.Empty)
             : "Pillion: not started";
