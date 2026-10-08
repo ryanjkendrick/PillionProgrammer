@@ -220,12 +220,16 @@ public sealed partial class OllamaProvider : IModelProvider
         await EnsureVersionAsync(cancellationToken).ConfigureAwait(false);
         using var tags = await _http.GetJsonAsync("api/tags", modelId: null, cancellationToken).ConfigureAwait(false);
         var entries = new List<(string Name, string Digest)>();
+
+        // /api/tags can list one name twice (an older and a newer digest under the same tag). The first entry is the one
+        // the tag currently points at, so it wins and the other is dropped; ":latest" and no tag are the same model.
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (tags.RootElement.TryGetProperty("models", out var models) && models.ValueKind == JsonValueKind.Array)
         {
             foreach (var model in models.EnumerateArray())
             {
                 var name = model.TryGetProperty("name", out var n) ? n.GetString() : model.TryGetProperty("model", out var m) ? m.GetString() : null;
-                if (!string.IsNullOrWhiteSpace(name))
+                if (!string.IsNullOrWhiteSpace(name) && seen.Add(ModelNameKey(name)))
                 {
                     entries.Add((name, model.TryGetProperty("digest", out var d) ? d.GetString() ?? string.Empty : string.Empty));
                 }
@@ -240,6 +244,12 @@ public sealed partial class OllamaProvider : IModelProvider
         }
 
         return result;
+    }
+
+    private static string ModelNameKey(string name)
+    {
+        var trimmed = name.Trim();
+        return trimmed.EndsWith(":latest", StringComparison.OrdinalIgnoreCase) ? trimmed[..^":latest".Length] : trimmed;
     }
 
     /// <inheritdoc/>
@@ -381,6 +391,9 @@ public sealed class OllamaProviderFactory : IModelProviderFactory
 
     /// <inheritdoc/>
     public ProviderKind Kind => ProviderKind.Ollama;
+
+    /// <inheritdoc/>
+    public string? FeatureFlag => FeatureNames.OllamaProvider;
 
     /// <inheritdoc/>
     public bool RequiresApiKey(ProviderSettings settings) => false;

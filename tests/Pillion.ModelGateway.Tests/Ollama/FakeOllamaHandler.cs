@@ -44,6 +44,8 @@ internal sealed class FakeOllamaHandler : HttpMessageHandler
 
     public void On(string route, Func<HttpRequestMessage, JsonObject?, HttpResponseMessage> respond) => _routes[route] = respond;
 
+    public Func<HttpRequestMessage, JsonObject?, HttpResponseMessage> RouteFor(string route) => _routes[route];
+
     public IEnumerable<JsonObject> BodiesFor(string path) => Requests.Where(r => r.Path == path).Select(r => r.Body!);
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)

@@ -93,6 +93,31 @@ public class OllamaProviderTests
     }
 
     [Fact]
+    public async Task ListModels_DeduplicatesByName_KeepingTheFirstEntryTheCurrentDigest()
+    {
+        // The duplicate fixture lists gemma4:e2b twice (current digest 7fbdbf... first, an older digest 0b1c2d... second)
+        // and llama3.2 both as llama3.2:latest and llama3.2.
+        var handler = FakeOllamaHandler.WithDefaults();
+        handler.Json("GET api/tags", FakeOllamaHandler.Fixture("tags-duplicates.json"));
+        var knownShow = handler.RouteFor("POST api/show");
+        handler.On("POST api/show", (request, body) => body?["model"]?.GetValue<string>() is "llama3.2:latest" or "llama3.2"
+            ? FakeOllamaHandler.Respond(HttpStatusCode.OK, FakeOllamaHandler.Fixture("show-qwen-coder.json"))
+            : knownShow(request, body));
+        using var provider = Create(handler);
+
+        var models = await provider.ListModelsAsync(CancellationToken.None);
+
+        Assert.Equal(["qwen3-embedding:0.6b", "gemma4:e2b", "qwen2.5-coder:1.5b", "llama3.2:latest"], models.Select(m => m.ModelId));
+        Assert.Single(models, m => m.ModelId == "gemma4:e2b");
+        Assert.Equal("sha256:7fbdbf8f5e45a75bb122155ed546e765b4d9c53a1285f62fd9f506baa1c5a47e", models.Single(m => m.ModelId == "gemma4:e2b").Digest);
+        Assert.StartsWith("sha256:a80c4f17", models.Single(m => m.ModelId == "llama3.2:latest").Digest, StringComparison.Ordinal);
+
+        // The dropped duplicates are not even inspected.
+        Assert.DoesNotContain(handler.BodiesFor("api/show"), b => b["name"]?.GetValue<string>() == "llama3.2");
+        Assert.Equal(4, handler.Requests.Count(r => r.Path == "api/show"));
+    }
+
+    [Fact]
     public async Task Chat_StreamsNdjson_WithNumCtxAndKeepAlivePerProfile()
     {
         var handler = FakeOllamaHandler.WithDefaults();
