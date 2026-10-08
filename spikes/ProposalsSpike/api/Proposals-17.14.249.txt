@@ -1,0 +1,163 @@
+# Microsoft.VisualStudio.Language, Version=17.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a
+
+## public class CompletionState
+  public ctor(String selectedItem, SnapshotSpan applicableToSpan, Boolean isSoftSelection, ImageElement icon)
+  public ctor(String selectedItem, SnapshotSpan applicableToSpan, Boolean isSoftSelection, ImageElement icon, Object underlyingCompletionItem)
+  public ctor(String selectedItem, SnapshotSpan applicableToSpan, Boolean isSoftSelection, ImageElement icon, Object underlyingCompletionItem, Boolean isBuilderSelected)
+  public Object UnderlyingCompletionItem { get; }
+  public Boolean IsSnippet { get; }
+  public Boolean IsSuggestion { get; }
+  public Boolean IsPreprocessorDirective { get; }
+  public CompletionState TranslateTo(ITextSnapshot snapshot)
+  public override String ToString()
+  field String SelectedItem
+  field SnapshotSpan ApplicableToSpan
+  field Boolean IsSoftSelection
+  field Boolean IsBuilderSelected
+  field ImageElement Icon
+
+## public struct Field
+  public ctor(Span span, Int32 id)
+  field Span Span
+  field Int32 Id
+
+## public interface ICompletionDefaultsSource
+    /// Provides a list of possible default selections for a completion session.
+  public abstract Task<ImmutableArray<String>> GetSessionDefaultsAsync(ITextView view)
+
+## public abstract class LazyProposalCollectionBase : ProposalCollectionBase
+    /// An extension of that allows additional proposals to be generated lazily.
+  protected ctor()
+  public abstract Task<IReadOnlyList<ProposalBase>> GenerateLazyProposalsAsync(CancellationToken cancel)
+
+## public class Proposal : ProposalBase
+    /// Convenience class that implements .
+  public ctor(String description, IReadOnlyList<ProposedEdit> edits, VirtualSnapshotPoint caret, CompletionState completionState=null, ProposalFlags flags=0, Func<Boolean> commitAction=null, String proposalId=null, String acceptText=null, String nextText=null, NormalizedSnapshotSpanCollection scope=null)
+  public ctor(String description, IReadOnlyList<ProposedEdit> edits, VirtualSnapshotPoint caret, CompletionState completionState, ProposalFlags flags, Func<Boolean> commitAction, String proposalId, String acceptText, String previewText, String nextText, NormalizedSnapshotSpanCollection scope)
+  public ctor(String description, IReadOnlyList<ProposedEdit> edits, VirtualSnapshotPoint caret, CompletionState completionState, ProposalFlags flags, Func<Boolean> commitAction, String proposalId, String acceptText, String previewText, String nextText, String undoDescription, NormalizedSnapshotSpanCollection scope)
+  public virtual String Description { get; }
+  public virtual IReadOnlyList<ProposedEdit> Edits { get; }
+  public virtual VirtualSnapshotPoint Caret { get; }
+  public virtual CompletionState CompletionState { get; }
+  public virtual ProposalFlags Flags { get; }
+  public virtual Func<Boolean> CommitAction { get; }
+  public virtual String ProposalId { get; }
+  public virtual String AcceptText { get; }
+  public virtual String PreviewText { get; }
+  public virtual String NextText { get; }
+  public virtual String UndoDescription { get; }
+  public virtual NormalizedSnapshotSpanCollection Scope { get; }
+  public static ProposalBase TryCreateProposal(String description, IReadOnlyList<ProposedEdit> edits, VirtualSnapshotPoint caret, CompletionState completionState=null, ProposalFlags flags=0, Func<Boolean> commitAction=null, String proposalId=null, String acceptText=null, String nextText=null, NormalizedSnapshotSpanCollection scope=null)
+  public static ProposalBase TryCreateProposal(String description, IReadOnlyList<ProposedEdit> edits, VirtualSnapshotPoint caret, CompletionState completionState, ProposalFlags flags, Func<Boolean> commitAction, String proposalId, String acceptText, String previewText, String nextText, NormalizedSnapshotSpanCollection scope)
+  public static ProposalBase TryCreateProposal(String description, IReadOnlyList<ProposedEdit> edits, VirtualSnapshotPoint caret, CompletionState completionState, ProposalFlags flags, Func<Boolean> commitAction, String proposalId, String acceptText, String previewText, String nextText, String undoDescription, NormalizedSnapshotSpanCollection scope)
+  public static Boolean ValidateEdits(IReadOnlyList<ProposedEdit> edits, VirtualSnapshotPoint caret, CompletionState completionState=null)
+  public override String ToString()
+
+## public abstract class ProposalBase
+    /// Class that defines a set of proposed edits to the buffer that will be made if the suggestion is accepted.
+  protected ctor()
+  public virtual String Description { get; }
+  public virtual String AcceptText { get; }
+  public virtual String PreviewText { get; }
+  public virtual String NextText { get; }
+  public virtual String UndoDescription { get; }
+  public abstract IReadOnlyList<ProposedEdit> Edits { get; }
+  public abstract VirtualSnapshotPoint Caret { get; }
+  public abstract CompletionState CompletionState { get; }
+  public abstract ProposalFlags Flags { get; }
+  public virtual Func<Boolean> CommitAction { get; }
+  public virtual NormalizedSnapshotSpanCollection Scope { get; }
+  public virtual String ProposalId { get; }
+
+## public abstract class ProposalBrokerBase
+    /// A broker that assembles the output from all of the s associated with a view. This is created via the MEF export that is implemented by Visual Studio.
+  protected ctor()
+  public abstract ITextView View { get; }
+  public abstract Boolean AnyProposalSources { get; }
+  public abstract Boolean ShouldGenerateProposal(VirtualSnapshotPoint caret, ProposalScenario scenario, Char triggeringCharacter=)
+  public abstract AsyncQueue<ProposalCollectionBase> RequestProposals(VirtualSnapshotPoint caret, CompletionState completionState, ProposalScenario scenario, Char triggeringCharacter, TimeSpan groupingDelay, CancellationToken cancel)
+
+## public abstract class ProposalBrokerProviderBase
+    /// A source for s for an
+  protected ctor()
+  public abstract ProposalBrokerBase GetProposalBroker(ITextView view)
+
+## public class ProposalCollection : ProposalCollectionBase
+    /// A convenience class that implements .
+  public ctor(String sourceName, IReadOnlyList<ProposalBase> initialProposals)
+  public virtual String SourceName { get; }
+  public virtual IReadOnlyList<ProposalBase> Proposals { get; }
+  public override String ToString()
+
+## public abstract class ProposalCollectionBase
+    /// An interface that defines a collection of s about what changes the user might want to make.
+  protected ctor()
+  public abstract String SourceName { get; }
+  public abstract IReadOnlyList<ProposalBase> Proposals { get; }
+
+## public enum ProposalFlags : IComparable, ISpanFormattable, IFormattable, IConvertible
+  None = 0
+  SingleTabToAccept = 1
+  QueueProposalRequestOnCommit = 2
+  ShowCommitHighlight = 4
+  SimulateBraceCompletion = 8
+  MoveCaretToEnd = 16
+  DisableInIntelliSense = 32
+  FormatAfterCommit = 64
+  TriggerIntelliSenseAfterCommit = 128
+  PreserveOnBufferChange = 256
+
+## public abstract class ProposalManagerBase : IAsyncDisposable
+    /// Class used to control whether or not the inline completions will attempt to generate a proposal after typing a character. Created via the MEF export.
+  protected ctor()
+  public abstract Boolean TryGetIsProposalPosition(VirtualSnapshotPoint caret, ProposalScenario scenario, Char triggerCharacter, Boolean& value)
+  public virtual Task DisposeAsync()
+
+## public abstract class ProposalManagerProviderBase
+    /// A source for s that control whether or not proposals are generated when the user types a character.
+  protected ctor()
+  public abstract Task<ProposalManagerBase> GetProposalManagerAsync(ITextView view, CancellationToken cancel)
+
+## public static class ProposalManagerProviders
+    /// Names of proposal managers implemented by Visual Studio (used for ordering, ).
+  field static String IntelliCodeCPlusPlusProposalManager = IntelliCodeCPlusPlusProposalManager
+  field static String IntelliCodeCSharpProposalManager = IntelliCodeCSharpProposalManager
+
+## public enum ProposalScenario : IComparable, ISpanFormattable, IFormattable, IConvertible
+    /// What triggered a request for a proposal?
+  Completion = 0
+  TypeChar = 1
+  Return = 2
+  CaretMove = 3
+  DivergedProposal = 4
+  CompletedProposal = 5
+  ExplicitInvocation = 6
+  Backspace = 7
+  CompletionAccepted = 8
+
+## public abstract class ProposalSourceBase : IAsyncDisposable
+    /// A source of proposals about the about the text that might follow the caret in the view. This is created by the MEF export and is an extension point that 3rd parties can provide.
+  protected ctor()
+  public abstract Task<ProposalCollectionBase> RequestProposalsAsync(VirtualSnapshotPoint caret, CompletionState completionState, ProposalScenario scenario, Char triggeringCharacter, CancellationToken cancel)
+  public virtual Task DisposeAsync()
+
+## public abstract class ProposalSourceProviderBase
+    /// A source for components that generate proposals in a view.
+  protected ctor()
+  public abstract Task<ProposalSourceBase> GetProposalSourceAsync(ITextView view, CancellationToken cancel)
+
+## public static class ProposalSourceProviders
+    /// Names of proposal sources implemented by Visual Studio (used for ordering, ).
+  field static String IntelliCodeCPlusPlusProposalSource = IntelliCodeCPlusPlusProposalSource
+  field static String IntelliCodeCSharpProposalSource = IntelliCodeCSharpProposalSource
+
+## public struct ProposedEdit
+  public ctor(SnapshotSpan span, String replacementText)
+  public ctor(SnapshotSpan span, String replacementText, IReadOnlyList<Field> fields)
+  public ctor(SnapshotSpan span, String replacementText, IReadOnlyList<Field> fields, Nullable<Int32> finalCaretPosition, Int32 finalCaretVirtualOffset)
+  public SnapshotSpan Span { get; }
+  public String ReplacementText { get; }
+  public IReadOnlyList<Field> Fields { get; }
+  public Nullable<Int32> FinalCaretPosition { get; }
+  public Int32 FinalCaretVirtualOffset { get; }
+  public override String ToString()
