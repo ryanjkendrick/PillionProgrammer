@@ -8,26 +8,6 @@
     <PackageReference Include="MessagePack" />
   </ItemGroup>
 
-  <!--
-    MessagePack 2.5.192 is pinned to match Visual Studio 17.14 (see Directory.Packages.props), but it has known
-    advisories, all fixed in 2.5.301. This test project only round-trips DTOs it builds itself, so the advisories
-    (untrusted-input DoS, LZ4, Typeless, ASP.NET Core formatter) do not apply here and are suppressed for this
-    project only. Pillion Host must not ship on 2.5.192: revisit the pin before the host deserialises pipe traffic.
-  -->
-  <ItemGroup>
-    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-hv8m-jj95-wg3x" />
-    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-vh6j-jc39-fggf" />
-    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-2f33-pr97-265q" />
-    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-2x83-8g95-xh59" />
-    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-cj9g-3mj2-g8vv" />
-    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-cxmj-83gh-fp49" />
-    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-q2h6-ghwm-5qm8" />
-    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-qhmf-xw27-6rqr" />
-    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-v72x-2h86-7f8m" />
-    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-w567-gjr2-hm5j" />
-    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-wfr3-xj75-pfwh" />
-  </ItemGroup>
-
   <ItemGroup>
     <ProjectReference Include="..\..\src\Pillion.Contracts\Pillion.Contracts.csproj" />
   </ItemGroup>

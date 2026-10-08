@@ -17,17 +17,19 @@
 
   <!--
     RPC stack.
-    StreamJsonRpc and MessagePack are pinned to exactly the versions that Microsoft.VisualStudio.SDK 17.14.40265
-    depends on. The VSIX runs inside devenv.exe, which ships (and binds to) its own copies of these assemblies;
-    compiling against newer versions would risk MissingMethodException or type-load failures at run time.
-    The host and tests use the same versions for now so both ends of the pipe speak the same wire format.
+    StreamJsonRpc is pinned to exactly the version that Microsoft.VisualStudio.SDK 17.14.40265 depends on. The VSIX
+    runs inside devenv.exe, which ships (and binds to) its own copies of these assemblies, so the VSIX never carries
+    its own copy (ExcludeAssets="runtime") and compiles against the SDK's transitive versions (MessagePack 2.5.192).
+    MessagePack is pinned here to the latest patched 2.5.x release: central versions only apply to direct references,
+    which are the host and the tests (the host deserialises pipe traffic in its own process), while the VSIX keeps the
+    transitive 2.5.192 from the SDK graph. Both are 2.5.x, so the wire format is identical. Decision 2026-10-08.
     Microsoft.Bcl.AsyncInterfaces and System.Threading.Tasks.Extensions are referenced by Pillion.Contracts
     (compiled into the VSIX), so they are also pinned to the versions in the same 17.14 dependency graph.
   -->
   <ItemGroup>
     <PackageVersion Include="StreamJsonRpc" Version="2.22.11" />
-    <PackageVersion Include="MessagePack" Version="2.5.192" />
-    <PackageVersion Include="MessagePack.Annotations" Version="2.5.192" />
+    <PackageVersion Include="MessagePack" Version="2.5.307" />
+    <PackageVersion Include="MessagePack.Annotations" Version="2.5.307" />
     <PackageVersion Include="Microsoft.Bcl.AsyncInterfaces" Version="9.0.0" />
     <PackageVersion Include="System.Threading.Tasks.Extensions" Version="4.6.0" />
   </ItemGroup>
