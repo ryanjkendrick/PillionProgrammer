@@ -1,0 +1,11 @@
+{
+  "object": "list",
+  "data": [
+    { "id": "gpt-6.1-sol", "object": "model", "created": 1767225600, "owned_by": "openai" },
+    { "id": "gpt-6-luna", "object": "model", "created": 1767225600, "owned_by": "openai" },
+    { "id": "text-embedding-3-small", "object": "model", "created": 1705948997, "owned_by": "system" },
+    { "id": "gpt-4o-mini-tts", "object": "model", "created": 1742403959, "owned_by": "system" },
+    { "id": "qwen2.5-coder-7b-instruct", "object": "model", "owned_by": "organization_owner", "context_length": 16384 },
+    { "id": "gpt-6.1-sol", "object": "model", "created": 1767225600, "owned_by": "openai" }
+  ]
+}

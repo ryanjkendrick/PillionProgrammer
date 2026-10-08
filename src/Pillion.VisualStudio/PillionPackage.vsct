@@ -9,17 +9,56 @@
       <Group guid="guidPillionCommandSet" id="PillionToolsMenuGroup" priority="0x0600">
         <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_TOOLS" />
       </Group>
+      <Group guid="guidPillionCommandSet" id="PillionViewOtherWindowsGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDG_VS_WNDO_OTRWNDWS1" />
+      </Group>
     </Groups>
 
     <Buttons>
+      <Button guid="guidPillionCommandSet" id="cmdidOpenChat" priority="0x0050" type="Button">
+        <Parent guid="guidPillionCommandSet" id="PillionToolsMenuGroup" />
+        <Strings>
+          <ButtonText>Pillion: Open Chat</ButtonText>
+        </Strings>
+      </Button>
+
+      <Button guid="guidPillionCommandSet" id="cmdidViewChat" priority="0x0100" type="Button">
+        <Parent guid="guidPillionCommandSet" id="PillionViewOtherWindowsGroup" />
+        <Strings>
+          <ButtonText>Pillion Chat</ButtonText>
+        </Strings>
+      </Button>
+
       <Button guid="guidPillionCommandSet" id="cmdidShowStatus" priority="0x0100" type="Button">
         <Parent guid="guidPillionCommandSet" id="PillionToolsMenuGroup" />
         <Strings>
           <ButtonText>Pillion: Show Status</ButtonText>
         </Strings>
       </Button>
+
+      <Button guid="guidPillionCommandSet" id="cmdidRetryHost" priority="0x0101" type="Button">
+        <Parent guid="guidPillionCommandSet" id="PillionToolsMenuGroup" />
+        <Strings>
+          <ButtonText>Pillion: Retry</ButtonText>
+        </Strings>
+      </Button>
+
+      <Button guid="guidPillionCommandSet" id="cmdidOpenLogs" priority="0x0102" type="Button">
+        <Parent guid="guidPillionCommandSet" id="PillionToolsMenuGroup" />
+        <Strings>
+          <ButtonText>Pillion: Open Logs</ButtonText>
+        </Strings>
+      </Button>
     </Buttons>
   </Commands>
+
+  <!--
+    Design doc section 5, "Commands and default shortcuts": Open Pillion Chat is the prefix chord, then C. The prefix is
+    provisional (Ctrl+Alt+Shift+P) until the shortcut audit confirms it.
+  -->
+  <KeyBindings>
+    <KeyBinding guid="guidPillionCommandSet" id="cmdidOpenChat" editor="guidVSStd97" key1="P" mod1="Control Alt Shift" key2="C" />
+  </KeyBindings>
 
   <Symbols>
     <!-- Must match PackageGuids and PackageIds in PackageIds.cs. -->
@@ -28,6 +67,11 @@
     <GuidSymbol name="guidPillionCommandSet" value="{444aebc2-1c36-43a9-ab09-2c2d4e04a11d}">
       <IDSymbol name="PillionToolsMenuGroup" value="0x1020" />
       <IDSymbol name="cmdidShowStatus" value="0x0100" />
+      <IDSymbol name="cmdidRetryHost" value="0x0101" />
+      <IDSymbol name="cmdidOpenLogs" value="0x0102" />
+      <IDSymbol name="cmdidOpenChat" value="0x0103" />
+      <IDSymbol name="cmdidViewChat" value="0x0104" />
+      <IDSymbol name="PillionViewOtherWindowsGroup" value="0x1021" />
     </GuidSymbol>
   </Symbols>
 

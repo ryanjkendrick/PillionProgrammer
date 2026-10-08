@@ -1,0 +1,4 @@
+{"model":"qwen2.5-coder:1.5b","created_at":"2026-10-08T14:30:01.1015443Z","response":"a","done":false}
+{"model":"qwen2.5-coder:1.5b","created_at":"2026-10-08T14:30:01.1302215Z","response":" +","done":false}
+{"model":"qwen2.5-coder:1.5b","created_at":"2026-10-08T14:30:01.1587703Z","response":" b","done":false}
+{"model":"qwen2.5-coder:1.5b","created_at":"2026-10-08T14:30:01.1871139Z","response":"","done":true,"done_reason":"stop","context":[151659,750,912],"total_duration":402113300,"load_duration":28441100,"prompt_eval_count":31,"prompt_eval_duration":120556000,"eval_count":4,"eval_duration":113005200}

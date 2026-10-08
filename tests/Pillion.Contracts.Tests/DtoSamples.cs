@@ -38,7 +38,17 @@ internal static class DtoSamples
             MaxTokens = 64,
             TaskClass = TaskClass.InlineEdit,
         },
-        new CompletionChunk { RequestId = "req-1", Text = "a + b", IsFinal = true },
+        new CompletionChunk
+        {
+            RequestId = "req-1",
+            Text = "a + b",
+            IsFinal = true,
+            ModelId = "qwen2.5-coder:7b",
+            ProviderId = "ollama",
+            PromptTokens = 120,
+            CompletionTokens = 3,
+            Error = new PillionError { Code = PillionErrorCode.ProviderUnavailable, Message = "The stream was cut off." },
+        },
         new ChatMessage { Role = ChatRole.Assistant, Content = "Hello." },
         new ChatRequest
         {
@@ -51,7 +61,17 @@ internal static class DtoSamples
             ModelId = "local/qwen-coder",
             Profile = Profile.LocalStrong,
         },
-        new ChatChunk { RequestId = "req-2", Text = "It adds.", IsFinal = true },
+        new ChatChunk
+        {
+            RequestId = "req-2",
+            Text = "It adds.",
+            IsFinal = true,
+            ModelId = "qwen2.5-coder:14b",
+            ProviderId = "ollama",
+            PromptTokens = 2048,
+            CompletionTokens = 40,
+            Error = new PillionError { Code = PillionErrorCode.Cancelled, Message = "Stopped." },
+        },
         new ModelDescriptor
         {
             Id = "local/qwen-coder",
@@ -59,6 +79,10 @@ internal static class DtoSamples
             ProviderId = "ollama",
             IsLocal = true,
             Capabilities = ModelCapabilities.Chat | ModelCapabilities.Fim | ModelCapabilities.Tools,
+            ModelId = "qwen-coder",
+            IsAvailable = true,
+            ContextWindow = 32768,
+            Digest = "sha256:7fbdbf8f5e45",
         },
         new SearchRequest { Query = "where is the pipe opened", MaxResults = 10 },
         new SearchResult { FilePath = @"C:\src\Pipe.cs", StartLine = 10, EndLine = 20, Snippet = "new NamedPipeServerStream(", Score = 0.875 },

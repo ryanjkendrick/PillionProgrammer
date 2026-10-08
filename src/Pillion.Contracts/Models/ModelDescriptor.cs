@@ -25,4 +25,20 @@ public sealed class ModelDescriptor
     /// <summary>Gets or sets what the model can do.</summary>
     [DataMember(Order = 4)]
     public ModelCapabilities Capabilities { get; set; }
+
+    /// <summary>Gets or sets the provider's own id for the model (for example <c>qwen2.5-coder:7b</c>); <see cref="Id"/> is unique across providers.</summary>
+    [DataMember(Order = 5)]
+    public string ModelId { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets a value indicating whether the model can be used now (policy allows it, its provider is reachable and it is installed).</summary>
+    [DataMember(Order = 6)]
+    public bool IsAvailable { get; set; }
+
+    /// <summary>Gets or sets the model's context window in tokens (0 when unknown).</summary>
+    [DataMember(Order = 7)]
+    public int ContextWindow { get; set; }
+
+    /// <summary>Gets or sets the model's content digest when the provider reports one (Ollama does), for the status bar.</summary>
+    [DataMember(Order = 8)]
+    public string? Digest { get; set; }
 }

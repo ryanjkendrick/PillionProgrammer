@@ -8,4 +8,9 @@
     <ProjectReference Include="..\..\src\Pillion.ModelGateway\Pillion.ModelGateway.csproj" />
   </ItemGroup>
 
+  <!-- Ollama responses (recorded from Ollama 0.40.1, plus hand-written ones in the same shape) for the adapter tests. -->
+  <ItemGroup>
+    <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

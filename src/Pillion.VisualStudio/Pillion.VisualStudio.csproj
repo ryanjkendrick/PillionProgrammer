@@ -13,6 +13,8 @@
     <TargetFramework>net48</TargetFramework>
     <RootNamespace>Pillion.VisualStudio</RootNamespace>
     <AssemblyName>Pillion.VisualStudio</AssemblyName>
+    <!-- The chat tool window and the Options pages are WPF (views only; their view models are in Pillion.VisualStudio.Core). -->
+    <UseWPF>true</UseWPF>
 
     <!-- VSIX packaging. -->
     <GeneratePkgDefFile>true</GeneratePkgDefFile>
@@ -34,6 +36,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Pillion.Contracts\Pillion.Contracts.csproj" />
+    <ProjectReference Include="..\Pillion.VisualStudio.Core\Pillion.VisualStudio.Core.csproj" />
+    <!-- Pillion.Host is deliberately not referenced: it is published self-contained and packaged as content under
+         Host\ by PillionHost.targets. -->
   </ItemGroup>
 
   <ItemGroup>
@@ -55,5 +60,6 @@
   <!-- MicrosoftVSSDKBuildToolsVersion is set by the package, so this imports the pinned package's targets (not ones
        installed with Visual Studio) and is skipped during the first restore, before package imports exist. -->
   <Import Project="$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets" Condition="'$(MicrosoftVSSDKBuildToolsVersion)' != '' and Exists('$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets')" />
+  <Import Project="PillionHost.targets" />
 
 </Project>

@@ -1,0 +1,8 @@
+{
+  "id": "chatcmpl-2",
+  "object": "chat.completion",
+  "created": 1767225600,
+  "model": "gpt-6.1-sol",
+  "choices": [ { "index": 0, "message": { "role": "assistant", "content": "A whole answer." }, "finish_reason": "length" } ],
+  "usage": { "prompt_tokens": 9, "completion_tokens": 3, "total_tokens": 12 }
+}

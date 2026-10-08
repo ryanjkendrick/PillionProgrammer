@@ -13,8 +13,12 @@ public static class ContractVersion
     /// <summary>The contract major version. Both sides must use the same major version.</summary>
     public const int Major = 1;
 
-    /// <summary>The contract minor version. Minor versions may differ between the two sides.</summary>
-    public const int Minor = 0;
+    /// <summary>
+    /// The contract minor version. Minor versions may differ between the two sides. 1.1 added the model, provider,
+    /// token and error fields on <see cref="ChatChunk"/> and <see cref="CompletionChunk"/>, the model id, availability,
+    /// context window and digest on <see cref="ModelDescriptor"/>, and <see cref="ConnectivityState"/> (see the README).
+    /// </summary>
+    public const int Minor = 1;
 
     /// <summary>Gets the contract version formatted as <c>major.minor</c>.</summary>
     public static string Text => Major.ToString(System.Globalization.CultureInfo.InvariantCulture)

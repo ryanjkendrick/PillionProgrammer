@@ -1,7 +1,9 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using Pillion.Host;
+using Pillion.Host.Lifecycle;
+using Pillion.Host.Logging;
+using Pillion.Host.Rpc;
 
 var commandLine = HostCommandLine.Parse(args);
 
@@ -24,18 +26,16 @@ var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
     ContentRootPath = AppContext.BaseDirectory,
 });
 
-builder.Logging.ClearProviders();
-builder.Logging.AddSimpleConsole(options =>
-{
-    options.SingleLine = true;
-    options.TimestampFormat = "HH:mm:ss.fff ";
-});
-
-builder.Services.AddSingleton(new PillionHostOptions(commandLine.PipeName!));
-builder.Services.AddHostedService<PillionHostService>();
+builder.AddPillionHost(
+    new PillionHostOptions(
+        commandLine.PipeName!,
+        commandLine.ParentProcessId,
+        commandLine.LogDirectory ?? RollingFileLoggerOptions.DefaultDirectory),
+    new AnonymousPipeLaunchTokenSource(commandLine.TokenHandle!));
 
 using var host = builder.Build();
+var shutdown = host.Services.GetRequiredService<HostShutdown>();
 
-// ConsoleLifetime (the default) stops the host on Ctrl+C or SIGTERM.
+// Stops on ShutdownAsync, parent exit, a start-up failure, Ctrl+C or SIGTERM. RunAsync disposes the host.
 await host.RunAsync().ConfigureAwait(false);
-return 0;
+return shutdown.ExitCode;

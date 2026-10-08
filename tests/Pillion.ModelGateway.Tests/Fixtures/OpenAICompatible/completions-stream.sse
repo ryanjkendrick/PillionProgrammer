@@ -1,0 +1,8 @@
+data: {"id":"cmpl-1","object":"text_completion","created":1767225600,"choices":[{"text":"a +","index":0,"finish_reason":null}]}
+
+data: {"id":"cmpl-1","object":"text_completion","created":1767225600,"choices":[{"text":" b","index":0,"finish_reason":null}]}
+
+data: {"id":"cmpl-1","object":"text_completion","created":1767225600,"choices":[{"text":"","index":0,"finish_reason":"stop"}]}
+
+data: [DONE]
+

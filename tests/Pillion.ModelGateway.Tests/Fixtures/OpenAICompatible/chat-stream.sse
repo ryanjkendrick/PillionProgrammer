@@ -1,0 +1,18 @@
+: keep-alive comment that must be ignored
+
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1767225600,"model":"gpt-6.1-sol-2026-01-01","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1767225600,"model":"gpt-6.1-sol-2026-01-01","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1767225600,"model":"gpt-6.1-sol-2026-01-01","choices":[{"index":0,"delta":{"content":" from"},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1767225600,"model":"gpt-6.1-sol-2026-01-01","choices":[{"index":0,"delta":{"content":" Pillion"},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1767225600,"model":"gpt-6.1-sol-2026-01-01","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":null}
+
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1767225600,"model":"gpt-6.1-sol-2026-01-01","choices":[],"usage":{"prompt_tokens":21,"completion_tokens":3,"total_tokens":24}}
+
+data: [DONE]
+
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":" AFTER DONE"},"finish_reason":null}]}
+

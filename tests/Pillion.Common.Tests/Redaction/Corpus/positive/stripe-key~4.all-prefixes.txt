@@ -1,0 +1,4 @@
+live: {{stripe-key:0}}
+test: {{stripe-key:1}}
+restricted: {{stripe-key:2}}
+publishable: {{stripe-key:3}}

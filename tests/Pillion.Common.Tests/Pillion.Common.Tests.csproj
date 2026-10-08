@@ -6,6 +6,14 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Pillion.Common\Pillion.Common.csproj" />
+    <ProjectReference Include="..\..\src\Pillion.Contracts\Pillion.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Redaction corpus: samples are read from disk at run time and must not be compiled or globbed as content. -->
+    <Compile Remove="Redaction\Corpus\**" />
+    <None Remove="Redaction\Corpus\**" />
+    <None Include="Redaction\Corpus\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

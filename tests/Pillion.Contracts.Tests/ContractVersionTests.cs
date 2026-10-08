@@ -2,14 +2,7 @@ namespace Pillion.Contracts.Tests;
 
 public class ContractVersionTests
 {
-    [Fact]
-    public void Version_IsOnePointZero()
-    {
-        Assert.Equal(1, ContractVersion.Major);
-        Assert.Equal(0, ContractVersion.Minor);
-        Assert.Equal("1.0", ContractVersion.Text);
-    }
-
+    // The current version (1.1) is asserted in ContractV11Tests.
     [Theory]
     [InlineData(1, 0)]
     [InlineData(1, 1)]
