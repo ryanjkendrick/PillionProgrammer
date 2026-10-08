@@ -2,12 +2,14 @@
 
   <!--
     The Visual Studio side of the process boundary that does not need the VS SDK: the Pillion Host supervisor
-    (launch, signature check, job object, restart policy), the StreamJsonRpc client, the IHostConnection service and
-    the VSIX logger. Kept separate from Pillion.VisualStudio so that it builds and tests with `dotnet build` /
-    `dotnet test` (the VSIX project needs Visual Studio's MSBuild).
+    (launch, signature check, job object, restart policy), the StreamJsonRpc client, the IHostConnection service,
+    the VSIX logger, the Credential Manager wrapper, and the view models of the chat window and Options pages (their
+    WPF views live in the VSIX). Kept separate from Pillion.VisualStudio so that it builds and tests with
+    `dotnet build` / `dotnet test` (the VSIX project needs Visual Studio's MSBuild).
 
-    Runs inside devenv.exe, which ships and binds its own StreamJsonRpc, MessagePack and Microsoft.VisualStudio.Threading,
-    so those are compile-time references only (ExcludeAssets="runtime") and do not flow to the VSIX (PrivateAssets="all").
+    Runs inside devenv.exe, which ships and binds its own StreamJsonRpc, MessagePack, Microsoft.VisualStudio.Threading
+    and Newtonsoft.Json, so those are compile-time references only (ExcludeAssets="runtime") and do not flow to the
+    VSIX (PrivateAssets="all").
     The VSIX compiles against the same versions through Microsoft.VisualStudio.SDK. Do not add a reference to the VS SDK here.
   -->
   <PropertyGroup>
@@ -19,6 +21,7 @@
   <ItemGroup>
     <PackageReference Include="StreamJsonRpc" ExcludeAssets="runtime" PrivateAssets="all" />
     <PackageReference Include="Microsoft.VisualStudio.Threading" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Newtonsoft.Json" ExcludeAssets="runtime" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
