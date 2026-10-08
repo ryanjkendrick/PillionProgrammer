@@ -66,7 +66,7 @@ outlived the instance.
 | Killing the host never hangs Visual Studio | **Pass** (scripted); manual check **Pending product owner** | Step f: longest gap between two answered UI Automation polls 269 ms (limit 2000 ms) over 3 kills of 58 polls each; slowest single poll 3 ms; 0 WM_NULL timeouts | After each kill, every 250 ms for 15 s: read the main window's Name, the chat status line and the status bar through UI Automation (served by Visual Studio's UI thread) and send WM_NULL with `SendMessageTimeout` (2 s); record the longest gap between answered polls |
 | The supervisor restarts the host with backoff | **Pass** | Kill 1: Restarting (1/3) at 211 ms, Starting at 1270 ms, Ready at 1798 ms; kill 2: Restarting (2/3) at 188 ms, Starting at 5176 ms, Ready at 5703 ms (the 1 s and 5 s backoffs); a chat reply "pong" after each; new host pid each time; `vsix-log-excerpt.txt` has the `supervisor.state` lines | Status line and status bar sequences from the same polls, times relative to the kill; supervisor transitions from the extension log |
 | Failed after three crashes in five minutes, with Open Logs; Retry recovers | **Pass** | Kill 3 (37.9 s after kill 1): status line "Pillion Host failed: Pillion Host stopped 3 times within 5 minutes, so it will not be restarted automatically. ..." at 198 ms, status bar "Pillion: Failed, see Tools > Pillion: Open Logs", Open Logs link shown in the chat window, no host process running; **Tools > Pillion: Retry** gave Ready in 888 ms and a reply "pong"; screenshot `screenshots/host-failed.png` | UI Automation: Hyperlink "Open Logs" present in the chat window, status bar text, `Pillion.Host.exe` children of the instance; Retry invoked through the real Tools menu |
-| Proposals API spike green on VS 2022 17.14 and VS 2026 18.x | **Fail** (18.10: viable; 17.14.41: not viable as installed) | `spikes/ProposalsSpike/FINDINGS.md` on `phase0/proposals-spike` (PR 2, commit `8c00bb4`), "Results on VS 2022 17.14.41": on Visual Studio 2022 17.14.41 with only the core editor workload, `%TEMP%\ProposalsSpike.log` stayed empty across all ten scenarios (the source provider is never created; Tab inserts indentation). 17.14 ships the Proposals contract (runtime API identical to the 17.14 SDK) but no proposal broker or inline-completions host; in 18.10 these are in the platform (`Microsoft.VisualStudio.Editor.Implementation.dll`). In 17.x they apparently come with IntelliCode, which is not installed here. See [Visual Studio 2022 17.14](#visual-studio-2022-1714) | The spike's ten scenarios driven in the 2022 Experimental Instance (DTE plus SendKeys), the spike log, screenshots, metadata scan of the 2022 and 2026 editor assemblies, and an API dump of the 17.14 runtime `Microsoft.VisualStudio.Language.dll` |
+| Proposals API spike green on VS 2022 17.14 and VS 2026 18.x | **Pass, on condition that IntelliCode is a 17.x requirement** (18.10: viable; 17.14.41: viable only with IntelliCode, whose automatic code completions must be on) | `spikes/ProposalsSpike/FINDINGS.md` on `phase0/proposals-spike` (PR 2, commit `9f6e62c`), "Results on VS 2022 17.14.41 with the managed desktop workload and IntelliCode". With the .NET desktop workload added (IntelliCode 2.2.3078.1097), the log shows `SpikeProposalSourceProvider created; SuggestionServiceBase=Microsoft.VisualStudio.IntelliCode.SuggestionService.Implementation.SuggestionService`. Multi-line, text right of the caret, replacement (diff preview), virtual space, after indentation, Tab (`AcceptedByCommand`) and Esc (`DismissedAfterUserEscape`) all pass; an IntelliSense-coupled proposal displays and is accepted (two Tabs). On 17.14 the broker is IntelliCode's, so with only the core editor workload (first run, commit `8c00bb4`) the provider is never created. Unchecking IntelliCode's *Automatically generate code completions in the Editor* also stops it. Differences from 18.10: padded virtual-space text is not stripped; Alt+. does not cycle; ghost text is grey, not classified. See [Visual Studio 2022 17.14](#visual-studio-2022-1714) | `tools/Run-Scenarios.ps1` as written against the 2022 `devenv.exe` (ten scenarios on a C# console project, DTE plus SendKeys), the spike log and screenshots, a session-local variant for the IntelliCode coexistence tests, the IntelliCode option toggled in the Exp instance, and a metadata scan of `Microsoft.VisualStudio.IntelliCode.dll` |
 | Secret scanner round trip: no placeholder reaches disk, originals restored in model output | **Pass** | `Pillion.Common.Tests` 741 passed, 0 failed, including the `Redaction` tests (round trip, session, edge cases, corpus, behaviour, performance); 616 passing tests whose names mention Redaction or SecretScanner across the TRX files; gateway redaction middleware tests in `Pillion.ModelGateway.Tests` (`GatewayTests`) | `dotnet test` in step b; TRX files in `tests/` |
 | Local-only mode routes nothing to a cloud provider and runs no probes | **Pass** (network on); with the adapter disabled **Pending product owner** | Step g: status "Ready. Local-only: nothing leaves this machine.", status bar "Pillion: Ready, Local-only"; the cloud entry "gpt-4o-mini (Gate 0 cloud placeholder), cloud model, unavailable: Local-only mode is on (Tools > Options > Pillion Programmer > Privacy)" disabled; Auto answered under "gemma4:e2b via Ollama, local"; 1 Outbound line, local; 0 probes in the 65 s Local-only window against 4 probe lines before it; host log `Connectivity Online -> LocalOnly: local-only mode turned on` then `LocalOnly -> Online` | `privacy.localOnly` set in `settings.json`, Refresh models, picker entries read through UI Automation, Outbound lines and Debug `Probed provider` lines read from the host log; held for one full probe cadence. The offline run (`Invoke-OfflineRun.ps1`) repeats it with the adapters disabled |
 | Every work item behind a feature flag | **Pass** (PR 15) | Six flags in the `features` section of `settings.json`, all default on: `chat`, `modelGateway`, `connectivityProbes`, `cloudProviders`, `ollamaProvider`, `openAICompatibleProvider`; a repository policy switches any of them off with `disabledFeatures`. `chat` off disables the Open Chat commands and the window says "Chat is disabled by settings or policy"; `modelGateway` off fails every model call with `PolicyDenied`; `cloudProviders` off hides every non-local provider; `connectivityProbes` off stops probing; the two provider flags skip their factories. The effective flags (policies applied) are readable as `effective.features`. Tests: `FeatureFlagTests` in Common (defaults, policy union, effective resolution, migration of a file without the section, monitor effects), ModelGateway (factories skipped, cloud hidden), Host (each flag through the composed host, the virtual key, the real settings store) and VisualStudio (`ChatAvailabilityTests`: command state and window follow the flag). Documented in the README ("Feature flags") | `dotnet test PillionProgrammer.NoVsix.slnf`; the flag list is `FeatureNames.All` in `Pillion.Common` |
@@ -127,10 +127,43 @@ project system, no IntelliCode and no GitHub Copilot (the title-bar badge offers
 Nothing was installed. Building does not need the workload, because the 2026 MSBuild builds and 2022's own
 `VSIXInstaller.exe` installs; but the missing IntelliCode matters for the Proposals spike (below).
 
-### Proposals API spike on 17.14: Fail
+Later the same day the product owner added the **.NET desktop development** workload. vswhere then lists
+`Microsoft.VisualStudio.Workload.ManagedDesktop` 17.14.36518.2, `Microsoft.VisualStudio.Component.IntelliCode`
+17.14.37709.7, `Microsoft.VisualStudio.IntelliCode` 2.2.3078.1097 and `Microsoft.VisualStudio.IntelliCode.CSharp`
+1.1.0.2437901. Copilot is still not installed. The extension results below are from before that change; the
+Proposals spike was rerun after it.
 
-Full write-up: `spikes/ProposalsSpike/FINDINGS.md`, "Results on VS 2022 17.14.41" (PR 2, commit `8c00bb4` on
-`phase0/proposals-spike`). Summary:
+### Proposals API spike on 17.14: Pass with IntelliCode (rerun), Fail without it
+
+**Rerun with IntelliCode.** Full write-up: `spikes/ProposalsSpike/FINDINGS.md`, "Results on VS 2022 17.14.41 with the
+managed desktop workload and IntelliCode" (PR 2, commit `9f6e62c` on `phase0/proposals-spike`). Summary:
+
+* The broker exists now. **IntelliCode provides it on 17.x**: `Microsoft.VisualStudio.IntelliCode.dll` 2.2.3078.1097
+  defines `ProposalBrokerProvider`, `SuggestionService`, `SuggestionManager` and `InlineCompletionsListener` (the same type
+  names 18.10 has in the platform), and no other 2022 assembly does. The spike's log reads
+  `SpikeProposalSourceProvider created; SuggestionServiceBase=Microsoft.VisualStudio.IntelliCode.SuggestionService.Implementation.SuggestionService`.
+* `tools/Run-Scenarios.ps1` ran as written against the 2022 `devenv.exe` on a C# console project (the managed project
+  system now loads it). Multi-line, text right of the caret (single and multi-line), replacement (diff preview), virtual
+  space, after indentation, Tab and Esc all pass with log evidence and screenshots. Differences from 18.10: padded text
+  in virtual space is not stripped (the indent doubles; unpadded text is correct on both), Alt+. does not cycle to a second
+  proposal, and ghost text is flat grey instead of italic and syntax-coloured.
+* Coexistence with IntelliCode: every proposal is reported under the provider name `IntelliCodeLineCompletions`.
+  IntelliCode's own source is `IntelliCodeCSharpProposalSource` (`[ContentType("CSharp")]`, no `[Order]`). When our source
+  returns nothing, IntelliCode's whole-line completions show. When ours returns a proposal, ours is shown and
+  IntelliCode's is not. But the broker keeps IntelliCode's earlier proposal queued: when ours diverges as the user types,
+  IntelliCode's takes over without our source being asked again. A provider without `[Order]` behaved the same in the two
+  tests.
+* An IntelliSense-coupled proposal (completion list open, `CompletionState` passed through) **is displayed** on 17.14.
+  The first Tab commits the item and the second accepts ours. That shape was not displayed on 18.10 and needs a retest there.
+* **IntelliCode's *Automatically generate code completions in the Editor* option switches Pillion's ghost text off as
+  well.** With it unchecked, the spike's manager and source were never called and nothing was displayed; re-checking it
+  restored everything immediately.
+* Verdict: **viable on 18.10; viable on 17.14 only with IntelliCode present and that option on.** The criterion row above
+  is therefore **Pass, on condition that IntelliCode is a 17.x requirement**. That is a **product requirement for the
+  product owner to decide** (see [What the product owner must do](#what-the-product-owner-must-do)).
+
+**First run, core editor only.** Full write-up: `spikes/ProposalsSpike/FINDINGS.md`, "Results on VS 2022 17.14.41"
+(commit `8c00bb4`). Summary:
 
 * The spike was built with the 2026 MSBuild against the 17.14 SDK and installed with 2022's
   `VSIXInstaller.exe /quiet /rootSuffix:Exp`. Its DLL is in the Exp instance's MEF catalog.
@@ -143,12 +176,10 @@ Full write-up: `spikes/ProposalsSpike/FINDINGS.md`, "Results on VS 2022 17.14.41
   17.14.305 has exactly the API of the 17.14.249 SDK package) but **no implementation** of the proposal broker, the
   suggestion service or the inline-completions host in the platform: no assembly under the 2022 `Common7\IDE` defines
   them or imports `ProposalSourceProviderBase`. In 18.10 they are in the platform
-  (`Microsoft.VisualStudio.Editor.Implementation.dll`). In 17.x they apparently come with IntelliCode (not verified:
-  the 17.14 IntelliCode package is not on this machine).
+  (`Microsoft.VisualStudio.Editor.Implementation.dll`). In 17.x they come with IntelliCode (confirmed by the rerun above).
 * Coexistence: no inline-completion provider exists on this install (no IntelliCode, no Copilot), so there was nothing
   to coexist with.
-* Verdict: **viable on 18.10, not viable on 17.14 as installed**; whether 17.14 with IntelliCode works is open. The
-  criterion row above is **Fail**.
+* Verdict at the time: **not viable on 17.14 with only the core editor workload**. This still holds for such installs.
 
 ### The extension on 17.14: Pass (one unexplained empty reply, not reproduced)
 
@@ -206,21 +237,23 @@ previous copy first), runs `/updateconfiguration`, and the live checks drive the
    model, sends the same prompt and records the header ("... via <provider>, cloud") and the Outbound line with its
    redaction count. The script only asks `cmdkey /list:PillionProgrammer/<id>` whether the key exists; it never reads
    it. Add a screenshot from the Chat window for the gate review.
-2. **Proposals spike on Visual Studio 2022 17.14.** It was rerun on 17.14.41 and failed: that install (core editor
-   workload only) has no proposal broker, so third-party proposals are never requested (see
-   [Visual Studio 2022 17.14](#visual-studio-2022-1714) and PR 2). To find out whether IntelliCode supplies the broker
-   on 17.x, add the **.NET desktop development** workload (or the IntelliCode component) to Visual Studio 2022 in the
-   Visual Studio Installer, then rerun the matrix in `spikes/ProposalsSpike/FINDINGS.md` (checklist steps 2 to 6;
-   `Run-Scenarios.ps1` works once the C# project system is installed). Then decide how ghost text should behave on
-   17.14: require IntelliCode, build the adornment fallback for 17.x, or offer ghost text on 18.x only.
+2. **Decide the IntelliCode requirement for ghost text on Visual Studio 2022.** The rerun with the .NET desktop
+   workload passed: on 17.x the proposal broker is IntelliCode's, so ghost text works only when IntelliCode is installed
+   and its *Automatically generate code completions in the Editor* option is on (see
+   [Visual Studio 2022 17.14](#visual-studio-2022-1714) and PR 2). Choose one: (a) state IntelliCode as a requirement for
+   ghost text on 2022, with a run-time check that reports "inline suggestions need IntelliCode's code completions on
+   Visual Studio 2022" in the status bar (a VSIX prerequisite would also block core-editor-only installs and 18.x, where
+   it is not needed); (b) build the adornment fallback for 17.x; or (c) offer ghost text on 18.x only. Then record the
+   decision, which settles whether the Proposals criterion is a Pass.
 3. **Offline run.** From an elevated PowerShell 7 prompt in the repository root:
    `pwsh tools/gate0/Invoke-OfflineRun.ps1 -IAmReady`. It lists the adapters it disables (on this machine `Ethernet`
    and `vEthernet (Default Switch)`), takes about five minutes and puts the network back in a `finally` block. Dry run
    first if you like: `pwsh tools/gate0/Invoke-OfflineRun.ps1 -IAmReady -WhatIf`. If the window is closed mid-run,
    re-enable the adapters with `Get-NetAdapter | Where-Object Status -eq Disabled | Enable-NetAdapter`.
-4. **Copilot ordering policy.** Decide whether Pillion's proposals go before or after GitHub Copilot's when both have
-   one (the spike shows `[Order(Before = "CompletionsProposalSourceProvider")]` wins every time), and whether that is a
-   setting.
+4. **Copilot and IntelliCode ordering policy.** Decide whether Pillion's proposals go before or after GitHub Copilot's
+   (18.x) and IntelliCode's (17.x) when both have one, and whether that is a setting. On 18.10,
+   `[Order(Before = "CompletionsProposalSourceProvider")]` won every time. On 17.14, ours was shown first, but
+   IntelliCode's queued proposal took over as soon as ours diverged, and a provider without `[Order]` behaved the same.
 5. **Manual host-kill check.** The criterion asks for a manual check beside the scripted one: in the Experimental
    Instance, kill `Pillion.Host.exe` in Task Manager while a reply is streaming and confirm the reply is marked
    Interrupted with Retry, typing stays responsive, and the status bar goes Restarting then Ready.
