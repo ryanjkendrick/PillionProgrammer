@@ -9,7 +9,7 @@ The design document is here:
 [Pillion Programmer design document](https://claude.ai/code/artifact/02f3ee51-8712-47d2-89af-3c7f6f1559fb).
 
 > Status: early scaffolding (phase 0). The extension supervises Pillion Host and has a Chat window and Options pages;
-> the model providers behind them are still being built.
+> chat works end to end with a local Ollama model. The OpenAI-compatible cloud adapter is still being built.
 
 ## Architecture in one paragraph
 
@@ -77,7 +77,10 @@ The extension launches Pillion Host when it loads and shows its state in the sta
 it under `Host\` in the VSIX; that step is skipped when no host source has changed since the last publish.
 
 **Tools > Pillion: Open Chat** (default shortcut Ctrl+Alt+Shift+P, then C; also **View > Other Windows > Pillion
-Chat**) opens the Chat window: pick a model, type a message, Enter sends and Shift+Enter starts a new line. **Tools >
+Chat**) opens the Chat window: pick a model (or **Auto**, which lets Pillion Host choose), type a message, Enter
+sends and Shift+Enter starts a new line. Each reply is headed with the model and provider that answered, and the
+status line shows the connectivity state (Online, Degraded, Offline or Local-only), as does the status bar
+("Pillion: Ready, Online"). **Tools >
 Options > Pillion Programmer** has the **Providers and keys** page (API keys go to the Windows Credential Manager under
 `PillionProgrammer/<provider id>`, never to settings files) and the **Privacy** page (Local-only mode and the cloud
 switch per task class). Both pages are a view over Pillion Host's `settings.json` and say "Host not ready" until the
@@ -89,6 +92,34 @@ To publish Pillion Host as a self-contained win-x64 app:
 ```
 dotnet publish src/Pillion.Host/Pillion.Host.csproj -p:PublishProfile=win-x64
 ```
+
+## How to run it today
+
+You need [Ollama](https://ollama.com) 0.6.4 or later running on this machine with at least one chat model pulled (for
+example `ollama pull gemma4:e2b`).
+
+1. **Build** the full solution from a Visual Studio 2026 Developer Command Prompt (see above):
+   `msbuild PillionProgrammer.sln /restore /p:Configuration=Release /m`. This also publishes Pillion Host into the VSIX.
+2. **Deploy to the Experimental Instance.** Either open `PillionProgrammer.sln` in Visual Studio, set
+   `Pillion.VisualStudio` as the startup project and press F5, or from the command line build the extension project
+   with deployment switched on and start the instance yourself:
+
+   ```
+   msbuild src\Pillion.VisualStudio\Pillion.VisualStudio.csproj /p:Configuration=Release /p:DeployExtension=true
+   devenv /rootsuffix Exp
+   ```
+
+   Open any solution or folder; the status bar shows "Pillion: Ready, Online" once Pillion Host is up.
+3. **Add a provider.** **Tools > Options > Pillion Programmer > Providers and keys** (in Visual Studio 2026 the
+   Options window shows a **Providers and keys** link under Pillion Programmer that opens the page): **Add**, then set the kind to
+   `ollama`, the endpoint to `http://localhost:11434` and the models to the model you pulled (for example
+   `gemma4:e2b`), and press **Save**. **Test connection** checks the Ollama version and lists what is installed.
+   The settings live in `%LOCALAPPDATA%\PillionProgrammer\settings.json`, shared by every Visual Studio instance.
+4. **Open Pillion Chat** with **Tools > Pillion: Open Chat** (Ctrl+Alt+Shift+P, then C). Press **Refresh** if the
+   picker was opened before the provider was saved, pick the model (or Auto), and send a message. The reply streams in
+   under a header such as "gemma4:e2b via Ollama, local".
+
+Logs for both processes are in `%LOCALAPPDATA%\PillionProgrammer\logs` (**Tools > Pillion: Open Logs**).
 
 ## Contributing
 
