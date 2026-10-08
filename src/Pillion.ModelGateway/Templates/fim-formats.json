@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "comment": "Fill-in-the-middle token formats per model family (design section 6, Prompt templates). Ollama applies a model's own FIM template when 'suffix' is passed, so for Ollama these are data only; raw llama.cpp servers will receive explicit tokens built from them. {prefix} and {suffix} are replaced by the text around the caret. 'match' patterns are matched in order against the model id, case-insensitively, '*' being a wildcard.",
+  "formats": [
+    {
+      "family": "qwen2.5-coder",
+      "match": "qwen2.5-coder*",
+      "template": "<|fim_prefix|>{prefix}<|fim_suffix|>{suffix}<|fim_middle|>",
+      "stop": [ "<|endoftext|>", "<|fim_prefix|>", "<|fim_suffix|>", "<|fim_middle|>", "<|fim_pad|>", "<|repo_name|>", "<|file_sep|>", "<|im_start|>", "<|im_end|>" ]
+    },
+    {
+      "family": "codellama",
+      "match": "codellama*",
+      "template": "<PRE> {prefix} <SUF>{suffix} <MID>",
+      "stop": [ "<EOT>", "<PRE>", "<SUF>", "<MID>" ]
+    },
+    {
+      "family": "starcoder2",
+      "match": "starcoder2*",
+      "template": "<fim_prefix>{prefix}<fim_suffix>{suffix}<fim_middle>",
+      "stop": [ "<|endoftext|>", "<fim_prefix>", "<fim_suffix>", "<fim_middle>", "<file_sep>" ]
+    },
+    {
+      "family": "deepseek-coder",
+      "match": "deepseek-coder*",
+      "template": "<｜fim▁begin｜>{prefix}<｜fim▁hole｜>{suffix}<｜fim▁end｜>",
+      "stop": [ "<｜fim▁begin｜>", "<｜fim▁hole｜>", "<｜fim▁end｜>", "<|EOT|>" ]
+    },
+    {
+      "family": "codestral",
+      "match": "codestral*",
+      "template": "[SUFFIX]{suffix}[PREFIX]{prefix}",
+      "stop": [ "[PREFIX]", "[SUFFIX]", "</s>" ]
+    }
+  ],
+  "defaults": {
+    "maxTokens": 128,
+    "temperature": 0.2,
+    "stop": [ "\n\n\n" ]
+  }
+}

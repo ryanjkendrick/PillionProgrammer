@@ -3,8 +3,10 @@ using Microsoft.Extensions.Hosting;
 using Pillion.Contracts;
 using Pillion.Host.Lifecycle;
 using Pillion.Host.Logging;
+using Pillion.Host.Models;
 using Pillion.Host.Rpc;
 using Pillion.Host.Settings;
+using Pillion.ModelGateway;
 
 namespace Pillion.Host;
 
@@ -56,7 +58,13 @@ internal static class PillionHostBuilderExtensions
         builder.Services.AddPillionSettingsRpc();
         builder.Services.AddRpcTarget<ISettingsService>(sp => sp.GetRequiredService<ISettingsService>());
 
-        // RPC targets for the model, context and agent services are registered here by later work items.
+        // Model Gateway (work items 0.7 and 0.8): providers, routing and the IModelService RPC target. It also
+        // replaces the settings' NoProviderTester with one that probes the named provider (Test connection).
+        builder.Services.AddPillionModelGateway();
+        builder.Services.AddSingleton<ModelRpcService>();
+        builder.Services.AddRpcTarget<IModelService>(sp => sp.GetRequiredService<ModelRpcService>());
+
+        // RPC targets for the context and agent services are registered here by later work items.
         return builder;
     }
 }
