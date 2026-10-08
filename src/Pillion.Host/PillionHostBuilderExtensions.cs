@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Pillion.Common.Connectivity;
+using Pillion.Common.Settings;
 using Pillion.Contracts;
 using Pillion.Host.Connectivity;
 using Pillion.Host.Lifecycle;
@@ -73,6 +74,12 @@ internal static class PillionHostBuilderExtensions
             new ConnectivityProviderReachability(sp.GetRequiredService<IConnectivityMonitor>()));
         builder.Services.TryAddSingleton<IProviderHealthSink>(sp =>
             new ConnectivityProviderHealthSink(sp.GetRequiredService<IConnectivityMonitor>()));
+
+        // Feature flags: the effective settings (user settings plus repository policies) say which features are on.
+        // The gateway RPC service and the connectivity monitor honour them; the VSIX reads them through the
+        // effective.features virtual key of ISettingsService.
+        builder.Services.TryAddSingleton<IFeatureFlags>(sp =>
+            new SettingsFeatureFlags(sp.GetRequiredService<IConnectivitySettingsProvider>()));
 
         // Model Gateway (work items 0.7 and 0.8): providers, routing and the IModelService RPC target. It also
         // replaces the settings' NoProviderTester with one that probes the named provider (Test connection).

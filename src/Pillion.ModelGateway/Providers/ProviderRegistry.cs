@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Pillion.Common.Connectivity;
 using Pillion.Common.Secrets;
 using Pillion.Common.Settings;
 using Pillion.Contracts;
@@ -58,7 +59,9 @@ public interface IProviderRegistry
 /// <summary>
 /// Builds providers from settings with the <see cref="IModelProviderFactory"/> registered for each kind. A provider
 /// whose kind has no factory is skipped with a warning; one that needs an API key and has none in the
-/// <see cref="ISecretStore"/> (the secret name is the provider id) is hidden from routing. Providers whose settings did
+/// <see cref="ISecretStore"/> (the secret name is the provider id) is hidden from routing. So is a provider that a
+/// feature flag switches off: every cloud provider with <see cref="FeatureNames.CloudProviders"/> off, and the providers
+/// of a factory whose <see cref="IModelProviderFactory.FeatureFlag"/> is off. Providers whose settings did
 /// not change are reused across rebuilds.
 /// </summary>
 public sealed partial class ProviderRegistry : IProviderRegistry, IDisposable
@@ -166,10 +169,22 @@ public sealed partial class ProviderRegistry : IProviderRegistry, IDisposable
                 continue;
             }
 
+            if (!effective.IsFeatureEnabled(FeatureNames.CloudProviders) && !ProviderClassifier.IsLocal(settings))
+            {
+                hidden.Add(new HiddenProvider(settings, "Cloud providers are turned off by settings or policy (feature cloudProviders)."));
+                continue;
+            }
+
             if (!_factories.TryGetValue(settings.Kind, out var factory))
             {
                 LogUnknownKind(_logger, settings.Id, ProviderKinds.ToName(settings.Kind));
                 hidden.Add(new HiddenProvider(settings, $"Provider kind '{ProviderKinds.ToName(settings.Kind)}' is not supported by this version of Pillion."));
+                continue;
+            }
+
+            if (factory.FeatureFlag is { } flag && !effective.IsFeatureEnabled(flag))
+            {
+                hidden.Add(new HiddenProvider(settings, $"{ProviderKinds.ToName(settings.Kind)} providers are turned off by settings or policy (feature {flag})."));
                 continue;
             }
 

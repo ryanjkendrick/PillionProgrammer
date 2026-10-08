@@ -294,6 +294,9 @@ public class OpenAICompatibleProviderFactory : IModelProviderFactory
     public virtual ProviderKind Kind => ProviderKind.OpenAiCompatible;
 
     /// <inheritdoc/>
+    public string? FeatureFlag => FeatureNames.OpenAICompatibleProvider;
+
+    /// <inheritdoc/>
     public bool RequiresApiKey(ProviderSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);

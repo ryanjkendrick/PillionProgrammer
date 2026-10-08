@@ -51,6 +51,12 @@ public interface IModelProviderFactory
     /// <summary>Gets the kind this factory creates.</summary>
     ProviderKind Kind { get; }
 
+    /// <summary>
+    /// Gets the feature flag (a name from <see cref="FeatureNames"/>) that switches this factory's providers on or off,
+    /// or <see langword="null"/> when no flag applies. While the flag is off the registry builds no provider with this factory.
+    /// </summary>
+    string? FeatureFlag => null;
+
     /// <summary>Determines whether a provider needs an API key in the secret store before it can be routed to.</summary>
     /// <param name="settings">The provider's settings.</param>
     /// <returns><see langword="true"/> when a key is required.</returns>

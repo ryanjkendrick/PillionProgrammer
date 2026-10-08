@@ -173,6 +173,8 @@ internal sealed class FakeProviderFactory(ProviderKind kind, bool requiresKey = 
 
     public ProviderKind Kind => kind;
 
+    public string? FeatureFlag { get; init; }
+
     public bool RequiresApiKey(ProviderSettings settings) => requiresKey;
 
     public IModelProvider Create(ProviderSettings settings, ProviderCreationContext context) =>
