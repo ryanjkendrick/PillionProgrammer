@@ -6,8 +6,11 @@ using Pillion.FakeHost;
 using StreamJsonRpc;
 
 // Usage (the launch protocol): Pillion.FakeHost --pipe <name> --parent-pid <pid> --token-handle <handle> [--log-dir <dir>]
+// Serves IHostLifecycleService, IModelService (FakeModelService: two canned models, a streamed reply naming the model,
+// cancellation) and ISettingsService (FakeSettingsService: in-memory settings JSON).
 // PILLION_FAKEHOST_MODE selects the behaviour:
 //   normal (default)  accept the handshake, report Ready, call the VSIX's services and print the results to stderr
+//   quiet             like normal, but without calling the VSIX's services
 //   reject            answer the handshake with Accepted = false
 //   exit              exit with code 3 right after reading the token, before opening the pipe
 //   fail              accept the handshake, then report HostState.Failed
@@ -74,6 +77,8 @@ if (await Task.WhenAny(connected, parentExited).ConfigureAwait(false) != connect
 var lifecycle = new FakeLifecycle(expectedToken, mode);
 using var rpc = new FakeHostJsonRpc(new LengthHeaderMessageHandler(server, server, new MessagePackFormatter()));
 rpc.AddLocalRpcTarget<IHostLifecycleService>(lifecycle, null);
+rpc.AddLocalRpcTarget<IModelService>(new FakeModelService(), null);
+rpc.AddLocalRpcTarget<ISettingsService>(new FakeSettingsService(), null);
 lifecycle.Rpc = rpc;
 rpc.StartListening();
 

@@ -1,0 +1,252 @@
+<UserControl x:Class="Pillion.VisualStudio.ToolWindows.ChatToolWindowControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:ClassModifier="internal"
+             xmlns:core="clr-namespace:Pillion.VisualStudio.Core;assembly=Pillion.VisualStudio.Core"
+             xmlns:vsshell="clr-namespace:Microsoft.VisualStudio.Shell;assembly=Microsoft.VisualStudio.Shell.15.0"
+             xmlns:platformui="clr-namespace:Microsoft.VisualStudio.PlatformUI;assembly=Microsoft.VisualStudio.Shell.15.0"
+             platformui:ThemedDialogStyleLoader.UseDefaultThemedDialogStyles="True"
+             Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
+             Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
+             FontFamily="{DynamicResource {x:Static vsshell:VsFonts.EnvironmentFontFamilyKey}}"
+             FontSize="{DynamicResource {x:Static vsshell:VsFonts.EnvironmentFontSizeKey}}"
+             AutomationProperties.Name="Pillion Chat">
+
+    <!--
+      Phase 0 rendering: plain text, with fenced code blocks in a monospace block. Every colour comes from a Visual Studio
+      theme key (VsBrushes / EnvironmentColors), so the window follows the light, dark, blue and high-contrast themes.
+      State is never shown by colour alone: errors, stops and interruptions all have text.
+    -->
+    <UserControl.Resources>
+        <CollectionViewSource x:Key="GroupedModels" Source="{Binding ModelPicker.Models}">
+            <CollectionViewSource.GroupDescriptions>
+                <PropertyGroupDescription PropertyName="Group" />
+            </CollectionViewSource.GroupDescriptions>
+        </CollectionViewSource>
+
+        <Style x:Key="SecondaryText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+
+        <!-- One segment of a message: selectable prose, or a code block in a bordered monospace box. -->
+        <DataTemplate x:Key="SegmentTemplate" DataType="{x:Type core:ChatSegment}">
+            <TextBox x:Name="Segment"
+                     Text="{Binding Text, Mode=OneWay}"
+                     IsReadOnly="True"
+                     IsTabStop="False"
+                     TextWrapping="Wrap"
+                     BorderThickness="0"
+                     Padding="0"
+                     Margin="0,2,0,2"
+                     Background="Transparent"
+                     Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
+                     AutomationProperties.Name="{Binding AutomationName}" />
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding IsCode}" Value="True">
+                    <Setter TargetName="Segment" Property="FontFamily" Value="Cascadia Mono, Consolas, Courier New" />
+                    <Setter TargetName="Segment" Property="TextWrapping" Value="NoWrap" />
+                    <Setter TargetName="Segment" Property="HorizontalScrollBarVisibility" Value="Auto" />
+                    <Setter TargetName="Segment" Property="IsTabStop" Value="True" />
+                    <Setter TargetName="Segment" Property="Padding" Value="6,4,6,4" />
+                    <Setter TargetName="Segment" Property="Margin" Value="0,4,0,4" />
+                    <Setter TargetName="Segment" Property="BorderThickness" Value="1" />
+                    <Setter TargetName="Segment" Property="BorderBrush" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBorderKey}}" />
+                    <Setter TargetName="Segment" Property="Background" Value="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}" />
+                    <Setter TargetName="Segment" Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <!-- One turn: header naming the author (or the model and provider that answered), the text, and its state. -->
+        <DataTemplate x:Key="TurnTemplate" DataType="{x:Type core:ChatTurnViewModel}">
+            <Border x:Name="Turn"
+                    Margin="0,0,0,10"
+                    Padding="8,6,8,6"
+                    BorderThickness="2,0,0,0"
+                    BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBorderKey}}"
+                    Focusable="True"
+                    KeyboardNavigation.IsTabStop="False"
+                    AutomationProperties.Name="{Binding AutomationName}">
+                <StackPanel>
+                    <TextBlock Text="{Binding Header}" FontWeight="SemiBold" Margin="0,0,0,2" />
+                    <ItemsControl ItemsSource="{Binding Segments}"
+                                  ItemTemplate="{StaticResource SegmentTemplate}"
+                                  Focusable="False" />
+                    <TextBlock x:Name="StateNote"
+                               Text="{Binding StateText}"
+                               Style="{StaticResource SecondaryText}"
+                               FontStyle="Italic"
+                               Visibility="Collapsed" />
+                    <StackPanel x:Name="ErrorPanel" Visibility="Collapsed" Margin="0,4,0,0">
+                        <TextBlock TextWrapping="Wrap" AutomationProperties.Name="{Binding ErrorMessage, StringFormat='Error: {0}'}">
+                            <Run Text="Error: " FontWeight="SemiBold" /><Run Text="{Binding ErrorMessage, Mode=OneWay}" />
+                        </TextBlock>
+                        <TextBlock x:Name="Hint" Text="{Binding ErrorHint}" Style="{StaticResource SecondaryText}" Visibility="Collapsed" />
+                    </StackPanel>
+                    <Button x:Name="RetryButton"
+                            Content="Retry"
+                            Command="{Binding RetryCommand}"
+                            CommandParameter="{Binding}"
+                            HorizontalAlignment="Left"
+                            MinWidth="70"
+                            Margin="0,6,0,0"
+                            Visibility="Collapsed"
+                            AutomationProperties.Name="Retry this reply" />
+                </StackPanel>
+            </Border>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding IsUser}" Value="True">
+                    <Setter TargetName="Turn" Property="BorderBrush" Value="{DynamicResource {x:Static platformui:EnvironmentColors.ToolWindowTabSelectedTabBrushKey}}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding HasStateText}" Value="True">
+                    <Setter TargetName="StateNote" Property="Visibility" Value="Visible" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding HasError}" Value="True">
+                    <Setter TargetName="ErrorPanel" Property="Visibility" Value="Visible" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding HasErrorHint}" Value="True">
+                    <Setter TargetName="Hint" Property="Visibility" Value="Visible" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding CanRetry}" Value="True">
+                    <Setter TargetName="RetryButton" Property="Visibility" Value="Visible" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <DockPanel Margin="6" LastChildFill="True">
+
+        <!-- Model picker and conversation commands. -->
+        <Grid DockPanel.Dock="Top" Margin="0,0,0,4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Label Grid.Column="0" Content="_Model:" Target="{Binding ElementName=ModelPicker}" VerticalAlignment="Center" Padding="0,0,6,0"
+                   Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+            <ComboBox x:Name="ModelPicker"
+                      Grid.Column="1"
+                      ItemsSource="{Binding Source={StaticResource GroupedModels}}"
+                      SelectedItem="{Binding ModelPicker.SelectedModel, Mode=TwoWay}"
+                      AutomationProperties.Name="Model"
+                      AutomationProperties.HelpText="Local models first, then cloud models. Unavailable models say why.">
+                <ComboBox.GroupStyle>
+                    <GroupStyle>
+                        <GroupStyle.HeaderTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" Margin="4,4,0,2" />
+                            </DataTemplate>
+                        </GroupStyle.HeaderTemplate>
+                    </GroupStyle>
+                </ComboBox.GroupStyle>
+                <ComboBox.ItemContainerStyle>
+                    <Style TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
+                        <Setter Property="IsEnabled" Value="{Binding IsAvailable}" />
+                        <Setter Property="ToolTip" Value="{Binding ToolTip}" />
+                        <Setter Property="ToolTipService.ShowOnDisabled" Value="True" />
+                        <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                    </Style>
+                </ComboBox.ItemContainerStyle>
+                <ComboBox.ItemTemplate>
+                    <DataTemplate DataType="{x:Type core:ModelOption}">
+                        <StackPanel>
+                            <TextBlock Text="{Binding DisplayText}" />
+                            <TextBlock x:Name="Reason" Text="{Binding UnavailableReason}" FontStyle="Italic" TextWrapping="Wrap" MaxWidth="420" Visibility="Collapsed" />
+                        </StackPanel>
+                        <DataTemplate.Triggers>
+                            <DataTrigger Binding="{Binding IsAvailable}" Value="False">
+                                <Setter TargetName="Reason" Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </DataTemplate.Triggers>
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+            <Button Grid.Column="2" Content="Refresh" Command="{Binding RefreshModelsCommand}" Margin="4,0,0,0" MinWidth="60"
+                    AutomationProperties.Name="Refresh models" ToolTip="List the models again and re-read the privacy settings" />
+            <Button Grid.Column="3" Content="Clear" Command="{Binding ClearCommand}" Margin="4,0,0,0" MinWidth="60"
+                    AutomationProperties.Name="Clear conversation" ToolTip="Clear the conversation" />
+        </Grid>
+
+        <TextBlock DockPanel.Dock="Top"
+                   x:Name="PickerMessage"
+                   Text="{Binding ModelPicker.Message}"
+                   Margin="0,0,0,4"
+                   AutomationProperties.LiveSetting="Polite">
+            <TextBlock.Style>
+                <Style TargetType="TextBlock" BasedOn="{StaticResource SecondaryText}">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding ModelPicker.HasMessage}" Value="False">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TextBlock.Style>
+        </TextBlock>
+
+        <!-- Status line: the host state, with Open Logs when it has failed. -->
+        <DockPanel DockPanel.Dock="Bottom" Margin="0,4,0,0">
+            <TextBlock DockPanel.Dock="Right" Margin="8,0,0,0">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsHostFailed}" Value="True">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+                <Hyperlink Command="{Binding OpenLogsCommand}"
+                           Foreground="{DynamicResource {x:Static platformui:EnvironmentColors.ControlLinkTextBrushKey}}"
+                           AutomationProperties.Name="Open Logs">
+                    <Run Text="Open Logs" />
+                </Hyperlink>
+            </TextBlock>
+            <TextBlock Text="{Binding StatusText}"
+                       Style="{StaticResource SecondaryText}"
+                       AutomationProperties.Name="{Binding StatusText, StringFormat='Pillion Host status: {0}'}"
+                       AutomationProperties.LiveSetting="Polite" />
+        </DockPanel>
+
+        <!-- Input: Enter sends, Shift+Enter inserts a new line. -->
+        <Grid DockPanel.Dock="Bottom" Margin="0,4,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="Input"
+                     Grid.Column="0"
+                     Text="{Binding InputText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                     AcceptsReturn="True"
+                     TextWrapping="Wrap"
+                     MinHeight="48"
+                     MaxHeight="160"
+                     VerticalScrollBarVisibility="Auto"
+                     SpellCheck.IsEnabled="False"
+                     PreviewKeyDown="OnInputPreviewKeyDown"
+                     AutomationProperties.Name="Message"
+                     AutomationProperties.HelpText="Type a message. Enter sends; Shift+Enter starts a new line." />
+            <StackPanel Grid.Column="1" Margin="4,0,0,0" VerticalAlignment="Bottom">
+                <Button Content="Send" Command="{Binding SendCommand}" MinWidth="70" Margin="0,0,0,4"
+                        AutomationProperties.Name="Send" ToolTip="Send (Enter)" />
+                <Button Content="Stop" Command="{Binding StopCommand}" MinWidth="70"
+                        AutomationProperties.Name="Stop" ToolTip="Stop the reply" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Transcript. -->
+        <ScrollViewer x:Name="TranscriptScroller"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
+                      ScrollChanged="OnTranscriptScrollChanged"
+                      Focusable="False">
+            <ItemsControl ItemsSource="{Binding Turns}"
+                          ItemTemplate="{StaticResource TurnTemplate}"
+                          Focusable="False"
+                          AutomationProperties.Name="Conversation" />
+        </ScrollViewer>
+    </DockPanel>
+</UserControl>

@@ -38,6 +38,11 @@
       them normally because they run outside Visual Studio.
     -->
     <PackageVersion Include="Microsoft.VisualStudio.Threading" Version="17.14.15" />
+    <!--
+      The version StreamJsonRpc 2.22.11 depends on in the same graph. Pillion.VisualStudio.Core uses it compile-only to
+      read and write the JSON that ISettingsService exchanges; devenv.exe supplies Newtonsoft.Json at run time.
+    -->
+    <PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 
   <!-- Host. The abstractions packages are pinned to the same version as the hosting package that depends on them. -->

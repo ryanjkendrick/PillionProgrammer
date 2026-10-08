@@ -10,6 +10,8 @@ using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Pillion.Contracts;
 using Pillion.VisualStudio.Core;
+using Pillion.VisualStudio.Options;
+using Pillion.VisualStudio.ToolWindows;
 using Task = System.Threading.Tasks.Task;
 
 namespace Pillion.VisualStudio;
@@ -17,17 +19,25 @@ namespace Pillion.VisualStudio;
 /// <summary>
 /// The Pillion Programmer package. Loads in the background when a solution or folder is opened, starts and supervises
 /// Pillion Host (one per devenv.exe), shows its state in the status bar, registers <see cref="IHostConnection"/> as a
-/// service, and adds the Tools menu commands "Pillion: Show Status", "Pillion: Retry" and "Pillion: Open Logs".
+/// service, and adds the Tools menu commands "Pillion: Open Chat", "Pillion: Show Status", "Pillion: Retry" and
+/// "Pillion: Open Logs". Provides the Pillion Chat tool window (also under View &gt; Other Windows) and the
+/// Tools &gt; Options &gt; Pillion Programmer pages "Providers and keys" and "Privacy".
 /// </summary>
 [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
 [ProvideMenuResource("Menus.ctmenu", 1)]
 [ProvideAutoLoad(VSConstants.UICONTEXT.SolutionExists_string, PackageAutoLoadFlags.BackgroundLoad)]
 [ProvideAutoLoad(VSConstants.UICONTEXT.FolderOpened_string, PackageAutoLoadFlags.BackgroundLoad)]
 [ProvideService(typeof(IHostConnection), IsAsyncQueryable = true)]
+[ProvideToolWindow(typeof(ChatToolWindow), Style = VsDockStyle.Tabbed, Window = SolutionExplorerWindow, Orientation = ToolWindowOrientation.Right)]
+[ProvideOptionPage(typeof(ProvidersOptionPage), ProductName, "Providers and keys", 0, 0, supportsAutomation: false)]
+[ProvideOptionPage(typeof(PrivacyOptionPage), ProductName, "Privacy", 0, 0, supportsAutomation: false)]
 [Guid(PackageGuids.PackageString)]
 public sealed class PillionPackage : AsyncPackage
 {
     private const string ProductName = "Pillion Programmer";
+
+    /// <summary>The Solution Explorer tool window GUID (EnvDTE.Constants.vsWindowKindSolutionExplorer): Pillion Chat docks beside it.</summary>
+    private const string SolutionExplorerWindow = "3ae79031-e1bc-11d0-8f78-00a0c9110057";
 
     /// <summary>How long the host gets to exit cleanly when Visual Studio closes.</summary>
     private static readonly TimeSpan HostShutdownTimeout = TimeSpan.FromSeconds(2);
@@ -40,6 +50,15 @@ public sealed class PillionPackage : AsyncPackage
     /// <summary>Gets the extension's version (the assembly informational version).</summary>
     internal static string ExtensionVersion { get; } = ReadVersion();
 
+    /// <summary>Gets the loaded package, once <see cref="InitializeAsync"/> has created the supervisor (for the Options pages).</summary>
+    internal static PillionPackage? Instance { get; private set; }
+
+    /// <summary>Gets the connection to Pillion Host, once initialization has created it.</summary>
+    internal IHostConnection? HostConnection => _supervisor;
+
+    /// <summary>Gets the extension log, once initialization has created it.</summary>
+    internal PillionLog? Log => _log;
+
     /// <inheritdoc/>
     protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
     {
@@ -51,6 +70,7 @@ public sealed class PillionPackage : AsyncPackage
         var supervisor = CreateSupervisor(log);
         _supervisor = supervisor;
         AddService(typeof(IHostConnection), (container, token, type) => Task.FromResult<object?>(supervisor), promote: true);
+        Instance = this;
 
         // The COM output window, status bar and command service must be used on the UI thread.
         await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
@@ -73,6 +93,8 @@ public sealed class PillionPackage : AsyncPackage
             commandService.AddCommand(new MenuCommand(OnShowStatus, new CommandID(PackageGuids.CommandSet, PackageIds.ShowStatusCommand)));
             commandService.AddCommand(new MenuCommand(OnRetryHost, new CommandID(PackageGuids.CommandSet, PackageIds.RetryHostCommand)));
             commandService.AddCommand(new MenuCommand(OnOpenLogs, new CommandID(PackageGuids.CommandSet, PackageIds.OpenLogsCommand)));
+            commandService.AddCommand(new MenuCommand(OnOpenChat, new CommandID(PackageGuids.CommandSet, PackageIds.OpenChatCommand)));
+            commandService.AddCommand(new MenuCommand(OnOpenChat, new CommandID(PackageGuids.CommandSet, PackageIds.ViewChatCommand)));
         }
 
         supervisor.StateChanged += OnHostStateChanged;
@@ -83,8 +105,38 @@ public sealed class PillionPackage : AsyncPackage
     }
 
     /// <inheritdoc/>
+    /// <remarks>Only Pillion Chat is created asynchronously; the base implementation returns <see langword="null"/> too.</remarks>
+    public override IVsAsyncToolWindowFactory? GetAsyncToolWindowFactory(Guid toolWindowType) =>
+        toolWindowType == typeof(ChatToolWindow).GUID ? this : null;
+
+    /// <inheritdoc/>
+    protected override string? GetToolWindowTitle(Type toolWindowType, int id) =>
+        toolWindowType == typeof(ChatToolWindow) ? ChatToolWindow.Title : base.GetToolWindowTitle(toolWindowType, id);
+
+    /// <inheritdoc/>
+    protected override System.Threading.Tasks.Task<object> InitializeToolWindowAsync(Type toolWindowType, int id, CancellationToken cancellationToken)
+    {
+        if (toolWindowType != typeof(ChatToolWindow))
+        {
+            return base.InitializeToolWindowAsync(toolWindowType, id, cancellationToken);
+        }
+
+        // Runs after InitializeAsync, so the supervisor exists. The view model starts on the UI thread, in the window.
+        var viewModel = new ChatViewModel(
+            _supervisor!,
+            JoinableTaskFactory,
+            new ChatViewModelOptions { OpenLogs = OpenLogFolder, Log = _log });
+        return System.Threading.Tasks.Task.FromResult<object>(new ChatToolWindowState(viewModel));
+    }
+
+    /// <inheritdoc/>
     protected override void Dispose(bool disposing)
     {
+        if (disposing && ReferenceEquals(Instance, this))
+        {
+            Instance = null;
+        }
+
         if (disposing && _supervisor is { } supervisor)
         {
             _supervisor = null;
@@ -227,9 +279,31 @@ public sealed class PillionPackage : AsyncPackage
         });
     }
 
-    private void OnOpenLogs(object sender, EventArgs e)
+    private void OnOpenChat(object sender, EventArgs e)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
+        _ = JoinableTaskFactory.RunAsync(async () =>
+        {
+            try
+            {
+                var window = await ShowToolWindowAsync(typeof(ChatToolWindow), 0, create: true, DisposalToken).ConfigureAwait(true);
+                if (window?.Frame is null)
+                {
+                    _log?.Error("package.open_chat.failed", "Could not create the Pillion Chat window.");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Visual Studio is shutting down.
+            }
+        });
+    }
+
+    private void OnOpenLogs(object sender, EventArgs e) => OpenLogFolder();
+
+    /// <summary>Opens the log folder in File Explorer (Tools &gt; Pillion: Open Logs, and the chat window's status line).</summary>
+    private void OpenLogFolder()
+    {
         var directory = PillionLog.DefaultDirectory;
         try
         {

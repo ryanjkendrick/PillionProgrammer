@@ -4,8 +4,8 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Pillion.VisualStudio.Core;
 
-/// <summary>Win32 declarations for process launch, job objects and pipe verification.</summary>
-internal static class NativeMethods
+/// <summary>Win32 declarations for process launch, job objects and pipe verification (credentials are in Secrets).</summary>
+internal static partial class NativeMethods
 {
     public const int ERROR_ACCESS_DENIED = 5;
 

@@ -8,7 +8,8 @@ Studio 2026.
 The design document is here:
 [Pillion Programmer design document](https://claude.ai/code/artifact/02f3ee51-8712-47d2-89af-3c7f6f1559fb).
 
-> Status: early scaffolding (phase 0). The extension loads and shows its version; no AI features yet.
+> Status: early scaffolding (phase 0). The extension supervises Pillion Host and has a Chat window and Options pages;
+> the model providers behind them are still being built.
 
 ## Architecture in one paragraph
 
@@ -74,6 +75,14 @@ The extension launches Pillion Host when it loads and shows its state in the sta
 **Tools > Pillion: Open Logs** opens `%LOCALAPPDATA%\PillionProgrammer\logs`, where the extension writes
 `vsix-YYYYMMDD.log`. Building the VSIX publishes the host self-contained (win-x64) with `dotnet publish` and packages
 it under `Host\` in the VSIX; that step is skipped when no host source has changed since the last publish.
+
+**Tools > Pillion: Open Chat** (default shortcut Ctrl+Alt+Shift+P, then C; also **View > Other Windows > Pillion
+Chat**) opens the Chat window: pick a model, type a message, Enter sends and Shift+Enter starts a new line. **Tools >
+Options > Pillion Programmer** has the **Providers and keys** page (API keys go to the Windows Credential Manager under
+`PillionProgrammer/<provider id>`, never to settings files) and the **Privacy** page (Local-only mode and the cloud
+switch per task class). Both pages are a view over Pillion Host's `settings.json` and say "Host not ready" until the
+host is running. `tests/Pillion.FakeHost` serves canned models and in-memory settings, so it can stand in for
+`Host\Pillion.Host.exe` in the experimental instance when you want to try the UI without a model.
 
 To publish Pillion Host as a self-contained win-x64 app:
 

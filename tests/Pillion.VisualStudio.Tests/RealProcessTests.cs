@@ -20,6 +20,7 @@ namespace Pillion.VisualStudio.Tests;
 public sealed class RealProcessTests : IDisposable
 {
     private const string ModeVariable = "PILLION_FAKEHOST_MODE";
+    private const string ChunkDelayVariable = "PILLION_FAKEHOST_CHUNK_DELAY_MS";
 
     private readonly JoinableTaskContext _context = new();
     private readonly string _logDirectory = Path.Combine(Path.GetTempPath(), "pillion-vsix-tests-" + Guid.NewGuid().ToString("N"));
@@ -29,17 +30,19 @@ public sealed class RealProcessTests : IDisposable
     {
         _log = new PillionLog(_logDirectory);
         Environment.SetEnvironmentVariable(ModeVariable, null);
+        Environment.SetEnvironmentVariable(ChunkDelayVariable, null);
     }
 
     private static string FakeHostPath => typeof(RealProcessTests).Assembly
         .GetCustomAttributes<AssemblyMetadataAttribute>()
         .Single(a => a.Key == "FakeHostPath").Value!;
 
-    private string LogText => File.Exists(_log.CurrentFilePath) ? File.ReadAllText(_log.CurrentFilePath!) : string.Empty;
+    private string LogText => ReadShared(_log.CurrentFilePath);
 
     public void Dispose()
     {
         Environment.SetEnvironmentVariable(ModeVariable, null);
+        Environment.SetEnvironmentVariable(ChunkDelayVariable, null);
         _context.Dispose();
         try
         {
@@ -152,6 +155,105 @@ public sealed class RealProcessTests : IDisposable
         job.Dispose();
 
         Assert.True(await process.WaitForExitAsync(TimeSpan.FromSeconds(10)), "closing the job killed the process");
+    }
+
+    [Fact]
+    public async Task ChatAndOptions_WorkOverTheRealWireAgainstTheFakeHost()
+    {
+        Environment.SetEnvironmentVariable(ModeVariable, "quiet");
+        Environment.SetEnvironmentVariable(ChunkDelayVariable, "40");
+        using var uiContext = await Task.Run(() => new JoinableTaskContext());
+        using var supervisor = CreateSupervisor(new RestartPolicy());
+        supervisor.Start();
+        await supervisor.WhenReadyAsync(CancellationToken.None).WithTimeout(TimeSpan.FromSeconds(30));
+
+        using var chat = new ChatViewModel(supervisor, uiContext.Factory, new ChatViewModelOptions { Log = _log });
+        chat.Start();
+        await Wait.UntilAsync(() => chat.ModelPicker.Models.Count == 2, "the fake host's models are listed", timeoutMs: 30000);
+        Assert.Equal(["fake-local-coder", "fake-cloud-chat"], chat.ModelPicker.Models.Select(m => m.Id));
+        Assert.Equal("Ollama (fake)", chat.ModelPicker.SelectedModel?.ProviderName);
+
+        // A full streamed reply (IAsyncEnumerable over MessagePack) that names the model.
+        chat.InputText = "Hello";
+        await chat.SendAsync().WithTimeout(TimeSpan.FromSeconds(30));
+        var reply = chat.Turns.Last();
+        Assert.Equal(ChatTurnState.Complete, reply.State);
+        Assert.Equal("Fake Local Coder via Ollama (fake), local", reply.Header);
+        Assert.StartsWith("Hello from Fake Local Coder (model fake-local-coder", reply.Text, StringComparison.Ordinal);
+        Assert.Contains(reply.Segments, s => s.IsCode && s.Language == "csharp" && s.Text.Contains("Console.WriteLine"));
+
+        // The cloud model, then Stop part-way through.
+        chat.ModelPicker.SelectedModel = chat.ModelPicker.Models.Single(m => !m.IsLocal);
+        chat.InputText = "Tell me more";
+        var send = chat.SendAsync();
+        await Wait.UntilAsync(() => chat.Turns.Last().Text.Length > 0, "the cloud reply starts streaming", timeoutMs: 30000);
+        Assert.Equal("Fake Cloud Chat via Fake Cloud, cloud", chat.Turns.Last().Header);
+        await chat.StopAsync();
+        await send.WithTimeout(TimeSpan.FromSeconds(30));
+        var stopped = chat.Turns.Last();
+        Assert.Equal(ChatTurnState.Stopped, stopped.State);
+        Assert.DoesNotContain("That is the end of the reply", stopped.Text);
+        await Wait.UntilAsync(() => LogText.Contains("fakehost: cancel " + stopped.RequestId), "the host was asked to cancel");
+
+        // A typed host error crosses the wire and is shown inline with its retry hint.
+        chat.InputText = "/error please";
+        await chat.SendAsync().WithTimeout(TimeSpan.FromSeconds(30));
+        var failed = chat.Turns.Last();
+        Assert.Equal(ChatTurnState.Failed, failed.State);
+        Assert.Equal("The fake provider for Fake Cloud Chat is unreachable.", failed.ErrorMessage);
+        Assert.StartsWith("Check the provider", failed.ErrorHint, StringComparison.Ordinal);
+        Assert.True(failed.CanRetry);
+
+        // The Options pages over the same connection.
+        var credentials = new InMemoryCredentialStore();
+        using var providers = new ProvidersOptionsViewModel(supervisor, uiContext.Factory, credentials, _log);
+        await providers.LoadAsync();
+        Assert.Equal(OptionsLoadState.Loaded, providers.LoadState);
+        Assert.Equal(["ollama", "fake-cloud"], providers.Providers.Select(p => p.Id));
+        providers.Add();
+        providers.SelectedProvider!.Id = "work-gateway";
+        providers.SelectedProvider.ApiKey = "sk-test-not-a-real-key";
+        await providers.SaveAsync();
+        Assert.Equal("Saved.", providers.StatusMessage);
+        Assert.Equal("sk-test-not-a-real-key", credentials.Keys["work-gateway"]);
+        await providers.TestSelectedAsync();
+        Assert.Equal("Connection succeeded. The fake host reached provider 'work-gateway'.", providers.SelectedProvider.TestResult);
+
+        using var privacy = new PrivacyOptionsViewModel(supervisor, uiContext.Factory, _log);
+        await privacy.LoadAsync();
+        privacy.LocalOnly = true;
+        await privacy.SaveAsync();
+        Assert.Equal("Saved.", privacy.StatusMessage);
+
+        // Local-only now greys the cloud model out in the picker.
+        await chat.RefreshModelsAsync();
+        Assert.Equal(ChatModelPolicy.LocalOnlyReason, chat.ModelPicker.Models.Single(m => !m.IsLocal).UnavailableReason);
+        Assert.DoesNotContain("sk-test-not-a-real-key", LogText);
+
+        await supervisor.ShutdownAsync(TimeSpan.FromSeconds(2));
+    }
+
+    /// <summary>Reads the log while the logger may be appending to it (File.ReadAllText would deny it write access).</summary>
+    private static string ReadShared(string? path)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                if (path is null || !File.Exists(path))
+                {
+                    return string.Empty;
+                }
+
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                return reader.ReadToEnd();
+            }
+            catch (IOException) when (attempt < 20)
+            {
+                Thread.Sleep(10);
+            }
+        }
     }
 
     private static int CountOccurrences(string text, string value)
