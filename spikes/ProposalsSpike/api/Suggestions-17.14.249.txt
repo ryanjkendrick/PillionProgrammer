@@ -1,0 +1,180 @@
+# Microsoft.VisualStudio.Language, Version=17.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a
+
+## public enum EditDisplayStyle : IComparable, ISpanFormattable, IFormattable, IConvertible
+    /// How to display the suggestion to the user.
+  GrayText = 0
+  DiffView = 1
+  SideBySide = 2
+  MarkerOnly = 3
+  MarkersOnlyThenGrayText = 4
+  StyleMask = 255
+  ExtentHighlight = 256
+  ScopeHighlight = 512
+  DismissOnCaretMove = 1024
+
+## public class ProposalDisplayedEventArgs : EventArgs
+  public ctor(String providerName, ITextView view, ProposalBase proposal)
+  field String ProviderName
+  field ITextView View
+  field ProposalBase OriginalProposal
+
+## public class ProposalRejectedEventArgs : EventArgs
+  public ctor(String providerName, ITextView view, ProposalBase originalProposal, ProposalBase finalProposal, ReasonForUpdate reason)
+  field String ProviderName
+  field ITextView View
+  field ProposalBase OriginalProposal
+  field ProposalBase FinalProposal
+  field ReasonForUpdate Reason
+
+## public enum ReasonForAccept : IComparable, ISpanFormattable, IFormattable, IConvertible
+    /// How was the suggestion accepted by the user?
+  AcceptedByCommand = 0
+  AcceptedByOvertype = 1
+
+## public enum ReasonForDismiss : IComparable, ISpanFormattable, IFormattable, IConvertible
+    /// Why was a suggestion dismissed?
+  DismissedAfterUserEscape = 0
+  DismissedAfterUserDelete = 1
+  DismissedAfterViewClosed = 2
+  DismissedAfterCaretMoved = 3
+  DismissedBySession = 4
+  DismissedAfterOutliningCollapsed = 5
+  DismissedAfterIntelliSenseDismissed = 6
+  DismissedAfterBufferChange = 7
+  DismissedForRefinement = 8
+  DismissedAfterCompletionChange = 131073
+  DismissedAfterCompletionItemCommitted = 131074
+  DismissedAfterCompletionItemCommittedCommandPending = 131075
+  DismissedAfterTypeChar = 131076
+  DismissedAfterReturn = 131077
+  DismissedAfterBackspace = 131078
+  DismissedDueToInvalidProposal = 131079
+  DismissedAfterCaretMove = 131082
+
+## public enum ReasonForUpdate : IComparable, ISpanFormattable, IFormattable, IConvertible
+    /// Why was a proposal updated or did a user action diverge from the proposal, causing the proposal (but not the ) to be dismissed?
+  Updated = 65536
+  Diverged = 131072
+  UpdatedAfterCompletionChange = 65537
+  UpdatedAfterCompletionItemCommitted = 65538
+  UpdatedAfterCompletionItemCommittedCommandPending = 65539
+  UpdatedAfterTypeChar = 65540
+  UpdatedAfterReturn = 65541
+  UpdatedAfterBackspace = 65542
+  UpdatedAfterCaretMove = 65546
+  DivergedAfterCompletionChange = 131073
+  DivergedAfterCompletionItemCommitted = 131074
+  DivergedAfterCompletionItemCommittedCommandPending = 131075
+  DivergedAfterTypeChar = 131076
+  DivergedAfterReturn = 131077
+  DivergedAfterBackspace = 131078
+  DivergedDueToInvalidProposal = 131079
+  DivergedDueToChangeProposal = 131080
+  DivergedAfterCaretMove = 131082
+
+## public class SuggestionAcceptedEventArgs : EventArgs
+  public ctor(String providerName, ITextView view, ProposalBase originalProposal, ProposalBase finalProposal, ReasonForAccept reason)
+  field String ProviderName
+  field ITextView View
+  field ProposalBase OriginalProposal
+  field ProposalBase FinalProposal
+  field ReasonForAccept Reason
+
+## public abstract class SuggestionBase : INotifyPropertyChanged
+    /// A suggestion passed to .
+  protected ctor()
+  public abstract TipStyle TipStyle { get; }
+  public abstract EditDisplayStyle EditStyle { get; }
+  public abstract Boolean HasMultipleSuggestions { get; }
+  public virtual IReadOnlyList<TipElement> Elements { get; }
+  public abstract Task OnAcceptedAsync(SuggestionSessionBase session, ProposalBase originalProposal, ProposalBase currentProposal, ReasonForAccept reason, CancellationToken cancel)
+  public abstract Task OnDismissedAsync(SuggestionSessionBase session, ProposalBase originalProposal, ProposalBase currentProposal, ReasonForDismiss reason, CancellationToken cancel)
+  public abstract Task OnProposalUpdatedAsync(SuggestionSessionBase session, ProposalBase originalProposal, ProposalBase currentProposal, ReasonForUpdate reason, VirtualSnapshotPoint caret, CompletionState completionState, CancellationToken cancel)
+  public abstract Task OnChangeProposalAsync(SuggestionSessionBase session, ProposalBase originalProposal, ProposalBase currentProposal, Boolean forward, CancellationToken cancel)
+  event PropertyChangedEventHandler PropertyChanged
+
+## public class SuggestionDismissedEventArgs : EventArgs
+  public ctor(String providerName, ITextView view, ProposalBase originalProposal, ProposalBase finalProposal, ReasonForDismiss reason)
+  field String ProviderName
+  field ITextView View
+  field ProposalBase OriginalProposal
+  field ProposalBase FinalProposal
+  field ReasonForDismiss Reason
+
+## public abstract class SuggestionManagerBase : IAsyncDisposable
+    /// A suggestion manager for a and . Created via .
+  protected ctor()
+  public abstract ITextView View { get; }
+  public abstract Boolean IsSuggestionDisplayed { get; }
+  public abstract CompletionState CompletionState { get; }
+  public abstract Task<IAsyncDisposable> DisableProviderAsync(String name, CancellationToken cancel)
+  public abstract Task<SuggestionSessionBase> TryDisplaySuggestionAsync(SuggestionBase suggestion, CancellationToken cancel)
+  public abstract Task DisposeAsync()
+  public virtual Void EnqueueAction(String description, Func<Task> action, Object tag=null)
+  public virtual Task<Boolean> CommitProposalAsync(ProposalBase proposal, CancellationToken cancel)
+
+## public class SuggestionProviderBase
+  public ctor()
+  public virtual Task EnabledAsync(CancellationToken cancel)
+  public virtual Task DisabledAsync(CancellationToken cancel)
+  public virtual Task SuggestionDisplayedAsync(String name, CancellationToken cancel)
+  public virtual Task SuggestionDismissedAsync(CancellationToken cancel)
+  public virtual Task OnCompletionSessionUiChangedAsync(SuggestionManagerBase manager, CompletionState completionState, CancellationToken cancel)
+  public virtual Task OnCompletionItemAcceptedAsync(SuggestionManagerBase manager, CancellationToken cancel)
+
+## public abstract class SuggestionServiceBase
+    /// MEF export for registering s for an .
+  protected ctor()
+  public abstract Task<SuggestionManagerBase> TryRegisterProviderAsync(SuggestionProviderBase provider, ITextView view, String name, CancellationToken cancel)
+  public virtual ProposalBase GetDisplayedProposal(ITextView view)
+  public virtual Task DismissProposalAsync(ITextView view, ReasonForDismiss reason, CancellationToken cancel)
+  public virtual ProposalBase TryUpdateProposal(ITextView view, ProposalBase proposal)
+  event EventHandler<ProposalDisplayedEventArgs> ProposalDisplayed
+  event EventHandler<ProposalRejectedEventArgs> ProposalRejected
+  event EventHandler<SuggestionAcceptedEventArgs> SuggestionAccepted
+  event EventHandler<SuggestionDismissedEventArgs> SuggestionDismissed
+
+## public static class SuggestionServiceNames
+    /// Names of s built into Visual Studio.
+  field static String IntelliCodeLineCompletions = IntelliCodeLineCompletions
+  field static String IntelliCodeSuggestions = IntelliCodeSuggestions
+  field static String IntelliCodeIntentHints = IntelliCodeIntentHints
+  field static String IntelliCodeSearchHints = IntelliCodeSearchHints
+  field static String IntelliCodeSuggestionHints = IntelliCodeSuggestionHints
+  field static String IntelliCodeDiagnosticHints = IntelliCodeDiagnosticHints
+
+## public abstract class SuggestionSessionBase
+  protected ctor()
+  public abstract ITextView View { get; }
+  public abstract SuggestionProviderBase Provider { get; }
+  public abstract SuggestionBase Suggestion { get; }
+  public abstract ProposalBase Proposal { get; }
+  public abstract Task DisplayProposalAsync(ProposalBase content, CancellationToken cancel)
+  public abstract Task DismissAsync(ReasonForDismiss reason, CancellationToken cancel)
+  public virtual Boolean CommitSuggestion(Boolean commitIntelliSense)
+
+## public class TipElement
+    /// The description of a button displayed in the hint bar of a suggestion.
+  public ctor(Object content, String label, Guid commandGuid, UInt32 commandId, Object commandArg=null, Object toolTip=null)
+  field Object Content
+  field String Label
+  field Guid CommandGuid
+  field UInt32 CommandId
+  field Object CommandArg
+  field Object ToolTip
+
+## public enum TipStyle : IComparable, ISpanFormattable, IFormattable, IConvertible
+    /// Flags that describe how the suggestion is shown. Many of these will disappear once we have locked down the style.
+  NeverShowTip = 0
+  AlwaysShowTip = 1
+  ShowTipOnHover = 2
+  HideTipDescription = 4
+  HideAcceptTip = 8
+  HideNextTip = 16
+  TipAnchoredPlacement = 0
+  TipTopLeftPlacement = 256
+  TipTopRightPlacement = 512
+  TipRightPlacement = 768
+  TipBottomPlacement = 1024
+  TipTopRightJustifiedPlacement = 1280
+  TipPlacementMask = 3840

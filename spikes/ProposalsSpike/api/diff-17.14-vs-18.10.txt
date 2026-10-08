@@ -1,0 +1,92 @@
+# Diff of public API: NuGet Microsoft.VisualStudio.Language 17.14.249 (left) vs VS 2026 18.10 runtime Microsoft.VisualStudio.Language.dll 18.10.106.50897 (right)
+
+## Microsoft.VisualStudio.Language.Proposals
+1c1
+< # Microsoft.VisualStudio.Language, Version=17.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a
+---
+> # Microsoft.VisualStudio.Language, Version=18.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a
+4,6c4,7
+<   public ctor(String selectedItem, SnapshotSpan applicableToSpan, Boolean isSoftSelection, ImageElement icon)
+<   public ctor(String selectedItem, SnapshotSpan applicableToSpan, Boolean isSoftSelection, ImageElement icon, Object underlyingCompletionItem)
+<   public ctor(String selectedItem, SnapshotSpan applicableToSpan, Boolean isSoftSelection, ImageElement icon, Object underlyingCompletionItem, Boolean isBuilderSelected)
+---
+>   public ctor(String selectedItem, SnapshotSpan applicableToSpan, Boolean isSoftSelection, ImageElement icon) [Obsolete("Will be removed in next major release")]
+>   public ctor(String selectedItem, SnapshotSpan applicableToSpan, Boolean isSoftSelection, ImageElement icon, Object underlyingCompletionItem) [Obsolete("Will be removed in next major release")]
+>   public ctor(String selectedItem, SnapshotSpan applicableToSpan, Boolean isSoftSelection, ImageElement icon, Object underlyingCompletionItem, Boolean isBuilderSelected) [Obsolete("Will be removed in next major release")]
+>   public ctor(String selectedItem, SnapshotSpan applicableToSpan, Boolean isSoftSelection, ImageElement icon, Object underlyingCompletionItem, Boolean isBuilderSelected, Int32 sessionId)
+17a19
+>   field Int32 SessionId
+46a49
+>   public static ProposalBase TryCreateProposal(ProposalBase oldProposal, IReadOnlyList<ProposedEdit> newEdits)
+52a56,60
+> ## public class ProposalAdjusterProviderBase [Obsolete("Class has not been finalized and may change without warning.")]
+>   public ctor()
+>   public virtual Task<ProposalBase> AdjustProposalBeforeDisplayAsync(ProposalBase proposal, String providerName, CancellationToken cancel)
+>   public virtual Task<ProposalBase> AdjustProposalAfterAcceptAsync(ProposalBase proposal, String providerName, CancellationToken cancel)
+> 
+96c104
+<   MoveCaretToEnd = 16
+---
+>   MoveCaretToEnd = 16 [Obsolete("This API is not implemented and should not be used.")]
+100c108,112
+<   PreserveOnBufferChange = 256
+---
+>   PreserveOnBufferChange = 256 [Obsolete("This API is not implemented and should not be used.")]
+>   SingleEditAccept = 512
+>   UpdateOnAccept = 1024
+>   DismissOnAnyEdit = 2048
+>   HideRemoteEdit = 4096
+
+## Microsoft.VisualStudio.Language.Suggestions
+1c1
+< # Microsoft.VisualStudio.Language, Version=17.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a
+---
+> # Microsoft.VisualStudio.Language, Version=18.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a
+6c6
+<   SideBySide = 2
+---
+>   SideBySide = 2 [Obsolete("This API is not implemented and should not be used.")]
+12c12,14
+<   DismissOnCaretMove = 1024
+---
+>   DismissOnCaretMove = 1024 [Obsolete("This API is not implemented and should not be used.")]
+> 
+> ## internal class NoOpDisposable
+30a33
+>   AcceptedBySelection = 2
+41a45,46
+>   DismissedAfterLostFocus = 9
+>   DismissedBySnippet = 10
+46c51
+<   DismissedAfterReturn = 131077
+---
+>   DismissedAfterReturn = 131077 [Obsolete("This API is not implemented and should not be used.")]
+49a55,56
+>   DismissedAfterSingleEditAccept = 131083
+>   DismissedAfterSingleEditDismiss = 131086
+60a68,71
+>   UpdatedAfterSingleEditAccept = 65547
+>   UpdatedAfterAccept = 65548
+>   UpdatedAfterBufferChange = 65549
+>   UpdatedAfterSingleEditDismiss = 65550
+69a81,83
+>   DivergedAfterSingleEditAccept = 131083
+>   DivergedAfterBufferChange = 131085
+>   DivergedAfterSingleEditDismiss = 131086
+123a138
+>   public virtual Task<IAsyncDisposable> DismissAndBlockProposalsAsync(ITextView view, ReasonForDismiss reason, CancellationToken cancel)
+165,169c180,184
+<   TipTopLeftPlacement = 256
+<   TipTopRightPlacement = 512
+<   TipRightPlacement = 768
+<   TipBottomPlacement = 1024
+<   TipTopRightJustifiedPlacement = 1280
+---
+>   TipTopLeftPlacement = 256 [Obsolete("This API is not implemented and should not be used.")]
+>   TipTopRightPlacement = 512 [Obsolete("This API is not implemented and should not be used.")]
+>   TipRightPlacement = 768 [Obsolete("This API is not implemented and should not be used.")]
+>   TipBottomPlacement = 1024 [Obsolete("This API is not implemented and should not be used.")]
+>   TipTopRightJustifiedPlacement = 1280 [Obsolete("This API is not implemented and should not be used.")]
+170a186,187
+> 
+> ## internal enum TipStyleInternal
