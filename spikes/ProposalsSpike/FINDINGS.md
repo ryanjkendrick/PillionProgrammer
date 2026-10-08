@@ -1,7 +1,8 @@
 # Gate 0 spike: Proposals API ghost text: findings
 
 Spike date: 2026-10-08. Verified on **Visual Studio Community 2026 18.10.12224.181** (Experimental Instance, `/rootsuffix Exp`).
-**Not yet run on VS 2022 17.14** (it is not installed on the spike machine). The checklist at the end covers that run.
+Rerun on **Visual Studio Community 2022 17.14.41** the same day: see "Results on VS 2022 17.14.41" at the end, which
+also holds the verdict covering both versions. On that install third-party proposals are never requested.
 
 ## Verdict
 
@@ -309,3 +310,107 @@ currently provides for free:
    `dotnet run --project spikes\ProposalsSpike\tools\ApiDump -- "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\Editor\Microsoft.VisualStudio.Language.dll"`
    and compare it with `api/Proposals-17.14.249.txt`.
 8. Close the Experimental Instance. Append a "Results on VS 2022 17.14" section to this file.
+
+## Results on VS 2022 17.14.41
+
+Run date: 2026-10-08. **Visual Studio Community 2022 17.14.41 (September 2026)**, installation version
+17.14.37710.0, instance `cb15242f`, Experimental Instance hive `17.0_cb15242fExp`.
+
+### Setup
+
+* **Workloads.** This install has only the **Visual Studio core editor** workload
+  (`Microsoft.VisualStudio.Workload.CoreEditor`): no *Visual Studio extension development* workload, no .NET or C++
+  workload, so no Roslyn C# language service, no managed project system and **no IntelliCode**. Nothing was installed for
+  the run. C# files open with TextMate colouring, which still gives them a content type derived from `text`, so the
+  spike's `[ContentType("text")]` exports apply.
+* **Copilot.** Not installed. The title-bar badge reads "GitHub Copilot" with the automation help text
+  "Install GitHub Copilot components"; vswhere lists only `Microsoft.VisualStudio.Copilot.Contracts` 17.14.1713.
+  Signed-in state is therefore moot.
+* **Build and deploy.** Built with the **VS 2026 MSBuild** (the project targets the 17.14 SDK) with
+  `/p:DeployExtension=false`, from a copy of `spikes/ProposalsSpike` outside the repo. Installed with
+  `"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\VSIXInstaller.exe" /quiet /rootSuffix:Exp ProposalsSpike.vsix`
+  (exit 0; installed to `17.0_cb15242fExp\Extensions\vgwaa5nk.vyt`). The 17.14 VSIXInstaller hands off to the
+  Visual Studio Installer's own `VSIXInstaller.exe` (setup engine 4.10.30). `ProposalsSpike.dll` is in the Exp MEF
+  catalog (`ComponentModelCache\Microsoft.VisualStudio.Default.err` lists it among the scanned assemblies, with no error
+  against it). Removed afterwards with `VSIXInstaller.exe /quiet /rootSuffix:Exp /uninstall:PillionProgrammer.ProposalsSpike.6b1f0c2e-6a3d-4f7e-9a51-2c4e8d7b9f10` (exit 0).
+* **Driver.** `tools/Run-Scenarios.ps1` assumes a project system (`Scratch.sln`), which this install lacks, so the same
+  steps were run from a session-local wrapper: `vsdrive.ps1` dot-sourced, `Get-ExpProcess` narrowed to a 2022
+  `devenv.exe`, and `Start-Exp` opening the scratch **folder** plus `Program.cs` instead of the solution. The ten `Step`
+  lines are unchanged. Gotcha: rewriting `Program.cs` on disk while it is open raises Visual Studio's modal "changed
+  externally, reload?" prompt, and every DTE call then fails with `RPC_E_CALL_REJECTED` (PowerShell shows it as null
+  properties) until the prompt is answered.
+
+### Matrix
+
+`%TEMP%\ProposalsSpike.log` stayed **empty for the whole run**: no `MEF ... SpikeProposalSourceProvider created`, no
+`PROVIDER`, `MANAGER`, `REQUEST` or `EVENT` line, in a first launch, a single-scenario run and the full ten-step run.
+Screenshots (kept in the session scratchpad) show no ghost text and no hint bar for any trigger.
+
+| # | Scenario | Displayed | Tab | Esc | Evidence |
+|---|---|---|---|---|---|
+| 1 | Multi-line (`//ml`) | no | inserted indentation (`//ml` followed by spaces) | - | no `REQUEST` lines; doc line `            //ml    ` |
+| 2 | Text right of caret (`/*right*/`) | no | inserted spaces before `);` | - | `Console.WriteLine(/*right*/ );` |
+| 2b | Multi-line, text right of caret | no | spaces | - | `Console.WriteLine(/*rightml*/   );` |
+| 2c | Replacement edit away from caret | no | spaces | - | `Console.WriteLine(/*replace*/   );` |
+| 3 / 3b / 3c | Virtual space (`//vs`, `//vs0`) and after indentation (`//ind`) | no | Tab indented the empty line | - | no `Return` or `CaretMove` requests |
+| 4 | Esc (`//noflags`) | no | - | nothing to dismiss | no `SuggestionDismissed` |
+| 4b | Two proposals + Alt+. | no | - | - | no events |
+| 5a | Coexistence | no other inline provider exists (no Copilot, no IntelliCode) | - | - | Copilot badge offers to install components |
+| 5b | IntelliSense list open (`//isense` + `Console.WriteL`) | no | - | - | a TextMate word-completion list ("WriteLine") **was** open, and still no request |
+
+### Why: 17.14 has no proposal broker on this install
+
+The **contract** is present and identical to the SDK, but nothing in this install **consumes** it:
+
+* Runtime `Common7\IDE\CommonExtensions\Microsoft\Editor\Microsoft.VisualStudio.Language.dll` is file version
+  17.14.305.26414, assembly version 17.0.0.0. Dumped with `tools/ApiDump` (namespaces `...Language.Proposals` and
+  `...Language.Suggestions`) and compared with `api/Proposals-17.14.249.txt` / `api/Suggestions-17.14.249.txt`: **no
+  difference in types, members, values or attributes**. The only differences are the `///` summaries, because the
+  runtime DLL has no XML doc file next to it. So the NuGet 17.14.249 dump is an accurate picture of 17.14.41, and the
+  17.14 to 18.10 diff in `api/diff-17.14-vs-18.10.txt` stands.
+* No assembly under the 2022 `Common7\IDE` contains `InlineCompletionsListener` or a `ProposalBrokerProvider`
+  implementation. The only assemblies that mention `ProposalSourceProviderBase` are the contract itself and
+  `Microsoft.VisualStudio.Platform.VSEditor.dll`, which (by its metadata) defines no proposal or suggestion-service type
+  and only references `SuggestionServiceBase`, `ProposalDisplayedEventArgs` and `ProposalBase` (as does the 2022
+  `Microsoft.VisualStudio.Editor.Implementation.dll`). Nothing `[ImportMany]`s our `ProposalSourceProviderBase`, so MEF
+  never constructs `SpikeProposalSourceProvider`, which is exactly what the empty log shows.
+* In **18.10** the same pieces are in the platform: `Microsoft.VisualStudio.Editor.Implementation.dll` defines
+  `...SuggestionService.ProposalBrokerProvider`, `ProposalBroker`, `SuggestionService`, `SuggestionManager` and
+  `...SuggestionService.InlineCompletion.InlineCompletionsListener`.
+* In 17.x the broker, the suggestion service and the inline-completions host therefore come from an optional
+  component, most likely **IntelliCode** (which is part of the .NET and C++ workloads but not of the core editor). The
+  evidence is circumstantial: the provider name VS reports is `IntelliCodeLineCompletions`, the only name constants in
+  the API are `IntelliCodeCSharpProposalSource` / `IntelliCodeCPlusPlusProposalSource`, and `Microsoft.VisualStudio.IntelliCode.dll` from the
+  18.10 IntelliCode VSIX in the package cache references `ProposalSourceProviderBase` and `SuggestionServiceBase` (its
+  C# proposal source). **Not verified**: the 17.14 IntelliCode package is
+  not on this machine and nothing was installed.
+
+### API differences observed (17.14.41 runtime vs 18.10 runtime)
+
+As recorded above from the NuGet dump; the runtime check confirms them. 17.14 lacks: the `CompletionState` constructor
+with `sessionId` and the `SessionId` field, `Proposal.TryCreateProposal(ProposalBase, IReadOnlyList<ProposedEdit>)`,
+`ProposalAdjusterProviderBase`, `ProposalFlags.SingleEditAccept` / `UpdateOnAccept` / `DismissOnAnyEdit` /
+`HideRemoteEdit`, `SuggestionServiceBase.DismissAndBlockProposalsAsync`, the newer `ReasonForAccept` /
+`ReasonForDismiss` / `ReasonForUpdate` values and the `Microsoft.VisualStudio.Language.InlinePrompts` namespace.
+Nothing in 17.14 is `[Obsolete]`. A spike compiled against 17.14 binds on both. The bigger difference is not in the
+API but in **who implements it**: platform in 18.10, an optional component (apparently) in 17.14.
+
+### Updated verdict (both versions)
+
+* **VS 2026 18.10: viable**, unchanged: all core behaviours work through a plain MEF export, with the two caveats above
+  (IntelliSense-coupled proposals unproven, API drift).
+* **VS 2022 17.14.41: not viable on a core-editor-only install.** The source is never requested and nothing is
+  displayed, in every scenario. It is **not yet known** whether it works on a 17.14 install that has IntelliCode (or
+  Copilot), which is how most C# developers have it. **Gate criterion "Proposals API spike green on VS 2022 17.14 and
+  VS 2026 18.x": Fail as tested.**
+* Consequences for the product:
+  1. Ghost text on 17.14 depends on a component we do not ship. At minimum, detect it at run time: if no proposal
+     source is requested within a few seconds of the first document view, or `SuggestionServiceBase` cannot be
+     imported, report "inline suggestions need IntelliCode on Visual Studio 2022" instead of failing silently.
+  2. Decide between (a) declaring IntelliCode a prerequisite on 17.x (and adding it to the VSIX manifest's
+     prerequisites for 17.x if the rerun below confirms it), (b) the adornment fallback described above for 17.x only,
+     or (c) ghost text on 18.x only, with chat and other features still on 17.14.
+* Next step (needs the product owner, because it installs software): add the **.NET desktop development** workload
+  (or just the IntelliCode component) to VS 2022 17.14, then rerun this section's matrix. Check that a `MEF ...
+  SpikeProposalSourceProvider created` line appears and that `ProposalDisplayed ... ours=True` fires; also note the
+  Copilot badge state. If the source is created then, record which component brought the broker.
