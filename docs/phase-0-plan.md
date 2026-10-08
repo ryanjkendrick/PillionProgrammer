@@ -31,7 +31,7 @@ The design document is the specification: https://claude.ai/code/artifact/02f3ee
 | 0.10 | Connectivity and Local-only mode: per-provider probes, network-change events, four states, policy file `localOnly` (section 11) | Common, Host | 0.7 | Done, PR 9 |
 | 0.11 | Chat tool window and Options pages: model picker, streaming replies naming the model, Outbound log entries, Providers and keys page, Local-only switch (section 5) | VSIX | 0.4, 0.7 | Done, PR 11 |
 | 0.12 | Proposals API spike on 17.14 and 18.x with findings and the fallback assessment (section 5) | Spike | | Viable on 18.10, PR 2; 17.14 run pending VS 2022 |
-| 0.13 | Gate 0 evidence: host-kill integration test, offline run script, gate report | Tests | all | Not started |
+| 0.13 | Gate 0 evidence: host-kill integration test, offline run script, gate report | Tests | all | Done, PR 14 (report: [gate-0-report.md](gate-0-report.md)) |
 
 Work item 0.13 was added when the plan was laid out; the design doc's count of twelve is indicative.
 
