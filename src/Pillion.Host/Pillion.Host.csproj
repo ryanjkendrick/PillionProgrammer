@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Pillion Host: the out-of-process .NET 10 server that the VSIX launches and talks to over a named pipe.
+    Shipped self-contained (see Properties/PublishProfiles/win-x64.pubxml) so users need no .NET runtime installed.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Pillion.Host</RootNamespace>
+    <AssemblyName>Pillion.Host</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Pillion.Contracts\Pillion.Contracts.csproj" />
+    <ProjectReference Include="..\Pillion.Common\Pillion.Common.csproj" />
+    <ProjectReference Include="..\Pillion.ModelGateway\Pillion.ModelGateway.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Pillion.Host.Tests" />
+  </ItemGroup>
+
+</Project>
