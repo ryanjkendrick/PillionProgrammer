@@ -5,6 +5,7 @@ using Pillion.Common.Secrets;
 using Pillion.Common.Settings;
 using Pillion.Contracts;
 using Pillion.ModelGateway.Providers.Ollama;
+using Pillion.ModelGateway.Providers.OpenAICompatible;
 
 namespace Pillion.ModelGateway;
 
@@ -30,7 +31,7 @@ public sealed class GatewayProviderTester : IProviderTester
 public static class ModelGatewayServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the Model Gateway: the catalog, prompt templates, provider registry (with the Ollama factory), router,
+    /// Registers the Model Gateway: the catalog, prompt templates, provider registry (with the Ollama, OpenAI-compatible and OpenAI factories), router,
     /// circuit breakers, concurrency limiter, autocomplete cache, Outbound log and <see cref="IModelGateway"/>. The
     /// default <see cref="IProviderTester"/> is replaced by <see cref="GatewayProviderTester"/>. Extension points that
     /// later work items supply (<see cref="IProviderReachability"/>, <see cref="IProviderHealthSink"/>,
@@ -59,6 +60,8 @@ public static class ModelGatewayServiceCollectionExtensions
         services.TryAddSingleton<IGatewaySettingsSource>(sp => new SettingsStoreGatewaySettingsSource(sp.GetRequiredService<SettingsStore>()));
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IModelProviderFactory, OllamaProviderFactory>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IModelProviderFactory, OpenAICompatibleProviderFactory>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IModelProviderFactory, OpenAIProviderFactory>());
         services.TryAddSingleton(sp => new ProviderRegistry(
             sp.GetRequiredService<IGatewaySettingsSource>(),
             sp.GetRequiredService<ISecretStore>(),
