@@ -435,3 +435,6 @@ TestResults/
 
 # Redaction test corpus: fabricated samples, never real secrets
 !tests/Pillion.Common.Tests/Redaction/Corpus/**/*.env
+
+# Gate 0 evidence run output (logs, TRX files, screenshots, settings backups)
+tools/gate0/out/
