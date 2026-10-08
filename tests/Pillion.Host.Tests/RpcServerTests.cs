@@ -99,6 +99,32 @@ public class RpcServerTests(ITestOutputHelper output)
 
         Assert.False(response.Accepted);
         Assert.Contains("client process id", response.Reason, StringComparison.Ordinal);
+        await client.Rpc.Completion.WaitAsync(Wait);
+    }
+
+    [Fact]
+    public async Task RejectedHandshake_ResponseReachesTheClientBeforeTheConnectionCloses_UnderLoad()
+    {
+        // Regression: the host used to close the pipe when StreamJsonRpc raised ResponseSent, which happens before the
+        // response is written, so a client on a busy machine saw ConnectionLostException instead of the rejection.
+        // Several hosts rejecting at once is what exposed it (one host on an idle machine rarely did).
+        async Task RejectRepeatedlyAsync()
+        {
+            await using var host = await InProcessHost.StartAsync();
+            for (var i = 0; i < 25; i++)
+            {
+                await using var client = await host.ConnectAsync();
+                var response = await client.Lifecycle.HandshakeAsync(
+                    TestRpcClient.CreateHandshake(host.Token, major: ContractVersion.Major + 1),
+                    CancellationToken.None);
+
+                Assert.False(response.Accepted);
+                Assert.Contains("contract version", response.Reason, StringComparison.OrdinalIgnoreCase);
+                await client.Rpc.Completion.WaitAsync(Wait);
+            }
+        }
+
+        await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(RejectRepeatedlyAsync)));
     }
 
     [Fact]
