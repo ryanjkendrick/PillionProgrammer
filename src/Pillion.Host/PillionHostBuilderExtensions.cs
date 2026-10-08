@@ -1,8 +1,10 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Pillion.Contracts;
 using Pillion.Host.Lifecycle;
 using Pillion.Host.Logging;
 using Pillion.Host.Rpc;
+using Pillion.Host.Settings;
 
 namespace Pillion.Host;
 
@@ -50,7 +52,11 @@ internal static class PillionHostBuilderExtensions
         builder.Services.AddPillionLifecycle();
         builder.Services.AddPillionRpcServer();
 
-        // RPC targets for the model, context, agent and settings services are registered here by later work items.
+        // Settings (work item 0.5): the store, Credential Manager secrets and the ISettingsService RPC target.
+        builder.Services.AddPillionSettingsRpc();
+        builder.Services.AddRpcTarget<ISettingsService>(sp => sp.GetRequiredService<ISettingsService>());
+
+        // RPC targets for the model, context and agent services are registered here by later work items.
         return builder;
     }
 }
