@@ -426,3 +426,9 @@ FodyWeavers.xsd
 
 # Official VS Code C# Dev Kit Extension exclusion
 #*.lscache
+
+# Pillion Programmer
+[Bb]in/
+TestResults/
+# Publish profiles in this repository contain no secrets; keep them under source control.
+!**/Properties/PublishProfiles/*.pubxml

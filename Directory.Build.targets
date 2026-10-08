@@ -1,0 +1,6 @@
+<Project>
+  <!-- ImplicitUsings only for net10.0 projects (see Directory.Build.props). -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+</Project>

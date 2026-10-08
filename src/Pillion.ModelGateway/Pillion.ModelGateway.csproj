@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Model providers (cloud and local) behind one gateway: routing by task class and profile, streaming, fallbacks. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Pillion.ModelGateway</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Pillion.Contracts\Pillion.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

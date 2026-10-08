@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Host-side shared services: settings, secrets, redaction and connectivity detection. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Pillion.Common</RootNamespace>
+  </PropertyGroup>
+
+</Project>
