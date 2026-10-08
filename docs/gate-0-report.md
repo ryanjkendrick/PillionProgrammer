@@ -237,7 +237,7 @@ previous copy first), runs `/updateconfiguration`, and the live checks drive the
    model, sends the same prompt and records the header ("... via <provider>, cloud") and the Outbound line with its
    redaction count. The script only asks `cmdkey /list:PillionProgrammer/<id>` whether the key exists; it never reads
    it. Add a screenshot from the Chat window for the gate review.
-2. **Decide the IntelliCode requirement for ghost text on Visual Studio 2022.** The rerun with the .NET desktop
+2. **IntelliCode requirement for ghost text on Visual Studio 2022: decided 2026-10-08, option (a).** IntelliCode with its automatic code completions is a requirement on 17.x, enforced by a run-time check in phase 1; the adornment fallback stays the contingency. The question as it was put: The rerun with the .NET desktop
    workload passed: on 17.x the proposal broker is IntelliCode's, so ghost text works only when IntelliCode is installed
    and its *Automatically generate code completions in the Editor* option is on (see
    [Visual Studio 2022 17.14](#visual-studio-2022-1714) and PR 2). Choose one: (a) state IntelliCode as a requirement for

@@ -4,9 +4,18 @@ Thanks for helping. A few rules keep the history and the build healthy.
 
 ## Branches and pull requests
 
-- One branch per work item, named after it, for example `phase0/scaffold-and-contracts`.
-- Open a pull request to `main`. Draft pull requests are welcome for early feedback.
-- `main` must always build and pass its tests; CI runs on every pull request.
+We follow [Gitflow](https://nvie.com/posts/a-successful-git-branching-model/):
+
+- `main` holds released versions only; every commit on it is a tagged release.
+- `develop` is the integration branch and the default branch; it must always build and pass its tests.
+- One `feature/<slug>` branch per work item, branched from `develop`, merged back with a pull request to `develop`
+  once CI is green and the lead has reviewed it. Merge with a merge commit (no squash, no rebase) so the branch
+  history and the stacked pull requests stay traceable.
+- `release/<version>` branches off `develop` to stabilise a release; only fixes land there, and it merges to both
+  `main` (tagged) and `develop`.
+- `hotfix/<version>` branches off `main` for an urgent fix to a released version; it merges to both `main` and
+  `develop`.
+- Draft pull requests are welcome for early feedback.
 
 ## Tests are required
 
