@@ -1,8 +1,10 @@
 # Gate 0 spike: Proposals API ghost text: findings
 
 Spike date: 2026-10-08. Verified on **Visual Studio Community 2026 18.10.12224.181** (Experimental Instance, `/rootsuffix Exp`).
-Rerun on **Visual Studio Community 2022 17.14.41** the same day: see "Results on VS 2022 17.14.41" at the end, which
-also holds the verdict covering both versions. On that install third-party proposals are never requested.
+Rerun on **Visual Studio Community 2022 17.14.41** the same day: see "Results on VS 2022 17.14.41" (core editor only:
+third-party proposals are never requested) and then "Results on VS 2022 17.14.41 with the managed desktop workload and
+IntelliCode" at the end, which holds the **current verdict for both versions**: viable on 18.10, viable on 17.14 only
+with IntelliCode present and its automatic code completions turned on.
 
 ## Verdict
 
@@ -413,4 +415,174 @@ API but in **who implements it**: platform in 18.10, an optional component (appa
 * Next step (needs the product owner, because it installs software): add the **.NET desktop development** workload
   (or just the IntelliCode component) to VS 2022 17.14, then rerun this section's matrix. Check that a `MEF ...
   SpikeProposalSourceProvider created` line appears and that `ProposalDisplayed ... ours=True` fires; also note the
-  Copilot badge state. If the source is created then, record which component brought the broker.
+  Copilot badge state. If the source is created then, record which component brought the broker. (Done: see the next
+  section.)
+
+## Results on VS 2022 17.14.41 with the managed desktop workload and IntelliCode
+
+Run date: 2026-10-08, evening. Same install as above (Visual Studio Community 2022 17.14.41, installation version
+17.14.37710.0, instance `cb15242f`, hive `17.0_cb15242fExp`) after the product owner added the **.NET desktop
+development** workload. vswhere now lists `Microsoft.VisualStudio.Workload.ManagedDesktop` 17.14.36518.2,
+`Microsoft.VisualStudio.Component.IntelliCode` 17.14.37709.7, `Microsoft.VisualStudio.IntelliCode` 2.2.3078.1097 and
+`Microsoft.VisualStudio.IntelliCode.CSharp` 1.1.0.2437901. Nothing else changed.
+
+Copilot status: **not installed** (the title-bar badge still offers to install it). IntelliCode: **installed and active**.
+In Tools > Options > IntelliCode > General, *C# suggestions*, *Inline diff views*, *Automatically generate code
+completions in the Editor*, *Promote likely items in IntelliSense completion lists* and *Show indicator margin* are on
+(screenshot `options-ic-general.png`). The log shows IntelliCode's own whole-line completions (`id=<guid>:<n>`,
+`type=ProposalAndPrediction`, `flags=SimulateBraceCompletion`).
+
+**Build, deploy and driver.** As in the first 17.14 run: a copy of `spikes/ProposalsSpike` outside the repo, built with
+the VS 2026 MSBuild and `/p:DeployExtension=false`, installed with 2022's `VSIXInstaller.exe /quiet /rootSuffix:Exp`
+(exit 0), then `devenv /rootsuffix Exp /updateconfiguration`. This time **`tools/Run-Scenarios.ps1` ran as written**
+(`-DevEnv` set to the 2022 `devenv.exe`, `$env:SPIKE_WORK` set to the session scratchpad, `-KeepOpen`). The managed
+project system loads the `dotnet new console` scratch project (net8.0, .NET SDK 10.0.401), Roslyn classifies the
+file and CodeLens shows. No folder-based wrapper was needed. The spike was uninstalled at the end (`/uninstall:...`,
+exit 0, then `/updateconfiguration`); no `devenv.exe` or `VSIXInstaller.exe` remained.
+
+**Provider created.** The first log lines after launch:
+
+```
+PROVIDER   GetProposalManagerAsync contentType=CSharp
+MEF        SpikeProposalSourceProvider created; SuggestionServiceBase=Microsoft.VisualStudio.IntelliCode.SuggestionService.Implementation.SuggestionService; VS process=17.14.37710.0 built by: d17.14
+PROVIDER   GetProposalSourceAsync contentType=CSharp roles=[DEBUGGABLE,PRIMARYDOCUMENT,ANALYZABLE,DOCUMENT,EDITABLE,INTERACTIVE,STRUCTURED,ZOOMABLE,UBIDIFF,UBIRIGHTDIFF] document=True
+```
+
+### Who implements the broker on 17.14: IntelliCode (now verified)
+
+`Extensions\Microsoft\IntelliCode\Microsoft.VisualStudio.IntelliCode.dll` (file version 2.2.3078.1097) is the only
+assembly under the 2022 `Common7\IDE` that defines the consumers of the Proposals contract (metadata scan). It defines
+`...IntelliCode.SuggestionService.Implementation.ProposalBrokerProvider` (exports `ProposalBrokerProviderBase`),
+`ProposalBroker`, `SuggestionService` (exports `SuggestionServiceBase`, `[Name("IntelliCodeSuggestionService")]`,
+`[ContentType("any")]`), `SuggestionManager` and `...InlineCompletion.InlineCompletionsListener` (`[ContentType("any")]`,
+roles `DOCUMENT`, `ChatTextViewRole`, `EMBEDDED_PEEK_TEXT_VIEW`). It also defines the Tab, Return, TypeChar, Backspace
+and next-suggestion command handlers. These are the same type names that 18.10 has in the platform
+(`Microsoft.VisualStudio.Editor.Implementation.dll`), so the 18.x platform took over IntelliCode's implementation. On
+17.14 the `SuggestionServiceBase` our provider imports is IntelliCode's, as the `MEF` line shows.
+
+IntelliCode's own C# source and manager on 17.14 are `InlineCSharpProposalSourceProvider`
+`[Name("IntelliCodeCSharpProposalSource")]` and `InlineCSharpProposalManagerProvider`
+`[Name("IntelliCodeCSharpProposalManager")]`, both `[ContentType("CSharp")]`, with **no `[Order]`**. The names match the
+`ProposalSourceProviders` / `ProposalManagerProviders` constants in the SDK. Every proposal, ours and IntelliCode's, is
+reported under the provider name **`IntelliCodeLineCompletions`**, as on 18.10.
+
+### Matrix
+
+All rows come from the `Run-Scenarios.ps1` run unless marked. The log is `log-01-run-scenarios.txt` and the screenshots
+are `<scenario>-shown.png` / `-after.png`, all kept in the session scratchpad.
+
+| # | Scenario | Displayed | Tab | Esc | Evidence |
+|---|---|---|---|---|---|
+| 1 | Multi-line (`//ml`) | yes | accepted, 4 lines inserted | - | `ProposalDisplayed ... ours=True id=spike:ml:...` then `SuggestionAccepted reason=AcceptedByCommand`; doc `//ml multi-line ghost text` / `int first = 1;` / `int second = 2;` / `Console.WriteLine(first + second);` |
+| 2 | Text right of caret (`/*right*/`) | yes, inline before `);` | accepted, `);` kept | - | doc `Console.WriteLine(/*right*/"spike: inserted before existing text");` |
+| 2b | Multi-line with text right of caret | yes | accepted | - | doc `Console.WriteLine(/*rightml*/"first line" +` / `"second line");` |
+| 2c | Replacement edit away from caret | yes, as a **diff preview** (red original, arrow, green replacement), as on 18.10 | accepted | - | accepted edits normalised to `[237..237)->"spike"` + `[239..239)->" // replaced by proposal"`; doc `Console.WriteLine(/*replace*/"spike"); // replaced by proposal` |
+| 3 | Virtual space, padded (`//vs`) | yes, from the virtual caret column | accepted, but the line has **24** leading spaces | - | `virtual=True/12`; accepted edit still `[214..214)->"            int fromVirtualSpace..."`. **17.14 does not strip the padding** (18.10 did), so the 12 materialised virtual spaces plus our 12 doubled the indent |
+| 3b | Virtual space, unpadded (`//vs0`) | yes | accepted, 12 leading spaces | - | correct on both versions: send unpadded text in virtual space |
+| 3c | After real indentation (`//ind`) | yes (`CaretMove`) | accepted after a typed space shifted the insertion point | - | as on 18.10 (`[228..228)`) |
+| 4 | Esc (`//noflags`) | yes | - | dismissed, buffer unchanged | `SuggestionDismissed reason=DismissedAfterUserEscape` |
+| 4b | Two proposals + Alt+. | first shown; **Alt+. does not show the second** | - | dismissed | no `ProposalRejected` and no second `ProposalDisplayed` after Alt+. Retried by hand with Alt+. and with `DTE.ExecuteCommand("Edit.NextSuggestion")`, which is bound to Alt+. in Text Editor and handled by IntelliCode's `InlineNextSuggestionCommandHandler` (`NextSuggestionCommandArgs`). The first proposal stayed and no event fired (`two2-*.png`) |
+| 5a | Coexistence with IntelliCode | ours shown when we return one; IntelliCode's shown when we return null | - | - | see below |
+| 5b | IntelliSense-coupled | **yes** (variant build, list open) | first Tab commits the item, second Tab accepts ours | - | see below. The original `//isense` row was again never requested with `WriteLine` selected |
+
+What the screenshots show (`ml-shown.png`, `right-shown.png`, `vs-shown.png`):
+
+* **Rendering.** Ghost text is **flat grey, not italic and not syntax-coloured** (18.10 draws it italic and classified).
+  Multi-line proposals push the following lines down, as on 18.10.
+* **Hint bar.** `Pillion spike: ml  [Tab] to accept (spike)` appears above the line, so `Description` and `AcceptText`
+  are honoured. No Esc hint and no next/previous hint is drawn.
+
+### Coexistence with IntelliCode and the IntelliSense case
+
+A session-local variant (not committed) added a `//compete` marker. On the line after it, our source returns the
+insertion `/*pillion*/` at the caret for every request, passing through the `CompletionState` when there is one. The
+variant also added a second source provider with **no `[Order]`**, active only while `%TEMP%\ProposalsSpike.noorder`
+exists (the ordered one then returns null). Places where IntelliCode reliably proposes were found first with our source
+returning null: after typing `Conso` (completion list open on `Console`, IntelliCode proposes `.WriteLine(`), and after
+`var s ` (no list, IntelliCode proposes `= Console.ReadLine();`). Logs are `log-02-manual.txt` and `log-03-compete.txt`.
+
+* **IntelliCode shows its own proposals when our source returns nothing.** In the `//isense` run and on plain lines:
+  `ProposalDisplayed ... ours=False id=<guid>:0 type=ProposalAndPrediction flags=SimulateBraceCompletion edits=[...".WriteLine("]`.
+  Our source is still called whenever any manager says yes, including on lines without our markers (IntelliCode's
+  manager says yes there), so it must return null cheaply.
+* **Ours takes the slot when we return a proposal.** At `var s `, ours (`/*pillion*/`) was displayed and IntelliCode's
+  `= Console.ReadLine();` never appeared (`ordered-vars.png`). At `Conso` with the list open, ours was displayed instead
+  of `.WriteLine(` (`compete-conso.png`).
+* **But the broker keeps the other sources' proposals as fallbacks.** In a second `Conso` run, IntelliCode had also
+  answered the earlier `Return` request with `Console.WriteLine(` at the line start. When our proposal diverged on the
+  first typed character (`ProposalRejected reason=DivergedAfterTypeChar ours=True`), the broker displayed IntelliCode's
+  queued proposal 8 ms later (`ProposalDisplayed ... ours=False id=...:1`) **without asking our source again**. While
+  that proposal stayed valid as the user typed `onso`, neither our manager nor our source was called. Ordering
+  decides who is shown first, not who owns the line. This also explains the original `//isense` row: once IntelliCode's
+  `.WriteLine(` is displayed and still matches, no source is asked, so no request arrives with `WriteLine` selected.
+* **Ordering made no visible difference here.** With the unordered provider active, the same two tests gave the same
+  result: ours displayed at `var s ` and first at `Conso`, then IntelliCode's fallback after divergence. Our source
+  answers synchronously while IntelliCode's runs a model, so being first to answer may matter as much as `[Order]`. Not
+  settled.
+* **IntelliSense-coupled proposals work on 17.14.** With the list open on `Console` and the `CompletionState` passed
+  through, `ProposalDisplayed ... ours=True id=spike:compete-cs:...` showed `Conso` + `le` (the item remainder, italic) +
+  ghost `/*pillion*/` (`compete-conso.png`). The first Tab committed `Console` and left the ghost text in place. The
+  second Tab gave `SuggestionAccepted reason=AcceptedByCommand` and the line `Console/*pillion*/`. That was with
+  `ProposalFlags.None`; `SingleTabToAccept` (one Tab for both) was not tested. This is the 18.10 Caveat 1 shape that was
+  never displayed there, so it should be retested on 18.10 with the same variant.
+* **IntelliCode's option switches off our ghost text too.** With *Automatically generate code completions in the
+  Editor* unchecked in Tools > Options > IntelliCode > General, typing `//ml` produced **no manager call, no request and
+  no ghost text**. IntelliCode's own proposal at `Conso` disappeared as well (`t2off-ml.png`). Turning the option back on
+  restored both immediately (`t3on-*`; log `log-04-intellicode-option.txt`). So on 17.14, a user who turns off
+  IntelliCode's completions also turns off Pillion's ghost text, and nothing tells our extension.
+
+### Comparison with 18.10
+
+| | 18.10 (platform broker, Copilot active) | 17.14.41 with IntelliCode (IntelliCode broker, no Copilot) |
+|---|---|---|
+| Broker / suggestion service | platform, `Microsoft.VisualStudio.Editor.Implementation.dll` | IntelliCode 2.2.3078.1097, `Microsoft.VisualStudio.IntelliCode.dll`; **absent** without IntelliCode |
+| Provider name in events | `IntelliCodeLineCompletions` | same |
+| Multi-line, text right of caret, after indentation, Tab, Esc | work | work |
+| Replacement away from caret | diff preview | diff preview |
+| Virtual space, padded text | padding stripped, correct indent | padding **kept**, indent doubled |
+| Virtual space, unpadded | correct | correct |
+| Rendering | italic, syntax-coloured | flat grey |
+| Alt+. cycling between two proposals in one collection | works | **does not** |
+| IntelliSense-coupled proposal | not displayed (only shape tried: continuation with `SingleTabToAccept`) | displayed (insertion at caret with the `CompletionState`, `ProposalFlags.None`), two Tabs |
+| Other provider's proposals when ours returns null | Copilot and NES | IntelliCode whole-line |
+| Ours vs the other provider when both have one | ours shown (`[Order(Before = ...)]`) | ours shown first; the other's queued proposal takes over after ours diverges |
+| Another product's setting switches ours off | not seen | **yes**: IntelliCode's *Automatically generate code completions in the Editor* |
+
+### Final verdict (both versions)
+
+* **VS 2026 18.10: viable**, unchanged, with the caveats in the first verdict. Those are API drift, and IntelliSense-coupled
+  proposals, which still need a retest with the shape that worked on 17.14.
+* **VS 2022 17.14.41: viable only with IntelliCode present**, and only while IntelliCode's *Automatically generate
+  code completions in the Editor* option is on. IntelliCode comes with the .NET desktop and other .NET workloads. With it,
+  every core behaviour works through the same MEF export: multi-line, text to the right of the caret, virtual space
+  (unpadded text), after indentation, Tab, Esc, and IntelliSense-coupled proposals. Without it (core editor only), the
+  provider is never created. **Gate criterion "Proposals API spike green on VS 2022 17.14 and VS 2026 18.x": Pass, on
+  condition that IntelliCode is a 17.x requirement.**
+* Differences to design for on 17.14: never pad virtual-space proposals; do not rely on next/previous cycling; expect grey
+  rather than classified rendering; expect IntelliCode's proposals to take over when ours diverges.
+* Product decision needed. The options are: make IntelliCode (with its automatic completions on) a stated requirement for
+  ghost text on Visual Studio 2022, build the adornment fallback for 17.x, or ship ghost text on 18.x only. Whichever is
+  chosen, detect the problem at run time on 17.x and say so in the status bar instead of failing silently. The cases are:
+  `SuggestionServiceBase` cannot be imported (no IntelliCode), or the source gets no request within a few seconds of a
+  document view (IntelliCode's option off). A VSIX prerequisite on `Microsoft.VisualStudio.Component.IntelliCode` would
+  block installation on core-editor-only installs, including on 18.x where it is not needed, so a run-time check fits
+  better.
+
+### Still unknown
+
+1. Why Alt+. / `Edit.NextSuggestion` does not cycle to the second proposal in our collection on 17.14. It may cycle only
+   across sources, or only through IntelliCode's own proposals.
+2. Whether `[Order]` or response time decides which source is displayed first. A slow source (a real model) may lose to
+   IntelliCode's on 17.14 and to Copilot's on 18.x.
+3. Whether a source can stop the broker from falling back to another source's queued proposal after ours diverges.
+4. Behaviour with GitHub Copilot installed on 17.14. Copilot for 17.x ships its own completions source; it is not
+   installed here.
+5. Whether the IntelliSense-coupled shape that worked here also works on 18.10, and whether `SingleTabToAccept` makes it
+   a single Tab.
+6. Other 17.x minor versions. IntelliCode is updated separately, so its broker can change without a Visual Studio update.
+
+Automation note: the unexplained "Save changes?" prompt in the 18.10 session (see Limitations and gotchas) is probably
+self-inflicted. `Focus-Exp` taps Alt to release the foreground lock, which can leave the menu bar in keyboard mode. The
+next Enter then opens the File menu, and a typed `t` picks **Close Solu&tion**. It happened once in this session when
+`Focus-Exp` was called explicitly before typing `//two`, and was cancelled with Esc. Clicking into the editor after
+`Focus-Exp` (as `Run-Scenarios.ps1` does) avoids it.
