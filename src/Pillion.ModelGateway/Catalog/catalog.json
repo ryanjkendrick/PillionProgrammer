@@ -1,12 +1,21 @@
 {
   "version": 1,
-  "comment": "The model catalog (design section 6): data, not code. 'profiles' maps each profile to a default model id per provider kind; routing.profiles in settings overrides it. 'families' lists capability descriptors for known model families, matched in order against the model id (case-insensitive, '*' is a wildcard); the last entry must be the '*' default. Providers that report capabilities themselves (Ollama's /api/show) override the chat, fim, vision, tools and embeddings flags and the context window.",
+  "comment": "The model catalog (design section 6): data, not code. 'profiles' maps each profile to a default model id per provider kind; routing.profiles in settings overrides it. 'families' lists capability descriptors for known model families, matched in order against the model id (case-insensitive, '*' is a wildcard); the last entry must be the '*' default. Providers that report capabilities themselves (Ollama's /api/show) override the chat, fim, vision, tools and embeddings flags and the context window; the OpenAI-compatible adapter reads only the context window, when /models reports one. The openai and openai-compatible defaults are OpenAI model ids taken from the OpenAI model list in October 2026 and are only defaults: set routing.profiles (bare id or provider/model) for a gateway with different ids, such as OpenRouter's openai/... names. The context windows of the gpt-6 family are conservative placeholders. Costs are left at 0 (unknown) until the cost governor ships.",
   "profiles": {
     "ollama": {
       "LocalFast": "qwen2.5-coder:1.5b",
       "LocalStrong": "qwen2.5-coder:14b"
     },
-    "openai-compatible": {}
+    "openai": {
+      "Fast": "gpt-6-luna",
+      "Balanced": "gpt-6.1-sol",
+      "Frontier": "gpt-6-astra"
+    },
+    "openai-compatible": {
+      "Fast": "gpt-6-luna",
+      "Balanced": "gpt-6.1-sol",
+      "Frontier": "gpt-6-astra"
+    }
   },
   "families": [
     {
@@ -104,6 +113,190 @@
       "chat": true,
       "vision": false,
       "toolCalling": "none"
+    },
+    {
+      "match": "text-embedding-*",
+      "contextWindow": 8192,
+      "maxOutputTokens": 0,
+      "chat": false,
+      "embeddings": true,
+      "toolCalling": "none"
+    },
+    {
+      "match": "*embed*",
+      "contextWindow": 8192,
+      "maxOutputTokens": 0,
+      "chat": false,
+      "embeddings": true,
+      "toolCalling": "none"
+    },
+    {
+      "match": "whisper*",
+      "contextWindow": 4096,
+      "maxOutputTokens": 0,
+      "chat": false,
+      "streaming": false,
+      "toolCalling": "none"
+    },
+    {
+      "match": "*transcribe*",
+      "contextWindow": 4096,
+      "maxOutputTokens": 0,
+      "chat": false,
+      "streaming": false,
+      "toolCalling": "none"
+    },
+    {
+      "match": "*tts*",
+      "contextWindow": 4096,
+      "maxOutputTokens": 0,
+      "chat": false,
+      "streaming": false,
+      "toolCalling": "none"
+    },
+    {
+      "match": "dall-e*",
+      "contextWindow": 4096,
+      "maxOutputTokens": 0,
+      "chat": false,
+      "streaming": false,
+      "toolCalling": "none"
+    },
+    {
+      "match": "gpt-image*",
+      "contextWindow": 4096,
+      "maxOutputTokens": 0,
+      "chat": false,
+      "streaming": false,
+      "toolCalling": "none"
+    },
+    {
+      "match": "gpt-realtime*",
+      "contextWindow": 32768,
+      "maxOutputTokens": 4096,
+      "chat": false,
+      "streaming": false,
+      "toolCalling": "none"
+    },
+    {
+      "match": "*moderation*",
+      "contextWindow": 32768,
+      "maxOutputTokens": 0,
+      "chat": false,
+      "streaming": false,
+      "toolCalling": "none"
+    },
+    {
+      "match": "gpt-6*",
+      "contextWindow": 200000,
+      "maxOutputTokens": 32768,
+      "chat": true,
+      "vision": true,
+      "promptCaching": true,
+      "toolCalling": "native"
+    },
+    {
+      "match": "gpt-5*",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "chat": true,
+      "vision": true,
+      "promptCaching": true,
+      "toolCalling": "native"
+    },
+    {
+      "match": "gpt-4.1*",
+      "contextWindow": 1047576,
+      "maxOutputTokens": 32768,
+      "chat": true,
+      "vision": true,
+      "promptCaching": true,
+      "toolCalling": "native"
+    },
+    {
+      "match": "gpt-4o*",
+      "contextWindow": 128000,
+      "maxOutputTokens": 16384,
+      "chat": true,
+      "vision": true,
+      "promptCaching": true,
+      "toolCalling": "native"
+    },
+    {
+      "match": "o1*",
+      "contextWindow": 200000,
+      "maxOutputTokens": 100000,
+      "chat": true,
+      "vision": true,
+      "toolCalling": "native"
+    },
+    {
+      "match": "o3*",
+      "contextWindow": 200000,
+      "maxOutputTokens": 100000,
+      "chat": true,
+      "vision": true,
+      "toolCalling": "native"
+    },
+    {
+      "match": "o4*",
+      "contextWindow": 200000,
+      "maxOutputTokens": 100000,
+      "chat": true,
+      "vision": true,
+      "toolCalling": "native"
+    },
+    {
+      "match": "claude*",
+      "contextWindow": 200000,
+      "maxOutputTokens": 32768,
+      "chat": true,
+      "vision": true,
+      "promptCaching": true,
+      "toolCalling": "native"
+    },
+    {
+      "match": "gemini*",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "chat": true,
+      "vision": true,
+      "toolCalling": "native"
+    },
+    {
+      "match": "deepseek*",
+      "contextWindow": 131072,
+      "maxOutputTokens": 8192,
+      "chat": true,
+      "toolCalling": "native"
+    },
+    {
+      "match": "*llama-3*",
+      "contextWindow": 131072,
+      "maxOutputTokens": 8192,
+      "chat": true,
+      "toolCalling": "native"
+    },
+    {
+      "match": "*llama3*",
+      "contextWindow": 131072,
+      "maxOutputTokens": 8192,
+      "chat": true,
+      "toolCalling": "native"
+    },
+    {
+      "match": "codestral*",
+      "contextWindow": 262144,
+      "maxOutputTokens": 8192,
+      "chat": true,
+      "toolCalling": "native"
+    },
+    {
+      "match": "mistral*",
+      "contextWindow": 131072,
+      "maxOutputTokens": 8192,
+      "chat": true,
+      "toolCalling": "native"
     },
     {
       "match": "*",
