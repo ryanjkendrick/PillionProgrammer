@@ -81,6 +81,17 @@ public sealed class HostSupervisorTests : IDisposable
 
         first.Crash();
         await Wait.UntilAsync(() => _supervisor.Connectivity is null, "connectivity forgotten with the session");
+
+        // The property is cleared just before the event is raised; wait for the event itself.
+        await Wait.UntilAsync(
+            () =>
+            {
+                lock (reported)
+                {
+                    return reported.Count >= 3;
+                }
+            },
+            "connectivity change reported when the session ended");
         lock (reported)
         {
             Assert.Equal(

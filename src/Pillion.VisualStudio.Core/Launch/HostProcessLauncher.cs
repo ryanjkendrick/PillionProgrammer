@@ -353,7 +353,24 @@ public sealed class HostProcessLauncher : IHostLauncher
         }
     }
 
-    internal static void VerifyServer(NamedPipeClientStream client, int expectedProcessId)
+    internal static void VerifyServer(NamedPipeClientStream client, int expectedProcessId) =>
+        VerifyServer(client, expectedProcessId, PipeIdentity.Current, ReadPipeOwner);
+
+    /// <summary>
+    /// Checks that the pipe is served by the process that was started and is owned by this user. The owner is
+    /// accepted when it is the user SID or the token owner SID: an elevated token (Visual Studio run as administrator,
+    /// or an elevated build agent) owns the objects it creates as <c>BUILTIN\Administrators</c>, not as the user.
+    /// Any other owner is refused.
+    /// </summary>
+    /// <param name="client">The connected client end of the pipe.</param>
+    /// <param name="expectedProcessId">The id of the process that was started.</param>
+    /// <param name="identity">The identity of the current process (tests pass a fake).</param>
+    /// <param name="readOwner">Reads the owner SID of the pipe (tests pass a fake).</param>
+    internal static void VerifyServer(
+        NamedPipeClientStream client,
+        int expectedProcessId,
+        IPipeIdentity identity,
+        Func<NamedPipeClientStream, SecurityIdentifier?> readOwner)
     {
         if (!NativeMethods.GetNamedPipeServerProcessId(client.SafePipeHandle, out var serverProcessId))
         {
@@ -366,11 +383,14 @@ public sealed class HostProcessLauncher : IHostLauncher
                 "Pillion Host's pipe is served by process " + serverProcessId + ", not by the host that was started (" + expectedProcessId + "). Disconnected without sending the handshake.");
         }
 
-        using var identity = WindowsIdentity.GetCurrent();
-        var owner = client.GetAccessControl().GetOwner(typeof(SecurityIdentifier));
-        if (identity.User is null || !identity.User.Equals(owner))
+        var owner = readOwner(client);
+        if (!PipeIdentity.IsTrustedOwner(owner, identity))
         {
-            throw new HostLaunchException("Pillion Host's pipe is owned by another user. Disconnected without sending the handshake.");
+            throw new HostLaunchException(
+                "Pillion Host's pipe is owned by another user (" + (owner?.Value ?? "unknown") + "). Disconnected without sending the handshake.");
         }
     }
+
+    private static SecurityIdentifier? ReadPipeOwner(NamedPipeClientStream client) =>
+        client.GetAccessControl().GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier;
 }
