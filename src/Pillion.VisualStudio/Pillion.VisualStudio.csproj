@@ -13,6 +13,8 @@
     <TargetFramework>net48</TargetFramework>
     <RootNamespace>Pillion.VisualStudio</RootNamespace>
     <AssemblyName>Pillion.VisualStudio</AssemblyName>
+    <!-- The chat tool window and the Options pages are WPF (views only; their view models are in Pillion.VisualStudio.Core). -->
+    <UseWPF>true</UseWPF>
 
     <!-- VSIX packaging. -->
     <GeneratePkgDefFile>true</GeneratePkgDefFile>

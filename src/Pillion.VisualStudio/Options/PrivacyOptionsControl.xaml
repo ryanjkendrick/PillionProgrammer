@@ -1,0 +1,65 @@
+<UserControl x:Class="Pillion.VisualStudio.Options.PrivacyOptionsControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:ClassModifier="internal"
+             xmlns:core="clr-namespace:Pillion.VisualStudio.Core;assembly=Pillion.VisualStudio.Core"
+             xmlns:vsshell="clr-namespace:Microsoft.VisualStudio.Shell;assembly=Microsoft.VisualStudio.Shell.15.0"
+             Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"
+             Foreground="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"
+             FontFamily="{DynamicResource {x:Static vsshell:VsFonts.EnvironmentFontFamilyKey}}"
+             FontSize="{DynamicResource {x:Static vsshell:VsFonts.EnvironmentFontSizeKey}}"
+             AutomationProperties.Name="Pillion Programmer privacy">
+
+    <UserControl.Resources>
+        <Style x:Key="Note" TargetType="TextBlock">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="20,0,0,8" />
+            <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
+        </Style>
+    </UserControl.Resources>
+
+    <DockPanel Margin="4">
+        <TextBlock DockPanel.Dock="Top"
+                   Text="{Binding StatusMessage}"
+                   FontWeight="SemiBold"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,6"
+                   AutomationProperties.Name="{Binding StatusMessage, StringFormat='Status: {0}'}"
+                   AutomationProperties.LiveSetting="Polite" />
+
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,8,0,0">
+            <Button Content="Save" Command="{Binding SaveCommand}" MinWidth="75" AutomationProperties.Name="Save privacy settings" />
+            <Button Content="Reload" Command="{Binding ReloadCommand}" MinWidth="75" Margin="6,0,0,0" AutomationProperties.Name="Reload privacy settings" />
+        </StackPanel>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Focusable="False">
+            <StackPanel IsEnabled="{Binding IsLoaded}">
+                <CheckBox Content="_Local-only mode"
+                          IsChecked="{Binding LocalOnly}"
+                          FontWeight="SemiBold"
+                          AutomationProperties.Name="Local-only mode"
+                          AutomationProperties.HelpText="{Binding LocalOnlyText}" />
+                <TextBlock Text="{Binding LocalOnlyText}" Style="{StaticResource Note}" />
+
+                <TextBlock Text="Cloud use per task class" FontWeight="SemiBold" Margin="0,8,0,2" />
+                <TextBlock Text="Which kinds of work may be sent to a cloud model. Local-only mode overrides all of these."
+                           TextWrapping="Wrap" Margin="0,0,0,6" />
+
+                <ItemsControl ItemsSource="{Binding CloudSwitches}" Focusable="False" AutomationProperties.Name="Cloud switches">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="{x:Type core:CloudSwitchViewModel}">
+                            <StackPanel>
+                                <CheckBox Content="{Binding Label}"
+                                          IsChecked="{Binding IsOn}"
+                                          IsEnabled="{Binding IsEnabled}"
+                                          AutomationProperties.Name="{Binding Label, StringFormat='{}{0} may use cloud models'}"
+                                          AutomationProperties.HelpText="{Binding Description}" />
+                                <TextBlock Text="{Binding Description}" Style="{StaticResource Note}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</UserControl>

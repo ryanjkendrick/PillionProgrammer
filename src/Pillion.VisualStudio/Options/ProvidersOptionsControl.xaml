@@ -1,0 +1,140 @@
+<UserControl x:Class="Pillion.VisualStudio.Options.ProvidersOptionsControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:ClassModifier="internal"
+             xmlns:vsshell="clr-namespace:Microsoft.VisualStudio.Shell;assembly=Microsoft.VisualStudio.Shell.15.0"
+             Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"
+             Foreground="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"
+             FontFamily="{DynamicResource {x:Static vsshell:VsFonts.EnvironmentFontFamilyKey}}"
+             FontSize="{DynamicResource {x:Static vsshell:VsFonts.EnvironmentFontSizeKey}}"
+             AutomationProperties.Name="Pillion Programmer providers and keys">
+
+    <!--
+      The legacy Tools > Options dialog is not themed the same way in every Visual Studio version (light in 18.x), so the
+      Options pages use Windows system colours with their own background: readable in any dialog theme and correct in
+      the high-contrast themes.
+
+      A view over the host's settings: loads when the page is shown, shows "Host not ready" while Pillion Host is not
+      Ready. API keys go to the Windows Credential Manager (PillionProgrammer/<provider id>) when the page is saved;
+      they are never written to settings.json, and the page only ever checks whether a key is stored.
+    -->
+    <UserControl.Resources>
+        <Style TargetType="Label">
+            <Setter Property="Padding" Value="0,6,8,2" />
+            <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}" />
+        </Style>
+        <Style x:Key="Note" TargetType="TextBlock">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="0,2,0,0" />
+            <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
+        </Style>
+    </UserControl.Resources>
+
+    <DockPanel Margin="4">
+        <TextBlock DockPanel.Dock="Top"
+                   Text="Model providers Pillion may use. Keys are stored in the Windows Credential Manager, never in settings files."
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,6" />
+
+        <TextBlock DockPanel.Dock="Top"
+                   Text="{Binding StatusMessage}"
+                   FontWeight="SemiBold"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,6"
+                   AutomationProperties.Name="{Binding StatusMessage, StringFormat='Status: {0}'}"
+                   AutomationProperties.LiveSetting="Polite" />
+
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,8,0,0">
+            <Button Content="Save" Command="{Binding SaveCommand}" MinWidth="75" AutomationProperties.Name="Save providers" />
+            <Button Content="Reload" Command="{Binding ReloadCommand}" MinWidth="75" Margin="6,0,0,0" AutomationProperties.Name="Reload providers" />
+        </StackPanel>
+
+        <Grid IsEnabled="{Binding IsLoaded}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="180" />
+                <ColumnDefinition Width="12" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <DockPanel Grid.Column="0">
+                <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,6,0,0">
+                    <Button Content="Add" Command="{Binding AddCommand}" MinWidth="60" AutomationProperties.Name="Add provider" />
+                    <Button Content="Remove" Command="{Binding RemoveCommand}" MinWidth="60" Margin="6,0,0,0"
+                            AutomationProperties.Name="Remove provider" ToolTip="Removes the provider; its key is deleted when you save" />
+                </StackPanel>
+                <ListBox x:Name="ProviderList"
+                         ItemsSource="{Binding Providers}"
+                         SelectedItem="{Binding SelectedProvider, Mode=TwoWay}"
+                         DisplayMemberPath="Title"
+                         MinHeight="160"
+                         AutomationProperties.Name="Providers">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                </ListBox>
+            </DockPanel>
+
+            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto" Focusable="False">
+                <StackPanel DataContext="{Binding SelectedProvider}" IsEnabled="{Binding DataContext.HasSelection, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                    <Label Content="_Id:" Target="{Binding ElementName=IdBox}" />
+                    <TextBox x:Name="IdBox" Text="{Binding Id, UpdateSourceTrigger=PropertyChanged}"
+                             AutomationProperties.Name="Provider id"
+                             AutomationProperties.HelpText="Also the name of the provider's key in the Credential Manager. Fixed once saved.">
+                        <TextBox.Style>
+                            <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+                                <Setter Property="IsReadOnly" Value="True" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsNew}" Value="True">
+                                        <Setter Property="IsReadOnly" Value="False" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBox.Style>
+                    </TextBox>
+
+                    <Label Content="_Kind:" Target="{Binding ElementName=KindBox}" />
+                    <ComboBox x:Name="KindBox"
+                              ItemsSource="{Binding DataContext.Kinds, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                              SelectedItem="{Binding Kind}"
+                              AutomationProperties.Name="Provider kind" />
+
+                    <Label Content="_Display name:" Target="{Binding ElementName=NameBox}" />
+                    <TextBox x:Name="NameBox" Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Display name" />
+
+                    <Label Content="_Endpoint:" Target="{Binding ElementName=EndpointBox}" />
+                    <TextBox x:Name="EndpointBox" Text="{Binding Endpoint, UpdateSourceTrigger=PropertyChanged}"
+                             AutomationProperties.Name="Endpoint"
+                             AutomationProperties.HelpText="The provider's URL; leave empty for the provider's default." />
+
+                    <Label Content="_Model ids (one per line):" Target="{Binding ElementName=ModelsBox}" />
+                    <TextBox x:Name="ModelsBox" Text="{Binding ModelsText, UpdateSourceTrigger=PropertyChanged}"
+                             AcceptsReturn="True" TextWrapping="NoWrap" Height="70" VerticalScrollBarVisibility="Auto"
+                             AutomationProperties.Name="Model ids, one per line" />
+
+                    <CheckBox Content="E_nabled" IsChecked="{Binding Enabled}" Margin="0,8,0,0" AutomationProperties.Name="Provider enabled" />
+
+                    <Label Content="_API key:" Target="{Binding ElementName=KeyBox}" />
+                    <PasswordBox x:Name="KeyBox"
+                                 PasswordChanged="OnKeyChanged"
+                                 AutomationProperties.Name="API key"
+                                 AutomationProperties.HelpText="Stored in the Windows Credential Manager when you save. Leave empty to keep the stored key." />
+                    <TextBlock Text="{Binding KeyStatusText}" Style="{StaticResource Note}"
+                               AutomationProperties.Name="{Binding KeyStatusText, StringFormat='Key status: {0}'}"
+                               AutomationProperties.LiveSetting="Polite" />
+
+                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                        <Button Content="_Test connection"
+                                Command="{Binding DataContext.TestCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                MinWidth="110"
+                                AutomationProperties.Name="Test connection" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding TestResult}" Style="{StaticResource Note}"
+                               AutomationProperties.Name="{Binding TestResult, StringFormat='Test result: {0}'}"
+                               AutomationProperties.LiveSetting="Polite" />
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </DockPanel>
+</UserControl>
