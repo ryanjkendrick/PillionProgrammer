@@ -21,6 +21,21 @@
     <ProjectReference Include="..\Pillion.FakeHost\Pillion.FakeHost.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" GlobalPropertiesToRemove="TargetFramework" />
   </ItemGroup>
 
+  <!--
+    The chat window's Markdown renderer lives in the VSIX, which dotnet cannot build, but these files have no Visual Studio
+    dependency: they are compiled into this assembly too so the block-to-element mapping, the incremental updates and the
+    virtualised transcript can be tested on a WPF thread.
+  -->
+  <ItemGroup>
+    <Compile Include="..\..\src\Pillion.VisualStudio\ToolWindows\Markdown\MarkdownRenderContext.cs" Link="Linked\MarkdownRenderContext.cs" />
+    <Compile Include="..\..\src\Pillion.VisualStudio\ToolWindows\Markdown\MarkdownBlockRenderer.cs" Link="Linked\MarkdownBlockRenderer.cs" />
+    <Compile Include="..\..\src\Pillion.VisualStudio\ToolWindows\Markdown\MarkdownMessageView.cs" Link="Linked\MarkdownMessageView.cs" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="System.Xaml" />
+  </ItemGroup>
+
   <ItemGroup>
     <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
       <_Parameter1>FakeHostPath</_Parameter1>

@@ -1,5 +1,5 @@
-using System.Collections.Generic;
 using System.Windows.Input;
+using Pillion.VisualStudio.Core.Markdown;
 
 namespace Pillion.VisualStudio.Core;
 
@@ -36,7 +36,7 @@ public enum ChatTurnState
 public sealed class ChatTurnViewModel : ObservableObject
 {
     private string _text = string.Empty;
-    private IReadOnlyList<ChatSegment> _segments = [];
+    private MarkdownMessage? _markdown;
     private ChatTurnState _state;
     private string? _errorMessage;
     private string? _errorHint;
@@ -85,18 +85,18 @@ public sealed class ChatTurnViewModel : ObservableObject
         {
             if (SetProperty(ref _text, value))
             {
-                Segments = ChatTextSegmenter.Split(value);
+                _markdown = null;
+                OnPropertyChanged(nameof(Markdown));
                 OnPropertyChanged(nameof(AutomationName));
             }
         }
     }
 
-    /// <summary>Gets the text split into prose and code blocks for display.</summary>
-    public IReadOnlyList<ChatSegment> Segments
-    {
-        get => _segments;
-        private set => SetProperty(ref _segments, value);
-    }
+    /// <summary>
+    /// Gets the text parsed as Markdown, for display. Parsed when first read after the text changed, so a streaming reply
+    /// is parsed at most once per batch of chunks the view model pushes (every 50 ms), and only while a view shows it.
+    /// </summary>
+    public MarkdownMessage Markdown => _markdown ??= ChatMarkdownParser.Parse(_text);
 
     /// <summary>Gets the turn's state.</summary>
     public ChatTurnState State

@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <!-- The chat window's strings (src/Pillion.VisualStudio.Core/Chat/ChatStrings.cs). Each comment says where the string appears and what its placeholders are. -->
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <data name="ConversationLabel" xml:space="preserve">
+    <value>_Conversation:</value>
+    <comment>Label of the conversation list; the underscore marks the access key.</comment>
+  </data>
+  <data name="ConversationListName" xml:space="preserve">
+    <value>Conversation</value>
+    <comment>Screen-reader name of the conversation list.</comment>
+  </data>
+  <data name="NewConversationTitle" xml:space="preserve">
+    <value>New conversation</value>
+    <comment>Title of a conversation before its first message.</comment>
+  </data>
+  <data name="NewConversationButton" xml:space="preserve">
+    <value>New</value>
+    <comment>Button that starts a new conversation.</comment>
+  </data>
+  <data name="NewConversationName" xml:space="preserve">
+    <value>New conversation</value>
+    <comment>Screen-reader name of the New button.</comment>
+  </data>
+  <data name="NewConversationToolTip" xml:space="preserve">
+    <value>Start a new conversation; this one stays in the list until Visual Studio closes</value>
+    <comment>Tooltip of the New button.</comment>
+  </data>
+  <data name="RenameConversationButton" xml:space="preserve">
+    <value>Rename</value>
+    <comment>Button that renames the conversation.</comment>
+  </data>
+  <data name="RenameConversationName" xml:space="preserve">
+    <value>Rename conversation</value>
+    <comment>Screen-reader name of the Rename button.</comment>
+  </data>
+  <data name="RenameConversationToolTip" xml:space="preserve">
+    <value>Rename this conversation</value>
+    <comment>Tooltip of the Rename button.</comment>
+  </data>
+  <data name="RenameBoxName" xml:space="preserve">
+    <value>Conversation name</value>
+    <comment>Screen-reader name of the box that edits the conversation name.</comment>
+  </data>
+  <data name="RenameBoxHelp" xml:space="preserve">
+    <value>Type a name. Enter saves it; Esc cancels.</value>
+    <comment>Help text of the rename box.</comment>
+  </data>
+  <data name="DeleteConversationButton" xml:space="preserve">
+    <value>Delete</value>
+    <comment>Button that deletes the conversation.</comment>
+  </data>
+  <data name="DeleteConversationName" xml:space="preserve">
+    <value>Delete conversation</value>
+    <comment>Screen-reader name of the Delete button.</comment>
+  </data>
+  <data name="DeleteConversationToolTip" xml:space="preserve">
+    <value>Delete this conversation</value>
+    <comment>Tooltip of the Delete button.</comment>
+  </data>
+  <data name="DeleteConversationConfirmFormat" xml:space="preserve">
+    <value>Delete the conversation &quot;{0}&quot;? It cannot be restored.</value>
+    <comment>Delete confirmation. {0} is the conversation title.</comment>
+  </data>
+  <data name="ConversationItemNameFormat" xml:space="preserve">
+    <value>{0}, {1} messages</value>
+    <comment>Screen-reader name of a conversation in the list. {0} is its title, {1} the number of messages.</comment>
+  </data>
+  <data name="PlainTextLanguage" xml:space="preserve">
+    <value>Plain text</value>
+    <comment>Language name of a code block without a known language.</comment>
+  </data>
+  <data name="CodeBlockNameFormat" xml:space="preserve">
+    <value>{0} code block</value>
+    <comment>Tooltip and screen-reader name of a code block. {0} is the language, for example C#.</comment>
+  </data>
+  <data name="CopyCodeButton" xml:space="preserve">
+    <value>Copy</value>
+    <comment>Button that copies a code block.</comment>
+  </data>
+  <data name="CopyCodeNameFormat" xml:space="preserve">
+    <value>Copy {0} code</value>
+    <comment>Screen-reader name of the Copy button. {0} is the language.</comment>
+  </data>
+  <data name="CopyCodeToolTip" xml:space="preserve">
+    <value>Copy the code to the clipboard</value>
+    <comment>Tooltip of the Copy button.</comment>
+  </data>
+  <data name="CodeCopied" xml:space="preserve">
+    <value>Copied.</value>
+    <comment>Note shown after the code was copied.</comment>
+  </data>
+  <data name="CopyFailed" xml:space="preserve">
+    <value>The clipboard is busy; try again.</value>
+    <comment>Note shown when the clipboard could not be written.</comment>
+  </data>
+  <data name="InsertCodeButton" xml:space="preserve">
+    <value>Insert at cursor</value>
+    <comment>Button that inserts a code block into the active document.</comment>
+  </data>
+  <data name="InsertCodeNameFormat" xml:space="preserve">
+    <value>Insert {0} code at cursor</value>
+    <comment>Screen-reader name of the Insert at cursor button. {0} is the language.</comment>
+  </data>
+  <data name="InsertCodeToolTip" xml:space="preserve">
+    <value>Insert the code into the active document at the caret, replacing any selection (one undo step)</value>
+    <comment>Tooltip of the Insert at cursor button.</comment>
+  </data>
+  <data name="CodeInsertedFormat" xml:space="preserve">
+    <value>Inserted into {0}.</value>
+    <comment>Note shown after inserting. {0} is the document file name.</comment>
+  </data>
+  <data name="ActiveDocumentName" xml:space="preserve">
+    <value>the active document</value>
+    <comment>Used in "Inserted into {0}." when the document has no file name.</comment>
+  </data>
+  <data name="InsertNoDocument" xml:space="preserve">
+    <value>Open a document and place the caret where the code should go.</value>
+    <comment>Note shown when there is no document to insert into.</comment>
+  </data>
+  <data name="InsertReadOnly" xml:space="preserve">
+    <value>The active document is read-only.</value>
+    <comment>Note shown when the active document cannot be edited.</comment>
+  </data>
+  <data name="OpenLinkTitle" xml:space="preserve">
+    <value>Open link</value>
+    <comment>Title of the open-link confirmation.</comment>
+  </data>
+  <data name="OpenLinkConfirmFormat" xml:space="preserve">
+    <value>Open this link in your browser?
+
+{0}</value>
+    <comment>Open-link confirmation. {0} is the full address.</comment>
+  </data>
+  <data name="LinkAsciiHostFormat" xml:space="preserve">
+    <value>Host name: {0}</value>
+    <comment>Added to the open-link confirmation when the host name is internationalised. {0} is its ASCII (punycode) form.</comment>
+  </data>
+  <data name="LinkToolTipFormat" xml:space="preserve">
+    <value>{0} (asks before opening)</value>
+    <comment>Tooltip of a link. {0} is the address.</comment>
+  </data>
+  <data name="UnsafeLinkToolTipFormat" xml:space="preserve">
+    <value>Not opened: only http, https and mailto links can be opened ({0})</value>
+    <comment>Tooltip of a link that is never opened. {0} is the address as written.</comment>
+  </data>
+  <data name="ImageAltFormat" xml:space="preserve">
+    <value>[Image: {0}]</value>
+    <comment>Text shown in place of an image, which is never downloaded. {0} is the alt text.</comment>
+  </data>
+  <data name="ImageWithoutAlt" xml:space="preserve">
+    <value>[Image]</value>
+    <comment>Text shown in place of an image without alt text.</comment>
+  </data>
+  <data name="ImageToolTipFormat" xml:space="preserve">
+    <value>Images are not downloaded: {0}</value>
+    <comment>Tooltip of an image placeholder. {0} is the image address.</comment>
+  </data>
+  <data name="HeadingNameFormat" xml:space="preserve">
+    <value>Heading level {0}: {1}</value>
+    <comment>Screen-reader name of a heading. {0} is the level, {1} the text.</comment>
+  </data>
+  <data name="ListNameFormat" xml:space="preserve">
+    <value>List, {0} items</value>
+    <comment>Screen-reader name of a list. {0} is the number of items.</comment>
+  </data>
+  <data name="TableNameFormat" xml:space="preserve">
+    <value>Table, {0} rows, {1} columns</value>
+    <comment>Screen-reader name of a table. {0} is the number of rows, {1} of columns.</comment>
+  </data>
+  <data name="QuoteName" xml:space="preserve">
+    <value>Quote</value>
+    <comment>Screen-reader name of a block quote.</comment>
+  </data>
+  <data name="RuleName" xml:space="preserve">
+    <value>Separator</value>
+    <comment>Screen-reader name of a horizontal rule.</comment>
+  </data>
+  <data name="ReplyContentName" xml:space="preserve">
+    <value>Reply text</value>
+    <comment>Screen-reader name of the rendered content of a reply.</comment>
+  </data>
+</root>

@@ -55,6 +55,20 @@
     <PackageVersion Include="Microsoft.CodeAnalysis.Workspaces.Common" Version="4.8.0" />
   </ItemGroup>
 
+  <!--
+    Chat window Markdown (design section 5): Markdig parses each assistant reply into blocks that the VSIX renders as WPF
+    elements. Licence checked on 2026-10-09: BSD-2-Clause (the package's licenseExpression and its license.txt), not
+    MIT, but a permissive licence compatible with this project's MIT licence; its notice ships in the VSIX as
+    THIRD-PARTY-NOTICES.txt. 1.4.0 is the newest stable release (2026-09-20). Pillion.VisualStudio.Core references it
+    normally, so Markdig.dll is packaged in the VSIX. On .NET Framework it depends on System.Memory 4.6.3 (assembly
+    4.0.5.0), which Visual Studio 2022 17.14 and 2026 both ship and redirect to, so Core references System.Memory
+    compile-only and the VSIX does not carry a copy.
+  -->
+  <ItemGroup>
+    <PackageVersion Include="Markdig" Version="1.4.0" />
+    <PackageVersion Include="System.Memory" Version="4.6.3" />
+  </ItemGroup>
+
   <!-- Host. The abstractions packages are pinned to the same version as the hosting package that depends on them. -->
   <ItemGroup>
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.12" />

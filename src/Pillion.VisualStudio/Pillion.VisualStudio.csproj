@@ -34,6 +34,9 @@
     <PackageReference Include="Microsoft.VSSDK.BuildTools" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers; buildtransitive" />
     <!-- Roslyn for the enclosing-declaration lookup; Visual Studio supplies it at run time. -->
     <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.Common" ExcludeAssets="runtime" PrivateAssets="all" />
+    <!-- Markdig (through Pillion.VisualStudio.Core) is built against System.Memory 4.6.3 (assembly 4.0.5.0), newer than the
+         SDK graph's 4.6.0; both Visual Studio versions ship 4.0.5.0, so this lifts the compile-time reference only. -->
+    <PackageReference Include="System.Memory" ExcludeAssets="runtime" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
@@ -58,6 +61,8 @@
       <ManifestResourceName>VSPackage</ManifestResourceName>
     </EmbeddedResource>
     <Content Include="..\..\LICENSE" Link="LICENSE.txt" TargetPath="LICENSE.txt" IncludeInVSIX="true" />
+    <!-- Notices of the third-party libraries packaged in the VSIX (Markdig's BSD 2-Clause licence asks for its notice). -->
+    <Content Include="..\..\THIRD-PARTY-NOTICES.txt" Link="THIRD-PARTY-NOTICES.txt" TargetPath="THIRD-PARTY-NOTICES.txt" IncludeInVSIX="true" />
   </ItemGroup>
 
   <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />

@@ -32,11 +32,18 @@ public sealed class ChatViewModelOptions
     /// <see cref="ChatAvailability.DisabledMessage"/> and nothing can be sent. <see langword="null"/> means always available.
     /// </summary>
     public ChatAvailability? Availability { get; set; }
+
+    /// <summary>
+    /// Gets or sets the confirmation asked before a conversation with messages is deleted (<see langword="true"/> deletes).
+    /// <see langword="null"/> deletes without asking.
+    /// </summary>
+    public Func<ChatConversation, bool>? ConfirmDelete { get; set; }
 }
 
 /// <summary>
-/// The Pillion Chat tool window's view model: model picker, transcript, input, Send and Stop, Clear, Retry and the host
-/// status line. Driven by <see cref="IHostConnection"/>; has no Visual Studio dependencies.
+/// The Pillion Chat tool window's view model: the conversation list (New, Rename, Delete, Switch; in memory for the
+/// session), model picker, transcript, input, Send and Stop, Clear, Retry and the host status line. Driven by
+/// <see cref="IHostConnection"/>; has no Visual Studio dependencies.
 /// </summary>
 /// <remarks>
 /// Threading (design doc section 13): public members and commands are used on the UI thread. Every RPC call is awaited
@@ -71,6 +78,9 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
     private (int RestartAttempt, int MaxRestartAttempts, string? Reason) _lastChange;
     private string _statusText;
     private bool _isChatEnabled = true;
+    private ChatConversation _currentConversation;
+    private bool _isRenaming;
+    private string _renameText = string.Empty;
     private bool _started;
     private bool _disposed;
 
@@ -87,6 +97,7 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         _flushInterval = options?.FlushInterval ?? TimeSpan.FromMilliseconds(50);
         _newRequestId = options?.NewRequestId ?? (() => Guid.NewGuid().ToString("N"));
         _availability = options?.Availability;
+        ConfirmDelete = options?.ConfirmDelete;
         _isChatEnabled = _availability?.IsEnabled ?? true;
         _hostState = connection.State;
         _connectivity = connection.Connectivity;
@@ -98,16 +109,64 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         RetryCommand = new DelegateCommand(p => Run(() => RetryAsync(p as ChatTurnViewModel)), p => CanRetry(p as ChatTurnViewModel));
         RefreshModelsCommand = new DelegateCommand(() => Run(RefreshModelsAsync), () => IsHostUsable);
         OpenLogsCommand = new DelegateCommand(() => _openLogs?.Invoke(), () => _openLogs is not null);
+        NewConversationCommand = new DelegateCommand(NewConversation, () => !_disposed && !CurrentConversation.IsEmpty);
+        RenameConversationCommand = new DelegateCommand(BeginRename, () => !_disposed && !IsRenaming);
+        CommitRenameCommand = new DelegateCommand(CommitRename, () => IsRenaming);
+        CancelRenameCommand = new DelegateCommand(CancelRename, () => IsRenaming);
+        DeleteConversationCommand = new DelegateCommand(() => DeleteConversation(CurrentConversation), () => !_disposed && (Conversations.Count > 1 || !CurrentConversation.IsEmpty));
 
         ModelPicker.SelectionChanged += (_, _) => UpdateCommands();
-        Turns.CollectionChanged += (_, _) => ClearCommand.RaiseCanExecuteChanged();
+        _currentConversation = new ChatConversation();
+        Conversations.Add(_currentConversation);
+        _currentConversation.Turns.CollectionChanged += OnTurnsChanged;
     }
 
     /// <summary>Gets the model picker.</summary>
     public ModelPickerViewModel ModelPicker { get; } = new();
 
-    /// <summary>Gets the transcript, oldest first.</summary>
-    public ObservableCollection<ChatTurnViewModel> Turns { get; } = [];
+    /// <summary>
+    /// Gets or sets the confirmation asked before a conversation with messages is deleted (the window sets it; see
+    /// <see cref="ChatViewModelOptions.ConfirmDelete"/>).
+    /// </summary>
+    public Func<ChatConversation, bool>? ConfirmDelete { get; set; }
+
+    /// <summary>Gets the conversations, newest first. There is always at least one; they last until Visual Studio closes.</summary>
+    public ObservableCollection<ChatConversation> Conversations { get; } = [];
+
+    /// <summary>
+    /// Gets or sets the conversation shown in the transcript. Switching stops a streaming reply (its text so far is kept in
+    /// its conversation). Call on the UI thread.
+    /// </summary>
+    public ChatConversation CurrentConversation
+    {
+        get => _currentConversation;
+        set => SwitchTo(value);
+    }
+
+    /// <summary>Gets the current conversation's transcript, oldest first.</summary>
+    public ObservableCollection<ChatTurnViewModel> Turns => _currentConversation.Turns;
+
+    /// <summary>Gets a value indicating whether the current conversation's name is being edited.</summary>
+    public bool IsRenaming
+    {
+        get => _isRenaming;
+        private set
+        {
+            if (SetProperty(ref _isRenaming, value))
+            {
+                RenameConversationCommand.RaiseCanExecuteChanged();
+                CommitRenameCommand.RaiseCanExecuteChanged();
+                CancelRenameCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>Gets or sets the name being typed while <see cref="IsRenaming"/>.</summary>
+    public string RenameText
+    {
+        get => _renameText;
+        set => SetProperty(ref _renameText, value ?? string.Empty);
+    }
 
     /// <summary>Gets or sets the message being typed.</summary>
     public string InputText
@@ -209,6 +268,21 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
     /// <summary>Gets the Open Logs command.</summary>
     public DelegateCommand OpenLogsCommand { get; }
 
+    /// <summary>Gets the New conversation command (disabled while the current conversation is empty).</summary>
+    public DelegateCommand NewConversationCommand { get; }
+
+    /// <summary>Gets the Rename command: starts editing the current conversation's name.</summary>
+    public DelegateCommand RenameConversationCommand { get; }
+
+    /// <summary>Gets the command that saves the name being edited.</summary>
+    public DelegateCommand CommitRenameCommand { get; }
+
+    /// <summary>Gets the command that stops editing the name without saving it.</summary>
+    public DelegateCommand CancelRenameCommand { get; }
+
+    /// <summary>Gets the Delete conversation command (asks first when the conversation has messages).</summary>
+    public DelegateCommand DeleteConversationCommand { get; }
+
     /// <summary>
     /// Starts following the host state and, once the host is ready, lists the models. Call once, on the UI thread.
     /// </summary>
@@ -273,22 +347,110 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
     /// <summary>Clears the conversation, stopping any streaming reply. Call on the UI thread.</summary>
     public void Clear()
     {
-        InFlight? flight;
-        lock (_gate)
-        {
-            flight = _inFlight;
-            _inFlight = null;
-        }
-
-        if (flight is not null && flight.TryEnd(ChatTurnState.Stopped, cancel: false))
-        {
-            Run(() => CancelOnHostAsync(flight));
-        }
-
+        StopStreamingReply();
         Turns.Clear();
         IsSending = false;
         UpdateCommands();
     }
+
+    /// <summary>Starts a new, empty conversation and shows it (unless the current one is already empty). Call on the UI thread.</summary>
+    public void NewConversation()
+    {
+        if (_disposed || CurrentConversation.IsEmpty)
+        {
+            return;
+        }
+
+        var conversation = new ChatConversation();
+        Conversations.Insert(0, conversation);
+        SwitchTo(conversation);
+    }
+
+    /// <summary>
+    /// Shows another conversation. A streaming reply is stopped first (its text so far stays in its conversation). Call on
+    /// the UI thread.
+    /// </summary>
+    /// <param name="conversation">A conversation from <see cref="Conversations"/>.</param>
+    public void SwitchTo(ChatConversation conversation)
+    {
+        if (conversation is null || ReferenceEquals(conversation, _currentConversation) || !Conversations.Contains(conversation))
+        {
+            return;
+        }
+
+        CancelRename();
+        StopStreamingReply();
+        IsSending = false;
+        _currentConversation.Turns.CollectionChanged -= OnTurnsChanged;
+        _currentConversation = conversation;
+        _currentConversation.Turns.CollectionChanged += OnTurnsChanged;
+        OnPropertyChanged(nameof(CurrentConversation));
+        OnPropertyChanged(nameof(Turns));
+        UpdateRetry();
+        UpdateCommands();
+    }
+
+    /// <summary>
+    /// Deletes a conversation, after <see cref="ChatViewModelOptions.ConfirmDelete"/> when it has messages, and shows its
+    /// neighbour (or a new conversation when it was the last). Call on the UI thread.
+    /// </summary>
+    /// <param name="conversation">The conversation to delete.</param>
+    /// <returns><see langword="true"/> when it was deleted.</returns>
+    public bool DeleteConversation(ChatConversation conversation)
+    {
+        var index = conversation is null ? -1 : Conversations.IndexOf(conversation);
+        if (_disposed || index < 0 || (Conversations.Count == 1 && conversation!.IsEmpty))
+        {
+            return false;
+        }
+
+        if (!conversation!.IsEmpty && ConfirmDelete is { } confirm && !confirm(conversation))
+        {
+            return false;
+        }
+
+        if (ReferenceEquals(conversation, _currentConversation))
+        {
+            if (Conversations.Count == 1)
+            {
+                Conversations.Insert(0, new ChatConversation());
+                index++;
+            }
+
+            SwitchTo(Conversations[index + 1 < Conversations.Count ? index + 1 : index - 1]);
+        }
+
+        Conversations.Remove(conversation);
+        UpdateCommands();
+        return true;
+    }
+
+    /// <summary>Starts editing the current conversation's name. Call on the UI thread.</summary>
+    public void BeginRename()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        RenameText = CurrentConversation.Title;
+        IsRenaming = true;
+    }
+
+    /// <summary>Saves <see cref="RenameText"/> as the current conversation's name (a blank name keeps the old one). Call on the UI thread.</summary>
+    public void CommitRename()
+    {
+        if (!IsRenaming)
+        {
+            return;
+        }
+
+        CurrentConversation.Rename(RenameText);
+        IsRenaming = false;
+    }
+
+    /// <summary>Stops editing the name without saving it. Call on the UI thread.</summary>
+    public void CancelRename() => IsRenaming = false;
 
     /// <summary>Retries a failed or interrupted reply (the last turn). Call on the UI thread.</summary>
     /// <param name="turn">The reply to retry, or <see langword="null"/> for the last turn.</param>
@@ -694,6 +856,29 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         return messages;
     }
 
+    /// <summary>Stops the streaming reply, if any, locally and on the host; its text so far is kept.</summary>
+    private void StopStreamingReply()
+    {
+        InFlight? flight;
+        lock (_gate)
+        {
+            flight = _inFlight;
+            _inFlight = null;
+        }
+
+        if (flight is not null && flight.TryEnd(ChatTurnState.Stopped, cancel: false))
+        {
+            Run(() => CancelOnHostAsync(flight));
+        }
+    }
+
+    private void OnTurnsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        ClearCommand.RaiseCanExecuteChanged();
+        NewConversationCommand.RaiseCanExecuteChanged();
+        DeleteConversationCommand.RaiseCanExecuteChanged();
+    }
+
     private bool IsCurrent(InFlight flight)
     {
         if (flight.EndState is not null)
@@ -811,6 +996,8 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         ClearCommand.RaiseCanExecuteChanged();
         RetryCommand.RaiseCanExecuteChanged();
         RefreshModelsCommand.RaiseCanExecuteChanged();
+        NewConversationCommand.RaiseCanExecuteChanged();
+        DeleteConversationCommand.RaiseCanExecuteChanged();
     }
 
     private void Run(Func<Task> work)

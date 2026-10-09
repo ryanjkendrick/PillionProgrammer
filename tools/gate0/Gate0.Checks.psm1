@@ -842,22 +842,30 @@ function Select-ChatModel {
 
 function Get-ChatTurns {
     <#
-    Reads the transcript: each turn is a header Text ("You" or the model that answered) followed by its segment Edit
-    controls (the text) and any notes (Answering..., Stopped., Interrupted, Error: ...).
+    Reads the transcript: each turn is a header Text ("You" or the model that answered) followed by its text (an Edit
+    control for the developer's message; Document controls, one per Markdown block, and code views for a reply) and any
+    notes (Answering..., Stopped., Interrupted, Error: ...). The transcript virtualises, so only turns in view are read.
     #>
     $chat = Get-ChatElement
     $scroller = Find-UiElements -Root $chat -AutomationId 'TranscriptScroller' | Select-Object -First 1
     if (-not $scroller) { return @() }
     $cond = [System.Windows.Automation.OrCondition]::new(
         [System.Windows.Automation.PropertyCondition]::new($script:AE::ControlTypeProperty, $script:CT::Text),
-        [System.Windows.Automation.PropertyCondition]::new($script:AE::ControlTypeProperty, $script:CT::Edit))
+        [System.Windows.Automation.PropertyCondition]::new($script:AE::ControlTypeProperty, $script:CT::Edit),
+        [System.Windows.Automation.PropertyCondition]::new($script:AE::ControlTypeProperty, $script:CT::Document))
     $turns = [System.Collections.Generic.List[object]]::new()
     $current = $null
     foreach ($e in $scroller.FindAll($script:TreeScope::Descendants, $cond)) {
         $type = $e.Current.ControlType
         $name = $e.Current.Name
-        if ($type -eq $script:CT::Edit) {
-            if ($current) { $current.Segments.Add($e.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value) }
+        if ($type -eq $script:CT::Edit -or $type -eq $script:CT::Document) {
+            if ($current) {
+                $value = $null
+                $pattern = $null
+                if ($e.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) { $value = $pattern.Current.Value }
+                elseif ($e.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern, [ref]$pattern)) { $value = $pattern.DocumentRange.GetText(-1).TrimEnd() }
+                if ($null -ne $value) { $current.Segments.Add($value) }
+            }
             continue
         }
         if ([string]::IsNullOrWhiteSpace($name)) { continue }
