@@ -66,6 +66,9 @@ internal static class PillionHostBuilderExtensions
         // Connectivity (work item 0.10): the monitor, its probes and the connectivityChanged notification.
         builder.Services.AddPillionConnectivity();
 
+        // The settingsChanged notification (work item 1.15): which top-level settings sections changed.
+        builder.Services.AddPillionSettingsNotifications();
+
         // The gateway reads the same effective settings as the monitor (one source of truth for Local-only), asks the
         // monitor which providers are reachable, and reports circuit-breaker evidence back to it. Registered before
         // AddPillionModelGateway, whose TryAdd defaults (AlwaysReachable, NoProviderHealthSink) then stay out.

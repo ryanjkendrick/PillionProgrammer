@@ -23,6 +23,9 @@ internal static class PackageGuids
     /// <summary>The Privacy Options page GUID as a string.</summary>
     public const string PrivacyOptionPageString = "9e9915ef-18df-4dc8-b32b-29a22f29439e";
 
+    /// <summary>The Models and routing Options page GUID as a string.</summary>
+    public const string RoutingOptionPageString = "e9551691-e38a-4f52-804f-40a887db22a9";
+
     /// <summary>The command set GUID.</summary>
     public static readonly Guid CommandSet = new(CommandSetString);
 

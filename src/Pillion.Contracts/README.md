@@ -82,6 +82,12 @@ Additive only, batched with the other phase 1 contract additions into one minor 
   there for parity with `ChatChunk` and is not set by a 1.2 host. `/explain` sends no text, only the
   final chunk's `Explanation`; `/test` sends new test code (not a replacement of the scope) and says where it belongs
   in `Explanation`. See `src/Pillion.Host/README.md` (Inline edits) for the host's behaviour.
+- **Settings-changed notification and Think harder (work item 1.15).** Notification `settingsChanged`, host to client, one positional argument: a `string[]` of the names of the top-level
+  `settings.json` sections that changed. Sent after the handshake, debounced to 250 ms, after a save and after an
+  external edit of the file. Like `connectivityChanged` it is not a method on a contract interface, so the interface
+  shape tests are unchanged, and a 1.1 client that registers no handler ignores it. See the host README.
+- Setting `routing.thinkHarder` (boolean, default `false`) in `settings.json`; it is read through
+  `ISettingsService`, so no DTO changes.
 
 ### 1.1 (phase 0, wave 3)
 

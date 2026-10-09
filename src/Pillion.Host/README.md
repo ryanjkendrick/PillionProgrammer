@@ -244,3 +244,26 @@ does for `hostStateChanged`. Nothing is sent before the handshake is accepted. T
 
 Repository policies: the monitor reads policies through `IRepositoryPolicyProvider`. `RepositoryPolicyRegistry` is
 the default; whatever knows the open repositories calls `SetPolicies(...)` on it when the set changes.
+
+## Settings-changed notification (`settingsChanged`)
+
+Host to client, a JSON-RPC notification with one positional argument: a string array of the names of the top-level
+sections of `settings.json` that changed (for example `["routing", "cloudSwitches"]`), in document order. It carries
+no values; the client reads the settings it shows again through `ISettingsService`.
+
+- Sent after any `SettingsStore.Changed`: a save through `ISettingsService.SetAsync` and an external edit of the file
+  (the store's file watcher reloads it first). The sections are found by comparing the settings document before and
+  after, so unknown top-level sections (such as `autocomplete`) are named too, and a save that changes nothing sends
+  nothing.
+- Sent once per burst: every change restarts a 250 ms window, so the several `SetAsync` calls of one Options page save
+  produce one notification naming the union of the sections. An external edit therefore arrives about half a second
+  after the file is saved (the store's own 250 ms debounce plus this one).
+- Sent only to a client whose handshake was accepted, over the same path as `connectivityChanged`
+  (`Connectivity/INotificationSender`, `VsixConnection.TryNotifyAsync`). With no client connected nothing is sent, and a
+  change made before a client connected is not replayed: a client reads the settings when its host is ready anyway.
+- The client registers the handler before it handshakes, as for `hostStateChanged` and `connectivityChanged`. A client
+  that registers none is unaffected (StreamJsonRpc ignores a notification nobody handles).
+- Implemented by `Settings/SettingsChangedNotifier` (a hosted service registered with
+  `AddPillionSettingsNotifications`). In the VSIX it surfaces as `IHostConnection.SettingsChanged`; the chat model
+  picker, the open Options pages and autocomplete availability read their settings again when a section they use
+  is named.

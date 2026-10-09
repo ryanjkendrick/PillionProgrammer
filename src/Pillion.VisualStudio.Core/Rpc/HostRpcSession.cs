@@ -27,6 +27,12 @@ internal sealed class HostRpcSession : IHostSession
     /// <summary>The JSON-RPC notification the host sends with its <see cref="ConnectivityState"/> after the handshake and on every change.</summary>
     public const string ConnectivityChangedMethod = "connectivityChanged";
 
+    /// <summary>
+    /// The JSON-RPC notification the host sends with the names of the top-level settings sections that changed (one
+    /// positional argument, a string array), after a save and after an external edit of <c>settings.json</c>.
+    /// </summary>
+    public const string SettingsChangedMethod = "settingsChanged";
+
     private static readonly TimeSpan ExitCodeGrace = TimeSpan.FromMilliseconds(500);
 
     private readonly HostProcess _process;
@@ -65,6 +71,7 @@ internal sealed class HostRpcSession : IHostSession
 
         // Registered before the handshake: the host may send it before the handshake response arrives.
         _rpc.AddLocalRpcMethod(ConnectivityChangedMethod, new Action<ConnectivityState>(OnConnectivityChanged));
+        _rpc.AddLocalRpcMethod(SettingsChangedMethod, new Action<string[]>(OnSettingsChanged));
         _rpc.Disconnected += OnDisconnected;
 
         _ = _process.Exited.ContinueWith(
@@ -82,6 +89,9 @@ internal sealed class HostRpcSession : IHostSession
 
     /// <inheritdoc/>
     public event EventHandler<ConnectivityState>? ConnectivityChanged;
+
+    /// <inheritdoc/>
+    public event EventHandler<HostSettingsChangedEventArgs>? SettingsChanged;
 
     /// <summary>Creates the wire framing and serializer shared with Pillion Host.</summary>
     /// <param name="pipe">The connected pipe.</param>
@@ -304,6 +314,13 @@ internal sealed class HostRpcSession : IHostSession
         Volatile.Write(ref _latestConnectivity, (int)state);
         _log.Info("host.connectivity", "The host reported its connectivity.", ("pid", _process.Id), ("connectivity", state));
         ConnectivityChanged?.Invoke(this, state);
+    }
+
+    private void OnSettingsChanged(string[]? sections)
+    {
+        var changed = new HostSettingsChangedEventArgs(sections);
+        _log.Debug("host.settings_changed", "The host reported changed settings.", ("pid", _process.Id), ("sections", string.Join(",", changed.Sections)));
+        SettingsChanged?.Invoke(this, changed);
     }
 
     private void OnDisconnected(object? sender, JsonRpcDisconnectedEventArgs e)
