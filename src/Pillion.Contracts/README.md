@@ -33,9 +33,38 @@ commit.
 
 ### 1.2 (pending)
 
-Additive only. `ContractVersion` is not bumped by the pull requests that add to this list.
+Additive only, batched with the other phase 1 contract additions into one minor bump at the wave boundary
+(`ContractVersion` still says 1.1 until then). Each bullet below is its own work item's entry.
 
-- New service `IDiagnosticsService` (VSIX to host, read-only) with `GetAutocompleteCountersAsync`, returning the new DTO
+- **Mentions and context assembly (work item 1.10).** `IContextService` is unchanged; its DTOs and `ChatRequest` grow.
+
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `TaskClass` | `Summarise` | enum value 6 | History compression (Fast online, Local-fast offline); the enum only appends |
+  | `MentionRequest` | `Kind` | 1 | `file`, `folder`, `selection`, `errors`, `clipboard`; empty reads it from the mention text, and a bare `@name` is a fuzzy match |
+  | `MentionRequest` | `WorkspaceRoots` | 2 | `string[]`: the solution or folder roots; relative paths resolve against them |
+  | `MentionRequest` | `CandidateFiles` | 3 | `string[]`: the solution or folder file list for fuzzy `file` and `folder` matching (phase 1 has no index) |
+  | `MentionRequest` | `Payload` | 4 | `string?`: the selection, the clipboard text, or the diagnostics as JSON lines for `errors` |
+  | `MentionRequest` | `MaxTokens` | 5 | Truncation limit for the content (0 is the host default) |
+  | `MentionRequest` | `ApprovedSensitive` | 6 | The user approved pinning an excluded or secret file |
+  | `MentionResolution` | `Kind` | 4 | The kind it resolved as |
+  | `MentionResolution` | `DisplayName` | 5 | Short name for the pin badge |
+  | `MentionResolution` | `TokenCount` | 6 | Tokens of `Content` for the default model, after truncation |
+  | `MentionResolution` | `Truncated` | 7 | `Content` was cut on a line boundary to fit `MaxTokens` |
+  | `MentionResolution` | `Candidates` | 8 | `string[]`: up to 10 paths when a fuzzy match is ambiguous |
+  | `MentionResolution` | `Reason` | 9 | Why it is unresolved |
+  | `MentionResolution` | `RequiresApproval` | 10 | Refused only because the file is excluded or looks secret; ask the user, then resolve again with `ApprovedSensitive` |
+  | `MentionResolution` | `IsSensitive` | 11 | The content came from such a file with approval; it is never sent to a cloud model |
+  | `ChatRequest` | `Pins` | 4 | `MentionResolution[]` already resolved and pinned by the client |
+  | `ChatRequest` | `CurrentFile` | 5 | Path of the file open in the editor |
+  | `ChatRequest` | `CurrentFileRegion` | 6 | `string?`: the text around the caret, or the selection |
+  | `ChatRequest` | `ConversationId` | 7 | Key of the cached rolling history summary |
+  | `ChatRequest` | `ProjectRules` | 8 | `string?`: `.pillion/rules.md`, supplied only after workspace trust |
+
+  A request with pins, a current file or project rules is assembled by the gateway (budget, priority, per-item caps,
+  history summary); a plain request is sent as before. See `src/Pillion.ModelGateway/README.md`, Context assembly.
+
+- **Autocomplete telemetry (work item 1.5).** New service `IDiagnosticsService` (VSIX to host, read-only) with `GetAutocompleteCountersAsync`, returning the new DTO
   `AutocompleteHostCounters`: the gateway's autocomplete counters since the host started (requests, cache hits,
   type-through hits, misses, hit rate) and, over the Outbound log's last five minutes, the p50 and p95 time to first
   token and total duration and the prompt tokens counted versus estimated. Counts and durations only (work item 1.5).

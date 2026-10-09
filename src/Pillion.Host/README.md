@@ -8,6 +8,7 @@ editor, approval and workspace operations.
 Program.cs                          Parses the command line, composes the host, returns the exit code
 PillionHostBuilderExtensions.cs     AddPillionHost: logging + lifecycle + RPC server (used by Program and tests)
 Lifecycle/                          HostStateMachine, HostShutdown (exit code), ParentProcessWatcher
+Context/                            ContextRpcService (IContextService): @file, @folder, @selection, @clipboard, @errors
 Rpc/                                RpcServer, RpcConnection, PillionJsonRpc, handshake, IRpcTarget, IVsixConnection
 Logging/                            Rolling JSON-lines file sink and retention
 ```
@@ -99,6 +100,29 @@ connection), and do not cache one across reconnects.
 
 To report health, inject `HostStateMachine` and call `TryTransition(HostState.Degraded, "reason")` (and back to
 `Ready`); the client is notified automatically.
+
+## Mentions (`Context/`)
+
+`ContextRpcService` serves `IContextService`. `ResolveMentionAsync` turns a mention into pinned content with a token count
+for the default chat model, truncated to `MaxTokens` (default 12,000) on a line boundary with `Truncated` set:
+
+| Mention | Source | Result |
+| --- | --- | --- |
+| `@file:path`, `@Name` | Exact path (absolute, or relative to `WorkspaceRoots`), else fuzzy over `CandidateFiles` by file name, then path; with no list the host walks the roots | The file's text (read from disk, at most 1 MiB, binary refused); an ambiguous name returns up to 10 `Candidates` and `IsResolved` false |
+| `@folder:path` | Folder from `WorkspaceRoots` or fuzzy over the folders of `CandidateFiles` | An outline: up to 200 files with size and first line; excluded and secret files are left out and counted |
+| `@selection`, `@clipboard` | `Payload` | The text as sent |
+| `@errors` | `Payload`: JSON lines `{severity,id,message,file,line}` | One line per diagnostic, errors first, at most 200 |
+| `@symbol`, `@docs`, `@git`, ... | | Unresolved: "not available in this version" |
+
+A file must be under a workspace root or in `CandidateFiles`. Files matched by the effective `indexing.exclude` globs or by
+the built-in secret rules (`.env`, `.env.*` except examples, `*.pfx`, `*.p12`, `*.pem`, `*.key`, `*.jks`, `*.keystore`,
+`secrets.json`, files under `.ssh`, `.aws`, `.gnupg`, and `appsettings.*.json` that mentions `ConnectionStrings` or
+`Password`) resolve as unresolved with `RequiresApproval`; the client asks the user and asks again with `ApprovedSensitive`.
+An approved file comes back with `IsSensitive`, and the gateway never sends such a pin to a cloud model.
+
+`SearchAsync` returns an empty array and `GetIndexStatusAsync` reports nothing indexed (the index arrives in phase 2);
+`PauseIndexingAsync` does nothing. The chat side of context (pins, current file, rules, history summary) is in the Model
+Gateway README, Context assembly.
 
 ## Logging
 

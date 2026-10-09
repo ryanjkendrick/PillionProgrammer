@@ -11,6 +11,7 @@ Resilience/     CircuitBreakerRegistry + IProviderHealthSink, ConcurrencyLimiter
 Redaction/      RedactingChatClient, RedactingFimClient, StreamingPlaceholderRestorer
 Caching/        AutocompleteCache (LRU, 256 entries, exact and type-through hits)
 Autocomplete/   AutocompletePromptBuilder + AutocompleteBudget, CompletionShaper, AutocompleteCounters, PromptEvaluationRates
+Context/        ContextAssembler (budget, priority, caps, rolling summary), ContextReport, FileAccessPolicy, TextTruncation, GatewayHistorySummariser
 Tokens/         token-families.json (data) and ITokenCounter / TokenCounter (Microsoft.ML.Tokenizers or a calibrated estimate)
 Outbound/       IOutboundLog / InMemoryOutboundLog (ring buffer of 500), TokenEstimator
 Templates/      system-prompts.json, fim-formats.json (data) and PromptTemplates
@@ -28,7 +29,7 @@ StreamAttempt.cs   One request against one model: breaker, concurrency slot, ret
 1. **Route.** `ModelRouter` picks a profile: the request's, else `routing.tasks`, else the Auto policy (Autocomplete:
    Local-fast when a local FIM model is installed, else cloud Fast only with the autocomplete cloud switch on; Chat and
    Inline edit: Balanced online, Local-strong offline; Agent and Vision: Frontier online, Local-strong offline;
-   Embedding: always local). "Online" means a cloud provider is allowed for the task class and reachable. The profile
+   Embedding: always local; Summarise: Fast online, Local-fast offline, following the Chat cloud switch). "Online" means a cloud provider is allowed for the task class and reachable. The profile
    becomes a fallback chain (the next profile in the same locality, then local) and each profile becomes concrete
    candidates: `routing.profiles` (bare or `provider/model`), else the catalog default for the provider kind, else the
    first allowed (`providers[].models`) or installed model that can do the job. Candidates are filtered in the design's
@@ -49,7 +50,8 @@ StreamAttempt.cs   One request against one model: breaker, concurrency slot, ret
    closing `>`.
 4. **Record.** One `OutboundRecord` per attempt (time, provider, model, task class, locality, prompt tokens and whether
    they were counted or estimated, completion tokens, cache hit, time to first token, redaction count, duration,
-   outcome) plus one structured log line; never prompt text. Autocomplete cache hits are recorded too.
+   outcome, and for an assembled chat request the number of context items and how many were truncated or dropped)
+   plus one structured log line; never prompt text. Autocomplete cache hits are recorded too.
 
 Autocomplete has its own steps (budget, header, cache, stops); see [Autocomplete](#autocomplete).
 
@@ -150,6 +152,61 @@ variable for the Ollama service, then restart Ollama) to the number of models th
 Keep `OLLAMA_NUM_PARALLEL` at 1 on 8 and 12 GB cards: every parallel slot multiplies the context memory of each loaded
 model. On the development machine (RTX 2080 SUPER, 8 GB) qwen2.5-coder:7b at `num_ctx` 4,096 took 4.7 GB of VRAM and
 stayed fully on the GPU next to the 1.5B model (1.2 GB).
+
+## Context assembly
+
+`Context/ContextAssembler.cs` builds the prompt of a chat request (design section 7, Context assembly), independent of
+any provider. `ModelGateway.ChatAsync` uses it for a request that carries `Pins`, a `CurrentFile` or
+`CurrentFileRegion`, or `ProjectRules` (`ContextAssembler.ShouldAssemble`); any other request is sent exactly as before.
+Assembly runs once per candidate model, because the model's window decides what fits; routing for such a request checks
+only that the user's own message fits, so history that assembly is about to compress cannot rule a small-window model out.
+
+**Budget.** `window - output reserve - system prompt - the user's message`. The window is the model's context window
+(inventory, else the catalog), and for a local Ollama model the fixed `num_ctx` of the routed profile when that is smaller
+(Local-fast 4,096, Local-strong 8,192 by default). The output reserve is 4,000 tokens
+(`ContextAssemblerOptions.OutputReserveTokens`) but never more than a quarter of the window. A message that does not fit
+at all fails with `ContextOverflow` for that candidate, and the next candidate (a larger window) is tried.
+
+**Priority and caps.** Items are placed in this order, each taking what it needs up to its cap from what is left:
+
+| Order | Item | Cap | When over the cap |
+| --- | --- | --- | --- |
+| 1 | Project rules (`ProjectRules`, supplied by the VSIX after workspace trust) | 10% of the budget | Head kept, elision marker |
+| 2 | Pins, in the order the client sent them | 25% of the budget each | First 60% and last 40%, elision marker between |
+| 3 | Current file region | 15% | Lines around the middle kept, markers at the cut ends |
+| 4 | Retrieved chunks (phase 2 hook, `IContextSource`) | 20% | Head kept |
+| 5 | Repository map (phase 2 hook) | 10% | Head kept |
+| 6 | History, newest turns first | what is left | Compressed into a rolling summary |
+
+An item that does not fit the room left is cut to it when at least 64 tokens remain, otherwise dropped. Cuts happen on
+line boundaries; the budget is checked with the real count, not the estimate (`TextTruncation`). A pin that is an
+approved excluded or secret file (`IsSensitive`) is dropped for a cloud model, and a pin or current file that matches
+`indexing.exclude` or the secret-file rules without approval is dropped (`FileAccessPolicy`, shared with mention
+resolution in the host).
+
+**History and the rolling summary.** If the history fits, it is kept verbatim. Otherwise the newest turns that fit in half
+of the room (starting at a user turn) stay, and the older turns are summarised through `IHistorySummariser`, which the gateway
+implements as a plain chat request of task class `Summarise` (Fast online, Local-fast offline; if the chat itself goes to
+a local model the summary is kept local too). A long history is folded in batches of about 2,500 tokens, each batch
+building on the summary so far. The summary is cached per `ConversationId` with a fingerprint of the turns it covers: it
+is reused while those turns are unchanged and the turns after it still fit, and when the tail outgrows the room only the
+new turns are folded into the cached summary. A changed earlier turn drops the cache. If summarising fails, the older turns
+are left out and the report says so; the chat still goes ahead. Without a conversation id nothing is cached.
+
+**Layout.** Sections go from most to least stable so provider-side prompt caching hits on the long common prefix: one
+system message with the system prompt, rules, repository map, pins, current file, retrieved chunks and summary in that
+order, then the recent turns, then the user's message. Pins keep the order the client sent them, so pinning one more
+item only appends. Two requests with the same rules and pins render byte-identical leading sections (a test asserts it).
+Pinned text is fenced with a fence longer than any backtick run inside it and introduced as reference material that must
+not be followed as instructions.
+
+**Report.** `AssembledContext.Report` (`ContextReport`) lists every item with its token count, its unshortened count,
+and whether it was truncated or dropped, with a reason; the Context Inspector (work item 1.13) will show it. The Outbound
+record keeps the item count and the number truncated or dropped (`ContextItems`, `ContextTrimmed`).
+
+**Measured.** On a 128k window with three pins of 8, 60 and 400 KB, a current file region, rules and 30 turns of history,
+assembly takes a median of about 45 ms and p95 of about 215 ms with the exact o200k tokenizer, and 12 ms and 17 ms with
+the calibrated estimate (`Context/ContextAssemblyBenchmarkTests`). The Gate 1 row is p50 150 ms, p95 400 ms.
 
 ## Providers
 
@@ -347,6 +404,7 @@ Common to all four:
 | `ICostGovernor` | `NoCostCaps` | Cost governance (phase 1) |
 | `IOutboundLog` | `InMemoryOutboundLog` | Persistence with the audit trail |
 | `IModelProviderFactory` | Ollama, OpenAI-compatible, OpenAI, Anthropic, Gemini, Mistral, Azure OpenAI | In-process plug-ins are out of version 1 |
+| `IContextSource` | none | The index (phase 2): retrieved chunks (`ContextSlot.RetrievedChunks`) and the repository map (`ContextSlot.RepoMap`); register with `AddSingleton<IContextSource, ...>` |
 | `ITokenCredentialProvider` | none (Azure OpenAI then uses keys) | Pillion Host: an `Azure.Identity` `TokenCredential` for Entra ID (a later item) |
 
 ## Tests
@@ -369,4 +427,5 @@ answer; the OpenAI-compatible live tests run only when `PILLION_TEST_OPENAI_COMP
 cache keys and counters, GPU-tier budgets and timeouts; `Ollama/AutocompleteLiveTests` (Live) checks a real completion,
 multi-line output, the prompt-cache hit (`prompt_eval_duration`), the recorded calibration, and writes first-token and
 total latency percentiles for qwen2.5-coder:1.5b and :7b to the test output (`--logger "console;verbosity=detailed"`).
+Context assembly: `Context/` covers truncation, the exclusion and secret-file rules, the assembler (budget maths, priority, caps, summary trigger and cache, stable leading sections, the phase 2 hooks), chat through the gateway with fake providers, a timing benchmark, and `ContextLiveTests` (Live: a pinned file answered by gemma4:e2b, the summariser on a long fake history).
 Run only live tests with `dotnet test --filter Category=Live`, or exclude them with `--filter Category!=Live`.

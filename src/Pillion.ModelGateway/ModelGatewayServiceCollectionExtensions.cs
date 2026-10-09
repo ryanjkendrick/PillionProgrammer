@@ -61,6 +61,13 @@ public static class ModelGatewayServiceCollectionExtensions
         services.TryAddSingleton<IGpuTierDetector>(sp => new GpuTierDetector(sp.GetService<ILogger<GpuTierDetector>>()));
         services.TryAddSingleton<AutocompleteCounters>();
         services.TryAddSingleton<PromptEvaluationRates>();
+        services.TryAddSingleton(new ContextAssemblerOptions());
+        services.TryAddSingleton(sp => new ContextAssembler(
+            sp.GetRequiredService<ITokenCounter>(),
+            sp.GetRequiredService<ContextAssemblerOptions>(),
+            sp.GetServices<IContextSource>(),
+            sp.GetService<ILogger<ContextAssembler>>(),
+            sp.GetRequiredService<TimeProvider>()));
 
         services.TryAddSingleton<IProviderReachability, AlwaysReachable>();
         services.TryAddSingleton<IProviderHealthSink, NoProviderHealthSink>();
@@ -114,7 +121,8 @@ public static class ModelGatewayServiceCollectionExtensions
             sp.GetRequiredService<ITokenCounter>(),
             sp.GetRequiredService<IGpuTierDetector>(),
             sp.GetRequiredService<AutocompleteCounters>(),
-            sp.GetRequiredService<PromptEvaluationRates>()));
+            sp.GetRequiredService<PromptEvaluationRates>(),
+            sp.GetRequiredService<ContextAssembler>()));
 
         // Test connection probes the named provider through the gateway (replacing the settings' NoProviderTester).
         services.Replace(ServiceDescriptor.Singleton<IProviderTester, GatewayProviderTester>());
