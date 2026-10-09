@@ -61,6 +61,23 @@
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.10.1" />
   </ItemGroup>
 
+  <!--
+    Token counting (design section 7). Microsoft.ML.Tokenizers 2.0.0 is the newest stable release (November 2025; the
+    3.0 line is still in preview). The two data packages carry the tiktoken rank files for o200k_base and cl100k_base
+    and are versioned with it; they are loaded lazily, only when a model of those families is counted.
+  -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
+    <PackageVersion Include="Microsoft.ML.Tokenizers.Data.O200kBase" Version="2.0.0" />
+    <PackageVersion Include="Microsoft.ML.Tokenizers.Data.Cl100kBase" Version="2.0.0" />
+    <!--
+      The data packages target netstandard2.0 only and so pull Microsoft.Bcl.Memory 9.0.4, which has a high severity
+      advisory (GHSA-73j8-2gch-69rq). The Model Gateway references it directly at the patched 10.0.12, the same servicing
+      release as the Microsoft.Extensions packages above, so the vulnerable version never reaches the host.
+    -->
+    <PackageVersion Include="Microsoft.Bcl.Memory" Version="10.0.12" />
+  </ItemGroup>
+
   <!-- Tests. -->
   <ItemGroup>
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />

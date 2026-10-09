@@ -32,12 +32,15 @@ public enum OutboundOutcome
 /// <param name="ModelId">The model.</param>
 /// <param name="TaskClass">The task class.</param>
 /// <param name="IsLocal">Whether the provider is local (no cloud boundary was crossed).</param>
-/// <param name="EstimatedPromptTokens">The prompt size estimated by <see cref="TokenEstimator"/>.</param>
+/// <param name="EstimatedPromptTokens">The prompt size in tokens: counted with the model's tokenizer when <paramref name="PromptTokensCounted"/> is set, otherwise estimated (<see cref="TokenEstimator"/> for chat, the calibrated family estimate for autocomplete). 0 for a cache hit, which sends nothing.</param>
 /// <param name="CompletionTokens">The tokens generated (provider-reported when available, else estimated).</param>
 /// <param name="RedactionCount">The number of secrets replaced by placeholders.</param>
 /// <param name="Duration">How long the request took.</param>
 /// <param name="Outcome">How it ended.</param>
 /// <param name="ErrorCode">The error code when it failed.</param>
+/// <param name="PromptTokensCounted">Whether <paramref name="EstimatedPromptTokens"/> was counted with the model's tokenizer rather than estimated.</param>
+/// <param name="CacheHit">Whether an autocomplete request was served from the cache; nothing was sent to the provider then.</param>
+/// <param name="TimeToFirstToken">How long the first token took, when one arrived.</param>
 public sealed record OutboundRecord(
     DateTimeOffset Timestamp,
     string RequestId,
@@ -50,7 +53,10 @@ public sealed record OutboundRecord(
     int RedactionCount,
     TimeSpan Duration,
     OutboundOutcome Outcome,
-    PillionErrorCode? ErrorCode = null);
+    PillionErrorCode? ErrorCode = null,
+    bool PromptTokensCounted = false,
+    bool CacheHit = false,
+    TimeSpan? TimeToFirstToken = null);
 
 /// <summary>The Outbound log: every request sent to a model provider, from every task class.</summary>
 public interface IOutboundLog
@@ -109,7 +115,10 @@ public sealed partial class InMemoryOutboundLog : IOutboundLog
             record.TaskClass,
             record.IsLocal ? "local" : "cloud",
             record.EstimatedPromptTokens,
+            record.PromptTokensCounted ? "counted" : "estimated",
             record.CompletionTokens,
+            record.CacheHit,
+            record.TimeToFirstToken is { } firstToken ? (long)firstToken.TotalMilliseconds : -1,
             record.RedactionCount,
             (long)record.Duration.TotalMilliseconds,
             record.Outcome,
@@ -135,7 +144,7 @@ public sealed partial class InMemoryOutboundLog : IOutboundLog
     [LoggerMessage(
         EventId = 420,
         Level = LogLevel.Information,
-        Message = "Outbound {RequestId}: {ProviderId}/{ModelId} {TaskClass} {Locality}, prompt ~{PromptTokens} tokens, completion {CompletionTokens} tokens, {Redactions} redactions, {DurationMs} ms, {Outcome} ({ErrorCode}).")]
+        Message = "Outbound {RequestId}: {ProviderId}/{ModelId} {TaskClass} {Locality}, prompt {PromptTokens} tokens ({PromptTokenCount}), completion {CompletionTokens} tokens, cache hit {CacheHit}, first token {FirstTokenMs} ms, {Redactions} redactions, {DurationMs} ms, {Outcome} ({ErrorCode}).")]
     private static partial void LogRecord(
         ILogger logger,
         string requestId,
@@ -144,7 +153,10 @@ public sealed partial class InMemoryOutboundLog : IOutboundLog
         TaskClass taskClass,
         string locality,
         int promptTokens,
+        string promptTokenCount,
         int completionTokens,
+        bool cacheHit,
+        long firstTokenMs,
         int redactions,
         long durationMs,
         OutboundOutcome outcome,

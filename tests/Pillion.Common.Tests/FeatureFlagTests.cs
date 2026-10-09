@@ -9,7 +9,7 @@ namespace Pillion.Common.Tests;
 public sealed class FeatureFlagTests
 {
     private static readonly string[] AllNames =
-        ["chat", "modelGateway", "connectivityProbes", "cloudProviders", "ollamaProvider", "openAICompatibleProvider", "anthropicProvider", "geminiProvider", "mistralProvider", "azureOpenAIProvider"];
+        ["chat", "modelGateway", "connectivityProbes", "cloudProviders", "ollamaProvider", "openAICompatibleProvider", "anthropicProvider", "geminiProvider", "mistralProvider", "azureOpenAIProvider", "autocomplete"];
 
     [Fact]
     public void Defaults_AreAllOn_AndTheNamesMatchTheJsonKeys()
