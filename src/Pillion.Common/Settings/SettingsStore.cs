@@ -153,6 +153,20 @@ public sealed partial class SettingsStore : IDisposable
         Mutate(root => root[sectionName] = node);
     }
 
+    /// <summary>
+    /// Returns a copy of the whole settings document as the store holds it (defaults filled in), unknown keys included.
+    /// Used to find out which top-level sections a change touched.
+    /// </summary>
+    /// <returns>A new object; changing it does not change the store.</returns>
+    public JsonObject GetDocument()
+    {
+        lock (_gate)
+        {
+            EnsureLoaded();
+            return (JsonObject)_root!.DeepClone();
+        }
+    }
+
     /// <summary>Gets the value at a dotted key path as JSON.</summary>
     /// <param name="keyPath">For example <c>routing.tasks.chat</c> or <c>providers.0.endpoint</c>.</param>
     /// <returns>The JSON text, or <see langword="null"/> if the path does not exist.</returns>
