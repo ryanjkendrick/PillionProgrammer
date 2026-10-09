@@ -7,6 +7,7 @@ using Pillion.Common.Hardware;
 using Pillion.Common.Redaction;
 using Pillion.Common.Settings;
 using Pillion.Contracts;
+using Pillion.ModelGateway.Providers.Ollama;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 using AiChatRole = Microsoft.Extensions.AI.ChatRole;
 using ChatMessage = Pillion.Contracts.ChatMessage;
@@ -76,6 +77,7 @@ public sealed partial class ModelGateway : IModelGateway
     private readonly IGpuTierDetector _gpu;
     private readonly AutocompleteCounters _counters;
     private readonly PromptEvaluationRates _rates;
+    private readonly ContextAssembler _assembler;
     private int _gpuLogged;
 
     /// <summary>Initializes a new instance of the <see cref="ModelGateway"/> class.</summary>
@@ -98,6 +100,7 @@ public sealed partial class ModelGateway : IModelGateway
     /// <param name="gpuTierDetector">Detects the GPU tier for the autocomplete budget; <see cref="GpuTierDetector.Shared"/> when <see langword="null"/>.</param>
     /// <param name="counters">The autocomplete counters; a new instance when <see langword="null"/>.</param>
     /// <param name="rates">The measured prompt-evaluation rates; a new instance when <see langword="null"/>.</param>
+    /// <param name="assembler">Assembles the prompt of chat requests that carry pins, a current file or project rules; a new instance over <paramref name="tokenCounter"/> when <see langword="null"/>.</param>
     public ModelGateway(
         IProviderRegistry registry,
         IModelRouter router,
@@ -117,7 +120,8 @@ public sealed partial class ModelGateway : IModelGateway
         ITokenCounter? tokenCounter = null,
         IGpuTierDetector? gpuTierDetector = null,
         AutocompleteCounters? counters = null,
-        PromptEvaluationRates? rates = null)
+        PromptEvaluationRates? rates = null,
+        ContextAssembler? assembler = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _router = router ?? throw new ArgumentNullException(nameof(router));
@@ -140,6 +144,7 @@ public sealed partial class ModelGateway : IModelGateway
         _counters = counters ?? new AutocompleteCounters();
         _counters.Attach(cache);
         _rates = rates ?? new PromptEvaluationRates();
+        _assembler = assembler ?? new ContextAssembler(_tokens);
     }
 
     /// <inheritdoc/>
@@ -151,7 +156,19 @@ public sealed partial class ModelGateway : IModelGateway
             throw new ArgumentException("A chat request needs at least one message.", nameof(request));
         }
 
-        var route = _router.Resolve(taskClass, request);
+        // A request that carries pins, a current file or project rules is assembled per candidate model (its window decides what
+        // fits); any other request is sent as it is. Routing then only checks that the user's message fits: the router would
+        // otherwise reject a small-window model because of history that assembly is about to compress.
+        var assemble = taskClass != TaskClass.Summarise && ContextAssembler.ShouldAssemble(request);
+        var route = assemble
+            ? _router.Resolve(new RoutingRequest
+            {
+                TaskClass = taskClass,
+                Profile = request.Profile,
+                ModelId = request.ModelId,
+                EstimatedPromptTokens = TokenEstimator.Estimate(request.Messages[^1].Content),
+            })
+            : _router.Resolve(taskClass, request);
         LogRouted(_logger, request.RequestId, route.QualifiedId, route.Profile, route.Reason);
 
         var messages = ToAiMessages(request.Messages);
@@ -169,6 +186,7 @@ public sealed partial class ModelGateway : IModelGateway
         StreamAttempt<ChatResponseUpdate>? attempt = null;
         RedactionSession? session = null;
         Exception? lastFailure = null;
+        var chosenPromptTokens = promptTokens;
         var candidates = new List<RoutedModel> { route };
         candidates.AddRange(route.Fallbacks);
 
@@ -187,6 +205,32 @@ public sealed partial class ModelGateway : IModelGateway
                     _services.Progress.Report(new ModelProgress(request.RequestId, candidate.ProviderId, candidate.ModelId, ModelProgressKind.FallingBack, TimeSpan.Zero, $"Trying {candidate.QualifiedId} instead: {lastFailure.Message}"));
                 }
 
+                var attemptMessages = messages;
+                var attemptTokens = promptTokens;
+                var attemptPolicy = policy;
+                if (assemble)
+                {
+                    try
+                    {
+                        var assembled = await _assembler.AssembleAsync(request, BuildTarget(candidate, provider), new GatewayHistorySummariser(this), cancellationToken).ConfigureAwait(false);
+                        attemptMessages = ToAiMessages(assembled.Messages);
+                        attemptTokens = assembled.PromptTokens;
+                        attemptPolicy = policy with
+                        {
+                            PromptTokens = attemptTokens,
+                            PromptTokensCounted = _tokens.ForModel(candidate.ModelId).IsExact,
+                            ContextItems = assembled.Report.ItemCount,
+                            ContextTrimmed = assembled.Report.TrimmedCount,
+                        };
+                    }
+                    catch (PillionRpcException ex) when (ex.Error.Code == PillionErrorCode.ContextOverflow)
+                    {
+                        // This model's window cannot hold the message; a fallback with a larger window may.
+                        lastFailure = ex;
+                        continue;
+                    }
+                }
+
                 session = provider.IsLocal && !redactForLocal ? null : new RedactionSession();
                 var client = provider.GetChatClient(candidate.ModelId);
                 if (session is not null)
@@ -203,12 +247,12 @@ public sealed partial class ModelGateway : IModelGateway
                 attempt = new StreamAttempt<ChatResponseUpdate>(
                     _services,
                     candidate,
-                    policy with
+                    attemptPolicy with
                     {
                         FirstTokenTimeout = candidate.IsLocal ? null : _services.Options.CloudFirstTokenTimeout,
-                        LocalBudget = candidate.IsLocal ? _services.Options.LocalFirstTokenBudget(promptTokens) : null,
+                        LocalBudget = candidate.IsLocal ? _services.Options.LocalFirstTokenBudget(attemptTokens) : null,
                     },
-                    token => client.GetStreamingResponseAsync(messages, options, token),
+                    token => client.GetStreamingResponseAsync(attemptMessages, options, token),
                     update => !string.IsNullOrEmpty(update.Text),
                     () => currentSession?.Redactions.Count ?? 0,
                     cancellationToken);
@@ -217,6 +261,7 @@ public sealed partial class ModelGateway : IModelGateway
                 {
                     await attempt.StartAsync().ConfigureAwait(false);
                     model = candidate;
+                    chosenPromptTokens = attemptTokens;
                     break;
                 }
                 catch (ProviderException ex) when (ex.Code != PillionErrorCode.ContextOverflow)
@@ -302,7 +347,7 @@ public sealed partial class ModelGateway : IModelGateway
                 IsFinal = true,
                 ModelId = model.ModelId,
                 ProviderId = model.ProviderId,
-                PromptTokens = promptReported > 0 ? promptReported : promptTokens,
+                PromptTokens = promptReported > 0 ? promptReported : chosenPromptTokens,
                 CompletionTokens = completionReported > 0 ? completionReported : (int)((attempt.GeneratedCharacters + 3) / 4),
                 Error = streamError,
             };
@@ -776,6 +821,23 @@ public sealed partial class ModelGateway : IModelGateway
         }
 
         return ids.Select(id => new ProviderModel(settings.Id, id, id, _catalog.GetCapabilities(id, isLocal))).ToList();
+    }
+
+    /// <summary>
+    /// Describes a candidate model to context assembly: its usable window (for a local Ollama runtime the fixed
+    /// <c>num_ctx</c> of the routed profile when smaller than the model's own window), locality, the chat system prompt and
+    /// the effective <c>indexing.exclude</c> globs.
+    /// </summary>
+    private AssemblyTarget BuildTarget(RoutedModel candidate, IModelProvider provider)
+    {
+        var window = _inventory.Find(candidate.ProviderId, candidate.ModelId)?.Capabilities.ContextWindow
+            ?? _catalog.GetCapabilities(candidate.ModelId, candidate.IsLocal).ContextWindow;
+        if (provider is OllamaProvider ollama)
+        {
+            window = Math.Min(window, ollama.Options.ContextSizeFor(candidate.Profile));
+        }
+
+        return new AssemblyTarget(candidate.ModelId, window, candidate.IsLocal, _templates.ChatSystemPrompt, _registry.GetSnapshot().Settings.Exclude);
     }
 
     private List<AiChatMessage> ToAiMessages(IReadOnlyList<ChatMessage> messages)

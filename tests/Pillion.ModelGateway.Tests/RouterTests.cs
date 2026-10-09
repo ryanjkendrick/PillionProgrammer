@@ -56,6 +56,13 @@ public class RouterTests
         // Rule 2: cloud switches.
         new("chat switch off -> LocalStrong", h => h.Settings.CloudSwitches.Chat = false, Chat, "local/qwen2.5-coder:14b", Profile.LocalStrong),
         new("agent switch off by default -> LocalStrong", _ => { }, Agent, "local/qwen2.5-coder:14b", Profile.LocalStrong),
+
+        // Summarise (context compression): Fast online, Local-fast offline; it follows the chat cloud switch.
+        new("summarise online -> Fast", _ => { }, Chat with { TaskClass = TaskClass.Summarise }, "cloud/cloud-fast", Profile.Fast),
+        new("summarise with local-only -> LocalFast", h => h.Settings.Privacy.LocalOnly = true, Chat with { TaskClass = TaskClass.Summarise }, "local/qwen2.5-coder:1.5b", Profile.LocalFast),
+        new("summarise with the chat switch off -> LocalFast", h => h.Settings.CloudSwitches.Chat = false, Chat with { TaskClass = TaskClass.Summarise }, "local/qwen2.5-coder:1.5b", Profile.LocalFast),
+        new("summarise with the cloud unreachable -> LocalFast", h => h.Reachability.Unreachable.Add("cloud"), Chat with { TaskClass = TaskClass.Summarise }, "local/qwen2.5-coder:1.5b", Profile.LocalFast),
+        new("summarise asked to stay local -> LocalFast", _ => { }, Chat with { TaskClass = TaskClass.Summarise, Profile = Profile.LocalFast }, "local/qwen2.5-coder:1.5b", Profile.LocalFast),
         new("autocomplete without local FIM, switch off -> ModelNotInstalled", h => { h.Local!.Models = [h.Local.Model("gemma4:e2b")]; h.ListAll(); }, Autocomplete, null, ExpectedError: PillionErrorCode.ModelNotInstalled),
 
         // Rule 3: connectivity.

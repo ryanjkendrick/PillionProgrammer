@@ -20,4 +20,7 @@ public enum TaskClass
 
     /// <summary>A request that includes images.</summary>
     Vision,
+
+    /// <summary>Compressing conversation history into a rolling summary (context assembly); routed to Fast online and Local-fast offline.</summary>
+    Summarise,
 }

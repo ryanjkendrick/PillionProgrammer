@@ -29,6 +29,12 @@ internal sealed record AttemptPolicy
 
     /// <summary>Gets the number of retries on 429 and 5xx.</summary>
     public int MaxRetries { get; init; }
+
+    /// <summary>Gets the number of items in the context report of an assembled chat request (0 when none was assembled).</summary>
+    public int ContextItems { get; init; }
+
+    /// <summary>Gets the number of those items that were truncated or dropped.</summary>
+    public int ContextTrimmed { get; init; }
 }
 
 /// <summary>Thrown when a cloud autocomplete request runs past its hard limit; the suggestion is dropped silently.</summary>
@@ -244,7 +250,9 @@ internal sealed class StreamAttempt<T> : IAsyncDisposable
             },
             _policy.PromptTokensCounted,
             CacheHit: false,
-            TimeToFirstToken));
+            TimeToFirstToken,
+            _policy.ContextItems,
+            _policy.ContextTrimmed));
     }
 
     public async ValueTask DisposeAsync()
