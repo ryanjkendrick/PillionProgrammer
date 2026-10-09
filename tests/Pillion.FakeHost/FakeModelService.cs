@@ -12,6 +12,8 @@ namespace Pillion.FakeHost;
 /// stream's token (the client disposing the enumerator) and <see cref="CancelAsync"/> with the request id.
 /// </summary>
 /// <remarks>
+/// <see cref="CompleteAsync"/> streams a canned C# completion the same way, so the extension's autocomplete pipeline can
+/// be tested over the real pipe.
 /// A last user message containing <c>/error</c> fails the request with a <see cref="PillionErrorCode.ProviderUnavailable"/>
 /// error before any chunk, so the client's inline error path can be exercised; one containing <c>/partial</c> streams
 /// two chunks and then ends with a final chunk carrying <see cref="ChatChunk.Error"/>. A request without a model id
@@ -139,8 +141,61 @@ internal sealed class FakeModelService : IModelService
         return Task.CompletedTask;
     }
 
-    public IAsyncEnumerable<CompletionChunk> CompleteAsync(CompletionRequest request, CancellationToken cancellationToken) =>
-        throw new PillionRpcException(new PillionError { Code = PillionErrorCode.PolicyDenied, Message = "The fake host does not complete code." });
+    /// <summary>
+    /// Streams a canned fill-in-the-middle completion in four-character chunks, one every chunk delay: a C# method body
+    /// when <see cref="CompletionRequest.AllowMultiLine"/> is set (with a second member after it, so the client's
+    /// block-end rule has something to cut), otherwise a single line followed by a line break and more text (so the
+    /// single-line rule has something to cut). Honours the stream's token and <see cref="CancelAsync"/>.
+    /// </summary>
+    public async IAsyncEnumerable<CompletionChunk> CompleteAsync(CompletionRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var model = Models[0];
+        Console.Error.WriteLine(
+            "fakehost: complete " + request.RequestId + (request.AllowMultiLine ? " multi-line" : " single-line")
+            + ", prefix " + request.Prefix.Length + ", suffix " + request.Suffix.Length);
+
+        var text = request.AllowMultiLine
+            ? "\n    {\n        return numbers.Min();\n    }\n\n    public static int Other()\n    {\n        return 0;\n    }\n"
+            : "Calculator.Sum(numbers));\n        Console.WriteLine(\"more\");";
+
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _inFlight[request.RequestId] = cancellation;
+        try
+        {
+            var sent = 0;
+            foreach (var piece in Split(text, 4))
+            {
+                try
+                {
+                    await Task.Delay(_chunkDelay, cancellation.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    Console.Error.WriteLine("fakehost: complete " + request.RequestId + " cancelled after " + sent + " chunks");
+                    throw;
+                }
+
+                sent++;
+                yield return new CompletionChunk { RequestId = request.RequestId, Text = piece, ModelId = model.ModelId, ProviderId = model.ProviderId };
+            }
+
+            yield return new CompletionChunk
+            {
+                RequestId = request.RequestId,
+                IsFinal = true,
+                ModelId = model.ModelId,
+                ProviderId = model.ProviderId,
+                PromptTokens = (request.Prefix.Length + request.Suffix.Length) / 4,
+                CompletionTokens = sent,
+            };
+            Console.Error.WriteLine("fakehost: complete " + request.RequestId + " finished after " + sent + " chunks");
+        }
+        finally
+        {
+            _inFlight.TryRemove(request.RequestId, out _);
+        }
+    }
 
     private static ChatChunk Chunk(ChatRequest request, ModelDescriptor model, string text) => new()
     {

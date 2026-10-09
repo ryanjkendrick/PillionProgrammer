@@ -188,7 +188,7 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
 | `geminiProvider` | Providers of kind `gemini` are not built or routed to. |
 | `mistralProvider` | Providers of kind `mistral` (chat and Codestral fill-in-the-middle) are not built or routed to. |
 | `azureOpenAIProvider` | Providers of kind `azure-openai` are not built or routed to. |
-| `autocomplete` | `IModelService.CompleteAsync` (ghost-text autocomplete) fails with `PolicyDenied` and a message that names the flag; chat and model listing are unaffected. |
+| `autocomplete` | `IModelService.CompleteAsync` (ghost-text autocomplete) fails with `PolicyDenied` and a message that names the flag; chat and model listing are unaffected. The extension stops asking for suggestions (it reads the flag when Pillion Host becomes ready and when the Tools menu opens; an absent flag means on). |
 
 A repository can switch flags off for everyone who opens it with `disabledFeatures` in `.pillion/policy.json`, next to
 `localOnly`, `disabledTools`, `exclude` and `denyCommands`:
@@ -203,6 +203,35 @@ policies. The extension reads the result, with policies applied, through the rea
 `effective.features` of `ISettingsService.GetAsync`; it is re-read when Pillion Host becomes ready, on **Refresh** in the
 chat window and when the Tools menu opens. `settings.json` stays at version 1: a file without a `features` section gets
 the defaults when it is loaded, and unknown flags in the section are preserved.
+
+## Ghost-text autocomplete
+
+With a fill-in-the-middle model available (for example `ollama pull qwen2.5-coder:1.5b`, added to an Ollama provider),
+Pillion suggests code as grey text at the caret in any text editor: single-line by default, multi-line after a line that
+opens a block, on an empty line inside a body, after a declaration signature, and after accepting a suggestion at the end
+of a line. **Tab** accepts, **Esc** dismisses, **Ctrl+Right** accepts the next word, and **Alt+]** and **Alt+[** ("Pillion:
+Next Suggestion" and "Pillion: Previous Suggestion", rebindable under Tools > Options > Keyboard) switch between the
+suggestion and its first line only (Visual Studio 2026; Visual Studio 2022 does not cycle between proposals). Accepting
+a suggestion asks for the next one at once. Requests wait 200 ms after the last keystroke; when the p95 latency over
+five minutes is above 1.5 s the wait rises to 350 ms and suggestions are single-line until it recovers (**Tools >
+Pillion: Show Status** shows the p50 and p95).
+
+No suggestions are requested in generated and designer files (`.g.cs`, `.g.i.cs`, `.Designer.cs`, `*.min.js` and files
+whose first lines say they are auto-generated), in files over 1 MB, while a completion list has an item selected, or in
+languages switched off in `settings.json` (identifiers as in `src/Pillion.VisualStudio.Core/Rpc/DocumentLanguage.cs`):
+
+```json
+{ "autocomplete": { "disabledLanguages": [ "python" ], "announceSuggestions": true } }
+```
+
+A new suggestion is announced to screen readers with a UI Automation notification; `announceSuggestions: false`
+switches that off.
+
+**Visual Studio 2022** draws ghost text through IntelliCode, so it needs IntelliCode (part of every .NET workload) with
+**Tools > Options > IntelliCode > General > Automatically generate code completions in the Editor** on. When either is
+missing the status bar and the Pillion Output pane say "Inline suggestions need IntelliCode's automatic code completions
+on Visual Studio 2022"; the check runs when the extension loads and again whenever the Tools menu opens. Visual Studio
+2026 needs nothing extra.
 
 ## Local models and the GPU tier
 

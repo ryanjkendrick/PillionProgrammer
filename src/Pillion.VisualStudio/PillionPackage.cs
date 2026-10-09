@@ -9,7 +9,9 @@ using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Pillion.Contracts;
+using Pillion.VisualStudio.Autocomplete;
 using Pillion.VisualStudio.Core;
+using Pillion.VisualStudio.Core.Autocomplete;
 using Pillion.VisualStudio.Options;
 using Pillion.VisualStudio.ToolWindows;
 using Task = System.Threading.Tasks.Task;
@@ -47,6 +49,9 @@ public sealed class PillionPackage : AsyncPackage
     private ChatAvailability? _chatAvailability;
     private OutputPaneWriter? _output;
     private IVsStatusbar? _statusBar;
+    private AutocompleteFeature? _autocomplete;
+    private IntelliCodeStatus _intelliCodeReported = IntelliCodeStatus.NotRequired;
+    private int _intelliCodeCheckRunning;
 
     /// <summary>Gets the extension's version (the assembly informational version).</summary>
     internal static string ExtensionVersion { get; } = ReadVersion();
@@ -60,6 +65,9 @@ public sealed class PillionPackage : AsyncPackage
     /// <summary>Gets the extension log, once initialization has created it.</summary>
     internal PillionLog? Log => _log;
 
+    /// <summary>Gets ghost-text autocomplete (engine, settings, IntelliCode state), once initialization has created it.</summary>
+    internal AutocompleteFeature? Autocomplete => _autocomplete;
+
     /// <inheritdoc/>
     protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
     {
@@ -72,6 +80,8 @@ public sealed class PillionPackage : AsyncPackage
         _supervisor = supervisor;
         var chatAvailability = new ChatAvailability(supervisor, log);
         _chatAvailability = chatAvailability;
+        var autocomplete = new AutocompleteFeature(supervisor, log);
+        _autocomplete = autocomplete;
         AddService(typeof(IHostConnection), (container, token, type) => Task.FromResult<object?>(supervisor), promote: true);
         Instance = this;
 
@@ -107,6 +117,8 @@ public sealed class PillionPackage : AsyncPackage
         // Returns at once: launching, connecting and the handshake run on the thread pool. Availability follows the
         // host's effective feature flags: it reads them whenever the host becomes ready.
         chatAvailability.Start();
+        autocomplete.Start();
+        _ = JoinableTaskFactory.RunAsync(() => CheckIntelliCodeAsync(DisposalToken));
         supervisor.Start();
     }
 
@@ -147,6 +159,8 @@ public sealed class PillionPackage : AsyncPackage
         {
             _chatAvailability?.Dispose();
             _chatAvailability = null;
+            _autocomplete?.Dispose();
+            _autocomplete = null;
         }
 
         if (disposing && _supervisor is { } supervisor)
@@ -228,8 +242,9 @@ public sealed class PillionPackage : AsyncPackage
     private void OnConnectivityChanged(object? sender, HostConnectivityChangedEventArgs e) =>
         _ = JoinableTaskFactory.RunAsync(RefreshStatusBarAsync);
 
-    private static string StatusBarText(HostSupervisor supervisor) =>
-        HostStatusText.Format(supervisor.State, supervisor.RestartAttempt, supervisor.MaxRestartAttempts, supervisor.Connectivity);
+    private string StatusBarText(HostSupervisor supervisor) =>
+        HostStatusText.Format(supervisor.State, supervisor.RestartAttempt, supervisor.MaxRestartAttempts, supervisor.Connectivity)
+        + (_intelliCodeReported is IntelliCodeStatus.Missing or IntelliCodeStatus.CompletionsOff ? ". " + IntelliCodeRequirement.Message : string.Empty);
 
     /// <summary>Shows the supervisor's current state and connectivity, read on the UI thread so the latest change always wins.</summary>
     private async Task RefreshStatusBarAsync()
@@ -271,6 +286,10 @@ public sealed class PillionPackage : AsyncPackage
                 + (supervisor.HostProcessId is { } pid ? $" (pid {pid})" : string.Empty)
                 + (supervisor.FailureReason is { } reason ? Environment.NewLine + reason : string.Empty)
             : "Pillion: not started";
+        if (_autocomplete is { } autocomplete)
+        {
+            host += Environment.NewLine + Environment.NewLine + autocomplete.StatusText;
+        }
 
         VsShellUtilities.ShowMessageBox(
             this,
@@ -325,6 +344,14 @@ public sealed class PillionPackage : AsyncPackage
             {
                 _ = JoinableTaskFactory.RunAsync(() => availability.RefreshAsync(DisposalToken));
             }
+
+            // The Tools menu is where users go after changing IntelliCode's options: check again (and re-read the
+            // autocomplete settings) whenever it opens.
+            if (commandId == PackageIds.OpenChatCommand && _autocomplete is { } autocomplete)
+            {
+                _ = JoinableTaskFactory.RunAsync(() => autocomplete.Availability.RefreshAsync(DisposalToken));
+                _ = JoinableTaskFactory.RunAsync(() => CheckIntelliCodeAsync(DisposalToken));
+            }
         };
         return command;
     }
@@ -360,6 +387,60 @@ public sealed class PillionPackage : AsyncPackage
     }
 
     private void OnOpenLogs(object sender, EventArgs e) => OpenLogFolder();
+
+    /// <summary>
+    /// The IntelliCode run-time check on Visual Studio 2022: when IntelliCode is missing or its automatic code
+    /// completions are off, says so in the status bar and the Output pane (once per change). Nothing on 18.x.
+    /// </summary>
+    private async Task CheckIntelliCodeAsync(CancellationToken cancellationToken)
+    {
+        if (_autocomplete is not { } autocomplete || Interlocked.Exchange(ref _intelliCodeCheckRunning, 1) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var (status, detail) = await IntelliCodeCheck.RunAsync(this, cancellationToken).ConfigureAwait(true);
+            autocomplete.IntelliCode = status;
+            var previous = _intelliCodeReported;
+            _intelliCodeReported = status;
+            if (status == previous)
+            {
+                return;
+            }
+
+            _log?.Info("autocomplete.intellicode", "IntelliCode check: " + status + ".", ("detail", detail));
+            if (IntelliCodeRequirement.Describe(status) is { } message)
+            {
+                _output?.WriteLine(message);
+            }
+            else if (previous is IntelliCodeStatus.Missing or IntelliCodeStatus.CompletionsOff)
+            {
+                _output?.WriteLine("IntelliCode's automatic code completions are on: inline suggestions are available.");
+            }
+
+            await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+            if (_supervisor is { } supervisor)
+            {
+                SetStatusBarText(StatusBarText(supervisor));
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Visual Studio is shutting down.
+        }
+#pragma warning disable CA1031 // The check must never break the package; ghost text simply stays as it is.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            _log?.Warning("autocomplete.intellicode.failed", "The IntelliCode check failed.", ("error", ex.GetType().Name), ("detail", ex.Message));
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _intelliCodeCheckRunning, 0);
+        }
+    }
 
     /// <summary>Opens the log folder in File Explorer (Tools &gt; Pillion: Open Logs, and the chat window's status line).</summary>
     private void OpenLogFolder()
