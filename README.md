@@ -153,7 +153,8 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
     "anthropicProvider": true,
     "geminiProvider": true,
     "mistralProvider": true,
-    "azureOpenAIProvider": true
+    "azureOpenAIProvider": true,
+    "autocomplete": true
   }
 }
 ```
@@ -170,6 +171,7 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
 | `geminiProvider` | Providers of kind `gemini` are not built or routed to. |
 | `mistralProvider` | Providers of kind `mistral` (chat and Codestral fill-in-the-middle) are not built or routed to. |
 | `azureOpenAIProvider` | Providers of kind `azure-openai` are not built or routed to. |
+| `autocomplete` | `IModelService.CompleteAsync` (ghost-text autocomplete) fails with `PolicyDenied` and a message that names the flag; chat and model listing are unaffected. |
 
 A repository can switch flags off for everyone who opens it with `disabledFeatures` in `.pillion/policy.json`, next to
 `localOnly`, `disabledTools`, `exclude` and `denyCommands`:
@@ -184,6 +186,22 @@ policies. The extension reads the result, with policies applied, through the rea
 `effective.features` of `ISettingsService.GetAsync`; it is re-read when Pillion Host becomes ready, on **Refresh** in the
 chat window and when the Tools menu opens. `settings.json` stays at version 1: a file without a `features` section gets
 the defaults when it is loaded, and unknown flags in the section are preserved.
+
+## Local models and the GPU tier
+
+Pillion Host detects the GPU tier once per run (CPU only, 8 GB, 12 GB, 16 GB, 24 GB or more) from `nvidia-smi`, else
+DXGI, else the display adapter's registry entry, and picks the resident local models and the autocomplete prompt budget
+from it (1,024 tokens when the completion model runs on the CPU, 2,048 on a GPU). Override the detection in
+`settings.json`:
+
+```json
+{ "models": { "gpuTier": "auto" } }
+```
+
+`auto` (the default) detects; `cpu`, `8gb`, `12gb`, `16gb` and `24gb` force a tier. The completion model is kept loaded
+(`keep_alive` -1) with a fixed context size per profile; see
+[src/Pillion.ModelGateway/README.md](src/Pillion.ModelGateway/README.md#autocomplete) for the `OLLAMA_MAX_LOADED_MODELS`
+setting that matches each tier.
 
 ## Contributing
 

@@ -127,6 +127,30 @@ public sealed class AutocompleteLiveTests(ITestOutputHelper output)
     }
 
     [LiveOllamaModelFact(Small)]
+    public async Task Calibration_QwenCounts_MatchTheRecordedCounts()
+    {
+        using var http = new HttpClient { BaseAddress = new Uri(LiveOllama.Endpoint), Timeout = Budget };
+        using var measured = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "Tokens", "measured-counts.json")));
+        foreach (var file in measured.RootElement.GetProperty("files").EnumerateObject())
+        {
+            var text = TokenCounterTests.ReadCorpus(file.Name);
+            var body = new JsonObject
+            {
+                ["model"] = Small,
+                ["prompt"] = text,
+                ["raw"] = true,
+                ["stream"] = false,
+                ["options"] = new JsonObject { ["num_predict"] = 1, ["num_ctx"] = 4096 },
+            };
+            using var response = await http.PostAsJsonAsync("api/generate", body);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var count = json.RootElement.GetProperty("prompt_eval_count").GetInt32();
+            output.WriteLine($"{file.Name}: {count} tokens (recorded {file.Value.GetProperty(Small).GetInt32()})");
+            Assert.Equal(file.Value.GetProperty(Small).GetInt32(), count);
+        }
+    }
+
+    [LiveOllamaModelFact(Small)]
     public Task Latency_Small_OnTheGpu() => MeasureAsync(Small, GpuTierSetting.Auto, "local 1.5B as this machine runs it (GPU, 2,048-token budget)");
 
     [LiveOllamaModelFact(Small)]
