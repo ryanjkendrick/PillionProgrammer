@@ -263,9 +263,15 @@ previous copy first), runs `/updateconfiguration`, and the live checks drive the
 
 ## Open issues known from phase 0
 
-- **No VSSDK integration-test project yet.** The host-kill evidence is a scripted UI Automation run against the
-  Experimental Instance (`Invoke-HostKillCheck`), plus `RealProcessTests` (supervisor kill and restart against
-  `Pillion.FakeHost`, outside Visual Studio). A VS SDK test project in the Experimental Instance is a phase 1 item.
+- **Closed in phase 1 (work item 1.16): no VSSDK integration-test project.** At Gate 0 the host-kill evidence was a
+  scripted UI Automation run against the Experimental Instance (`Invoke-HostKillCheck`), plus `RealProcessTests`
+  (supervisor kill and restart against `Pillion.FakeHost`, outside Visual Studio). `tests/Pillion.VisualStudio.IntegrationTests`
+  now runs `[IdeFact]` tests inside the Experimental Instance of 18.x, and the same sources build as
+  `tests/Pillion.VisualStudio.IntegrationTests.VS2022` for 17.14 (no single version of the test framework drives both).
+  They cover package load on folder open with no Activity Log errors, `IHostConnection` reaching Ready, the host kill
+  (UI thread probed every 250 ms for 15 s, longest gap under 2 s, Ready again within 15 s) and **Tools > Pillion: Open
+  Chat**; `tools/vs-tests` deploys and runs them, and CI runs them on both versions. The UI Automation scripts stay for
+  the gate runs (chat with a model, Local-only, the offline run).
 - **The chat transcript is not virtualised.** Every turn stays in the visual tree; long conversations will cost memory
   and layout time. Fine for phase 0; needs a virtualising panel before the chat is used for long sessions.
 - **Azure OpenAI is deferred.** The OpenAI-compatible adapter covers OpenAI, OpenRouter, enterprise gateways and local
@@ -282,7 +288,8 @@ previous copy first), runs `/updateconfiguration`, and the live checks drive the
 - **Closed in PR 15: no feature flags existed.** See the feature flag row above. Not yet covered by a flag: the editor
   and workspace services and the stubs for later phases (they have no behaviour in phase 0).
 - **`main` has not been built by CI with phase 0 merged.** Nothing from phase 0 has been squash-merged to `main` yet;
-  `phase0/integration` (PR 8) carries it. CI targets 18.x only (`windows-latest`); a 17.14 CI leg does not exist.
+  `phase0/integration` (PR 8) carries it. CI targeted 18.x only (`windows-latest`); phase 1 (work item 1.16) adds a
+  `windows-2022` job that runs the integration tests on 17.14 against the VSIX the 18.x job built.
 - **Closed in PR 15: duplicate picker entries.** Ollama on this machine listed `gemma4:e2b` twice (two digests under
   one name) and the picker showed two identical entries. The Ollama provider now lists each name once, keeping the
   first entry of `/api/tags` (the digest the tag currently points at; `:latest` and no tag are the same name). Fixture
