@@ -31,6 +31,46 @@ commit.
 
 ## Changelog
 
+### 1.2 (pending)
+
+Additive only, batched with the other phase 1 contract additions into one minor bump at the wave boundary
+(`ContractVersion` still says 1.1 until then). Each bullet below is its own work item's entry.
+
+- **Mentions and context assembly (work item 1.10).** `IContextService` is unchanged; its DTOs and `ChatRequest` grow.
+
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `TaskClass` | `Summarise` | enum value 6 | History compression (Fast online, Local-fast offline); the enum only appends |
+  | `MentionRequest` | `Kind` | 1 | `file`, `folder`, `selection`, `errors`, `clipboard`; empty reads it from the mention text, and a bare `@name` is a fuzzy match |
+  | `MentionRequest` | `WorkspaceRoots` | 2 | `string[]`: the solution or folder roots; relative paths resolve against them |
+  | `MentionRequest` | `CandidateFiles` | 3 | `string[]`: the solution or folder file list for fuzzy `file` and `folder` matching (phase 1 has no index) |
+  | `MentionRequest` | `Payload` | 4 | `string?`: the selection, the clipboard text, or the diagnostics as JSON lines for `errors` |
+  | `MentionRequest` | `MaxTokens` | 5 | Truncation limit for the content (0 is the host default) |
+  | `MentionRequest` | `ApprovedSensitive` | 6 | The user approved pinning an excluded or secret file |
+  | `MentionResolution` | `Kind` | 4 | The kind it resolved as |
+  | `MentionResolution` | `DisplayName` | 5 | Short name for the pin badge |
+  | `MentionResolution` | `TokenCount` | 6 | Tokens of `Content` for the default model, after truncation |
+  | `MentionResolution` | `Truncated` | 7 | `Content` was cut on a line boundary to fit `MaxTokens` |
+  | `MentionResolution` | `Candidates` | 8 | `string[]`: up to 10 paths when a fuzzy match is ambiguous |
+  | `MentionResolution` | `Reason` | 9 | Why it is unresolved |
+  | `MentionResolution` | `RequiresApproval` | 10 | Refused only because the file is excluded or looks secret; ask the user, then resolve again with `ApprovedSensitive` |
+  | `MentionResolution` | `IsSensitive` | 11 | The content came from such a file with approval; it is never sent to a cloud model |
+  | `ChatRequest` | `Pins` | 4 | `MentionResolution[]` already resolved and pinned by the client |
+  | `ChatRequest` | `CurrentFile` | 5 | Path of the file open in the editor |
+  | `ChatRequest` | `CurrentFileRegion` | 6 | `string?`: the text around the caret, or the selection |
+  | `ChatRequest` | `ConversationId` | 7 | Key of the cached rolling history summary |
+  | `ChatRequest` | `ProjectRules` | 8 | `string?`: `.pillion/rules.md`, supplied only after workspace trust |
+
+  A request with pins, a current file or project rules is assembled by the gateway (budget, priority, per-item caps,
+  history summary); a plain request is sent as before. See `src/Pillion.ModelGateway/README.md`, Context assembly.
+
+- **Settings-changed notification and Think harder (work item 1.15).** Notification `settingsChanged`, host to client, one positional argument: a `string[]` of the names of the top-level
+  `settings.json` sections that changed. Sent after the handshake, debounced to 250 ms, after a save and after an
+  external edit of the file. Like `connectivityChanged` it is not a method on a contract interface, so the interface
+  shape tests are unchanged, and a 1.1 client that registers no handler ignores it. See the host README.
+- Setting `routing.thinkHarder` (boolean, default `false`) in `settings.json`; it is read through
+  `ISettingsService`, so no DTO changes.
+
 ### 1.1 (phase 0, wave 3)
 
 Additive only; a 1.0 peer is still accepted by the handshake and ignores the new fields, and a 1.1 peer reads their

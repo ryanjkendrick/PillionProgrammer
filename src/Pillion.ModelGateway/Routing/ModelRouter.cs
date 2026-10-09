@@ -70,6 +70,7 @@ public sealed class ModelRouter : IModelRouter
             TaskClass.Autocomplete => switches.Autocomplete,
             TaskClass.InlineEdit => switches.InlineEdit,
             TaskClass.Chat => switches.Chat,
+            TaskClass.Summarise => switches.Chat,
             TaskClass.Agent => switches.Agent,
             TaskClass.Vision => switches.Vision,
             _ => false,
@@ -227,6 +228,9 @@ public sealed class ModelRouter : IModelRouter
 
             case TaskClass.Embedding:
                 return (Profile.LocalFast, "Auto: local (embeddings are always local)");
+
+            case TaskClass.Summarise:
+                return online ? (Profile.Fast, "Auto: Fast (online)") : (Profile.LocalFast, $"Auto: LocalFast ({state})");
 
             default:
                 return online ? (Profile.Balanced, "Auto: Balanced (online)") : (Profile.LocalStrong, $"Auto: LocalStrong ({state})");

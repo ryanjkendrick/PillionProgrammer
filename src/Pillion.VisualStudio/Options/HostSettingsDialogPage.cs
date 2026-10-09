@@ -149,3 +149,15 @@ internal sealed class PrivacyOptionPage : HostSettingsDialogPage
     /// <inheritdoc/>
     protected override UIElement CreateView(OptionsPageViewModel viewModel) => new PrivacyOptionsControl((PrivacyOptionsViewModel)viewModel);
 }
+
+/// <summary>Tools &gt; Options &gt; Pillion Programmer &gt; Models and routing.</summary>
+[Guid(PackageGuids.RoutingOptionPageString)]
+internal sealed class RoutingOptionPage : HostSettingsDialogPage
+{
+    /// <inheritdoc/>
+    protected override OptionsPageViewModel CreateViewModel(IHostConnection connection, JoinableTaskFactory joinableTaskFactory, PillionLog? log) =>
+        new RoutingOptionsViewModel(connection, joinableTaskFactory, log);
+
+    /// <inheritdoc/>
+    protected override UIElement CreateView(OptionsPageViewModel viewModel) => new RoutingOptionsControl((RoutingOptionsViewModel)viewModel);
+}

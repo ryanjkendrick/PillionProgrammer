@@ -100,8 +100,11 @@ status line shows the connectivity state (Online, Degraded, Offline or Local-onl
 ("Pillion: Ready, Online"). **Tools >
 Options > Pillion Programmer** has the **Providers and keys** page (API keys go to the Windows Credential Manager under
 `PillionProgrammer/<provider id>`, never to settings files) and the **Privacy** page (Local-only mode and the cloud
-switch per task class). Both pages are a view over Pillion Host's `settings.json` and say "Host not ready" until the
-host is running. `tests/Pillion.FakeHost` serves canned models and in-memory settings, so it can stand in for
+switch per task class) and the **Models and routing** page (a profile and a cloud switch per task class, an optional
+model id per profile, the "Think harder by default" placeholder and the GPU tier override). The pages are a view
+over Pillion Host's `settings.json` and say "Host not ready" until the host is running; the host tells the extension
+when settings change (`settingsChanged`), so the chat model picker, open pages and autocomplete follow a save or an edit
+of the file without a Refresh press. `tests/Pillion.FakeHost` serves canned models and in-memory settings, so it can stand in for
 `Host\Pillion.Host.exe` in the experimental instance when you want to try the UI without a model.
 
 To publish Pillion Host as a self-contained win-x64 app:

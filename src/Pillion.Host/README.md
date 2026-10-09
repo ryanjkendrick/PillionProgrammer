@@ -8,6 +8,7 @@ editor, approval and workspace operations.
 Program.cs                          Parses the command line, composes the host, returns the exit code
 PillionHostBuilderExtensions.cs     AddPillionHost: logging + lifecycle + RPC server (used by Program and tests)
 Lifecycle/                          HostStateMachine, HostShutdown (exit code), ParentProcessWatcher
+Context/                            ContextRpcService (IContextService): @file, @folder, @selection, @clipboard, @errors
 Rpc/                                RpcServer, RpcConnection, PillionJsonRpc, handshake, IRpcTarget, IVsixConnection
 Logging/                            Rolling JSON-lines file sink and retention
 ```
@@ -100,6 +101,29 @@ connection), and do not cache one across reconnects.
 To report health, inject `HostStateMachine` and call `TryTransition(HostState.Degraded, "reason")` (and back to
 `Ready`); the client is notified automatically.
 
+## Mentions (`Context/`)
+
+`ContextRpcService` serves `IContextService`. `ResolveMentionAsync` turns a mention into pinned content with a token count
+for the default chat model, truncated to `MaxTokens` (default 12,000) on a line boundary with `Truncated` set:
+
+| Mention | Source | Result |
+| --- | --- | --- |
+| `@file:path`, `@Name` | Exact path (absolute, or relative to `WorkspaceRoots`), else fuzzy over `CandidateFiles` by file name, then path; with no list the host walks the roots | The file's text (read from disk, at most 1 MiB, binary refused); an ambiguous name returns up to 10 `Candidates` and `IsResolved` false |
+| `@folder:path` | Folder from `WorkspaceRoots` or fuzzy over the folders of `CandidateFiles` | An outline: up to 200 files with size and first line; excluded and secret files are left out and counted |
+| `@selection`, `@clipboard` | `Payload` | The text as sent |
+| `@errors` | `Payload`: JSON lines `{severity,id,message,file,line}` | One line per diagnostic, errors first, at most 200 |
+| `@symbol`, `@docs`, `@git`, ... | | Unresolved: "not available in this version" |
+
+A file must be under a workspace root or in `CandidateFiles`. Files matched by the effective `indexing.exclude` globs or by
+the built-in secret rules (`.env`, `.env.*` except examples, `*.pfx`, `*.p12`, `*.pem`, `*.key`, `*.jks`, `*.keystore`,
+`secrets.json`, files under `.ssh`, `.aws`, `.gnupg`, and `appsettings.*.json` that mentions `ConnectionStrings` or
+`Password`) resolve as unresolved with `RequiresApproval`; the client asks the user and asks again with `ApprovedSensitive`.
+An approved file comes back with `IsSensitive`, and the gateway never sends such a pin to a cloud model.
+
+`SearchAsync` returns an empty array and `GetIndexStatusAsync` reports nothing indexed (the index arrives in phase 2);
+`PauseIndexingAsync` does nothing. The chat side of context (pins, current file, rules, history summary) is in the Model
+Gateway README, Context assembly.
+
 ## Logging
 
 Console (single line) plus a file sink writing one JSON object per line to `host-YYYYMMDD.log` (local date) in
@@ -170,3 +194,26 @@ does for `hostStateChanged`. Nothing is sent before the handshake is accepted. T
 
 Repository policies: the monitor reads policies through `IRepositoryPolicyProvider`. `RepositoryPolicyRegistry` is
 the default; whatever knows the open repositories calls `SetPolicies(...)` on it when the set changes.
+
+## Settings-changed notification (`settingsChanged`)
+
+Host to client, a JSON-RPC notification with one positional argument: a string array of the names of the top-level
+sections of `settings.json` that changed (for example `["routing", "cloudSwitches"]`), in document order. It carries
+no values; the client reads the settings it shows again through `ISettingsService`.
+
+- Sent after any `SettingsStore.Changed`: a save through `ISettingsService.SetAsync` and an external edit of the file
+  (the store's file watcher reloads it first). The sections are found by comparing the settings document before and
+  after, so unknown top-level sections (such as `autocomplete`) are named too, and a save that changes nothing sends
+  nothing.
+- Sent once per burst: every change restarts a 250 ms window, so the several `SetAsync` calls of one Options page save
+  produce one notification naming the union of the sections. An external edit therefore arrives about half a second
+  after the file is saved (the store's own 250 ms debounce plus this one).
+- Sent only to a client whose handshake was accepted, over the same path as `connectivityChanged`
+  (`Connectivity/INotificationSender`, `VsixConnection.TryNotifyAsync`). With no client connected nothing is sent, and a
+  change made before a client connected is not replayed: a client reads the settings when its host is ready anyway.
+- The client registers the handler before it handshakes, as for `hostStateChanged` and `connectivityChanged`. A client
+  that registers none is unaffected (StreamJsonRpc ignores a notification nobody handles).
+- Implemented by `Settings/SettingsChangedNotifier` (a hosted service registered with
+  `AddPillionSettingsNotifications`). In the VSIX it surfaces as `IHostConnection.SettingsChanged`; the chat model
+  picker, the open Options pages and autocomplete availability read their settings again when a section they use
+  is named.

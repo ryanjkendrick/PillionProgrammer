@@ -116,7 +116,7 @@ public class InterfaceShapeTests
     [Fact]
     public void TaskClass_HasExpectedMembers()
     {
-        Assert.Equal(["Autocomplete", "InlineEdit", "Chat", "Agent", "Embedding", "Vision"], Enum.GetNames<TaskClass>());
+        Assert.Equal(["Autocomplete", "InlineEdit", "Chat", "Agent", "Embedding", "Vision", "Summarise"], Enum.GetNames<TaskClass>());
     }
 
     [Fact]
