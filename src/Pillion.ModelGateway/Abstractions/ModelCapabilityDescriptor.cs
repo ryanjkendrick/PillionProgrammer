@@ -45,6 +45,12 @@ public sealed record ModelCapabilityDescriptor
     /// <summary>Gets a value indicating whether the provider caches long stable prompt prefixes.</summary>
     public bool PromptCaching { get; init; }
 
+    /// <summary>
+    /// Gets a value indicating whether the model has a reasoning-effort control the adapter can set (Anthropic's
+    /// <c>output_config.effort</c>, Gemini's <c>thinkingLevel</c>).
+    /// </summary>
+    public bool ReasoningEffort { get; init; }
+
     /// <summary>Gets the cost in US dollars per million input tokens (0 for local models).</summary>
     public decimal InputCostPerMillionTokens { get; init; }
 
