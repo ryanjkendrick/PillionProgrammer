@@ -13,6 +13,8 @@
     <PackageReference Include="StreamJsonRpc" />
     <PackageReference Include="MessagePack" />
     <PackageReference Include="Microsoft.VisualStudio.Threading" />
+    <!-- Markdig (through Core) needs System.Memory 4.6.3; the RPC packages bring 4.6.0. -->
+    <PackageReference Include="System.Memory" />
   </ItemGroup>
 
   <ItemGroup>
