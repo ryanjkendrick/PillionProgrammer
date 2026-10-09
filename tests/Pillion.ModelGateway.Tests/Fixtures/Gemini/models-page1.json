@@ -1,0 +1,6 @@
+{
+  "models": [
+    { "name": "models/gemini-3.8-flash", "displayName": "Gemini 3.8 Flash", "inputTokenLimit": 1048576, "outputTokenLimit": 65536, "supportedGenerationMethods": ["generateContent"] }
+  ],
+  "nextPageToken": "page2token=="
+}
