@@ -8,7 +8,7 @@ namespace Pillion.Host.Models;
 
 /// <summary>
 /// Implements <see cref="IModelService"/> over the Model Gateway. <see cref="CompleteAsync"/> and <see cref="ChatAsync"/>
-/// stream chunks; <see cref="CancelAsync"/> cancels an in-flight request by its id; <see cref="ListModelsAsync"/>
+/// stream chunks (completion also needs the <see cref="FeatureNames.Autocomplete"/> feature); <see cref="CancelAsync"/> cancels an in-flight request by its id; <see cref="ListModelsAsync"/>
 /// aggregates every provider's models and marks which are usable now.
 /// </summary>
 internal sealed class ModelRpcService : IModelService
@@ -17,6 +17,11 @@ internal sealed class ModelRpcService : IModelService
     internal const string GatewayDisabledMessage =
         "The Model Gateway is turned off by settings or policy (feature modelGateway). "
         + "Set features.modelGateway to true in settings.json, or remove it from disabledFeatures in the repository policy.";
+
+    /// <summary>The message of the error returned while the <see cref="FeatureNames.Autocomplete"/> feature is off.</summary>
+    internal const string AutocompleteDisabledMessage =
+        "Autocomplete is turned off by settings or policy (feature autocomplete). "
+        + "Set features.autocomplete to true in settings.json, or remove it from disabledFeatures in the repository policy.";
 
     private readonly IModelGateway _gateway;
     private readonly IFeatureFlags? _features;
@@ -41,6 +46,7 @@ internal sealed class ModelRpcService : IModelService
     {
         ArgumentNullException.ThrowIfNull(request);
         EnsureGatewayEnabled();
+        EnsureEnabled(FeatureNames.Autocomplete, AutocompleteDisabledMessage);
         using var registration = Register(request.RequestId, cancellationToken);
         await foreach (var chunk in _gateway.CompleteAsync(request, registration.Token).ConfigureAwait(false))
         {
@@ -83,14 +89,16 @@ internal sealed class ModelRpcService : IModelService
         return [.. await _gateway.ListModelsAsync(cancellationToken).ConfigureAwait(false)];
     }
 
-    private void EnsureGatewayEnabled()
+    private void EnsureGatewayEnabled() => EnsureEnabled(FeatureNames.ModelGateway, GatewayDisabledMessage);
+
+    private void EnsureEnabled(string feature, string message)
     {
-        if (_features is not null && !_features.IsEnabled(FeatureNames.ModelGateway))
+        if (_features is not null && !_features.IsEnabled(feature))
         {
             throw new PillionRpcException(new PillionError
             {
                 Code = PillionErrorCode.PolicyDenied,
-                Message = GatewayDisabledMessage,
+                Message = message,
             });
         }
     }

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Pillion.Common.Hardware;
 using Pillion.Common.Secrets;
 using Pillion.Common.Settings;
 using Pillion.Contracts;
@@ -35,7 +36,7 @@ public sealed class GatewayProviderTester : IProviderTester
 public static class ModelGatewayServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the Model Gateway: the catalog, prompt templates, provider registry (with the Ollama, OpenAI-compatible, OpenAI, Anthropic, Gemini, Mistral and Azure OpenAI factories; the Azure factory uses an <see cref="ITokenCredentialProvider"/> if the host registers one), router,
+    /// Registers the Model Gateway: the catalog, prompt templates, token counter, GPU tier detector, autocomplete counters, provider registry (with the Ollama, OpenAI-compatible, OpenAI, Anthropic, Gemini, Mistral and Azure OpenAI factories; the Azure factory uses an <see cref="ITokenCredentialProvider"/> if the host registers one), router,
     /// circuit breakers, concurrency limiter, autocomplete cache, Outbound log and <see cref="IModelGateway"/>. The
     /// default <see cref="IProviderTester"/> is replaced by <see cref="GatewayProviderTester"/>. Extension points that
     /// later work items supply (<see cref="IProviderReachability"/>, <see cref="IProviderHealthSink"/>,
@@ -56,6 +57,10 @@ public static class ModelGatewayServiceCollectionExtensions
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton(ModelCatalog.Default);
         services.TryAddSingleton(PromptTemplates.Default);
+        services.TryAddSingleton<ITokenCounter>(TokenCounter.Default);
+        services.TryAddSingleton<IGpuTierDetector>(sp => new GpuTierDetector(sp.GetService<ILogger<GpuTierDetector>>()));
+        services.TryAddSingleton<AutocompleteCounters>();
+        services.TryAddSingleton<PromptEvaluationRates>();
 
         services.TryAddSingleton<IProviderReachability, AlwaysReachable>();
         services.TryAddSingleton<IProviderHealthSink, NoProviderHealthSink>();
@@ -105,7 +110,11 @@ public static class ModelGatewayServiceCollectionExtensions
             sp.GetRequiredService<IProgressSink>(),
             sp.GetRequiredService<ModelGatewayOptions>(),
             sp.GetRequiredService<TimeProvider>(),
-            sp.GetService<ILogger<ModelGateway>>()));
+            sp.GetService<ILogger<ModelGateway>>(),
+            sp.GetRequiredService<ITokenCounter>(),
+            sp.GetRequiredService<IGpuTierDetector>(),
+            sp.GetRequiredService<AutocompleteCounters>(),
+            sp.GetRequiredService<PromptEvaluationRates>()));
 
         // Test connection probes the named provider through the gateway (replacing the settings' NoProviderTester).
         services.Replace(ServiceDescriptor.Singleton<IProviderTester, GatewayProviderTester>());

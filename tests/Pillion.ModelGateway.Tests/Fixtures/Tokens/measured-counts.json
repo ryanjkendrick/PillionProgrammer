@@ -1,0 +1,9 @@
+{
+  "comment": "Token counts of the corpus files (LF line endings) measured on 2026-10-09 with Ollama 0.40.1: prompt_eval_count of a raw /api/generate request with num_predict 1, minus the BOS token Gemma adds. AutocompleteLiveTests.Calibration_QwenCounts_MatchTheRecordedCounts re-measures the Qwen column.",
+  "files": {
+    "GeometryTests.cs": { "qwen2.5-coder:1.5b": 1076, "gemma4:e2b": 1271 },
+    "InventoryService.cs": { "qwen2.5-coder:1.5b": 1043, "gemma4:e2b": 1260 },
+    "ledger.py": { "qwen2.5-coder:1.5b": 1049, "gemma4:e2b": 1217 },
+    "scheduler.ts": { "qwen2.5-coder:1.5b": 1050, "gemma4:e2b": 1316 }
+  }
+}

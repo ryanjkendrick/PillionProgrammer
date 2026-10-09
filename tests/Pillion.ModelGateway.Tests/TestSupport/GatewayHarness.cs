@@ -1,3 +1,4 @@
+using Pillion.Common.Hardware;
 using Pillion.Common.Secrets;
 using Pillion.Common.Settings;
 using Pillion.Contracts;
@@ -10,7 +11,7 @@ namespace Pillion.ModelGateway.Tests.TestSupport;
 /// </summary>
 internal sealed class GatewayHarness : IDisposable
 {
-    public GatewayHarness(bool withCloud = true, bool withLocal = true, Action<ModelGatewayOptions>? configure = null)
+    public GatewayHarness(bool withCloud = true, bool withLocal = true, Action<ModelGatewayOptions>? configure = null, GpuTier gpuTier = GpuTier.Gpu8GB)
     {
         Options = new ModelGatewayOptions
         {
@@ -60,7 +61,8 @@ internal sealed class GatewayHarness : IDisposable
             new NoCostCaps(),
             Progress,
             Options,
-            Clock);
+            Clock,
+            gpuTierDetector: new FixedGpuTierDetector(gpuTier));
     }
 
     public ModelGatewayOptions Options { get; }
@@ -138,4 +140,16 @@ internal sealed class GatewayHarness : IDisposable
     };
 
     public void Dispose() => Registry.Dispose();
+}
+
+/// <summary>An <see cref="IGpuTierDetector"/> that reports a fixed tier.</summary>
+internal sealed class FixedGpuTierDetector(GpuTier tier) : IGpuTierDetector
+{
+    public int Calls;
+
+    public GpuInfo Detect()
+    {
+        Interlocked.Increment(ref Calls);
+        return new GpuInfo(tier, null, "fake", "test");
+    }
 }

@@ -12,6 +12,9 @@ public static class SettingsSections
     /// <summary>The routing section.</summary>
     public const string Routing = "routing";
 
+    /// <summary>The local models section (GPU tier override).</summary>
+    public const string Models = "models";
+
     /// <summary>The per-task-class cloud switches section.</summary>
     public const string CloudSwitches = "cloudSwitches";
 
@@ -38,6 +41,7 @@ public static class SettingsSections
     [
         Providers,
         Routing,
+        Models,
         CloudSwitches,
         Privacy,
         Approvals,

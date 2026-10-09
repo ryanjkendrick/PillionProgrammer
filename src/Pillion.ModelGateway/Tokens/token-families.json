@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "comment": "How tokens are counted per model family (design section 7, Context assembly). 'match' patterns are matched in order against the model id without any provider or namespace prefix, case-insensitively, '*' being a wildcard; the last family must match '*'. 'tokenizer' is 'o200k_base' or 'cl100k_base' (Microsoft.ML.Tokenizers, exact) or 'estimate'. An estimate counts every decimal digit as 'digitTokens' tokens (Qwen and Gemma split numbers into single digits) and every other character as 1 / 'charsPerToken' tokens, then adds 'safetyMargin' (10%). charsPerToken is the non-digit characters of the fixture corpus (tests/Pillion.ModelGateway.Tests/Fixtures/Tokens/corpus: four C#, TypeScript and Python files, 17,506 characters of which 231 are digits) divided by the tokens they took, measured on 2026-10-09 with Ollama 0.40.1 (prompt_eval_count of a raw /api/generate request, the BOS token removed). Families that could not be measured on the development machine use the lowest measured ratio. The Llama 3 family is counted with cl100k_base: its tokenizer keeps cl100k_base's 100,000 ranks and pre-tokenizer pattern and adds 28,000 ranks, so cl100k_base counts are an upper bound in practice.",
+  "safetyMargin": 0.10,
+  "families": [
+    { "family": "openai-o200k", "match": [ "gpt-4o*", "gpt-4.1*", "gpt-4.5*", "gpt-5*", "gpt-6*", "o1*", "o3*", "o4*", "chatgpt-4o*", "codex-*" ], "tokenizer": "o200k_base" },
+    { "family": "openai-cl100k", "match": [ "gpt-4*", "gpt-3.5*", "text-embedding-3*", "text-embedding-ada*" ], "tokenizer": "cl100k_base" },
+    { "family": "llama3", "match": [ "llama3*", "llama-3*", "meta-llama-3*", "llama3.1*", "llama3.2*", "llama3.3*" ], "tokenizer": "cl100k_base" },
+    { "family": "qwen2.5-coder", "match": [ "qwen2.5-coder*", "qwen2.5*", "qwen2*", "qwen3*" ], "tokenizer": "estimate", "charsPerToken": 4.33, "digitTokens": 1.0, "measured": "qwen2.5-coder:1.5b (Q4_K_M), 4,218 tokens: 17,275 non-digit characters over 3,987 tokens" },
+    { "family": "gemma", "match": [ "gemma*", "codegemma*" ], "tokenizer": "estimate", "charsPerToken": 3.57, "digitTokens": 1.0, "measured": "gemma4:e2b (Q4_K_M), 5,064 tokens: 17,275 non-digit characters over 4,833 tokens" },
+    { "family": "codellama", "match": [ "codellama*", "llama2*", "llama-2*" ], "tokenizer": "estimate", "charsPerToken": 3.57, "digitTokens": 1.0, "measured": "not measured (no model on the development machine); uses the lowest measured ratio" },
+    { "family": "starcoder2", "match": [ "starcoder2*", "starcoder*" ], "tokenizer": "estimate", "charsPerToken": 3.57, "digitTokens": 1.0, "measured": "not measured (no model on the development machine); uses the lowest measured ratio" },
+    { "family": "deepseek-coder", "match": [ "deepseek-coder*", "deepseek*" ], "tokenizer": "estimate", "charsPerToken": 3.57, "digitTokens": 1.0, "measured": "not measured (no model on the development machine); uses the lowest measured ratio" },
+    { "family": "codestral", "match": [ "codestral*", "mistral*", "devstral*", "ministral*" ], "tokenizer": "estimate", "charsPerToken": 3.57, "digitTokens": 1.0, "measured": "not measured (no model on the development machine); uses the lowest measured ratio" },
+    { "family": "default", "match": [ "*" ], "tokenizer": "estimate", "charsPerToken": 3.57, "digitTokens": 1.0, "measured": "the lowest measured ratio" }
+  ]
+}

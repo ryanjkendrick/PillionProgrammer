@@ -33,6 +33,9 @@ public static class FeatureNames
     /// <summary>The Azure OpenAI provider.</summary>
     public const string AzureOpenAIProvider = "azureOpenAIProvider";
 
+    /// <summary>Ghost-text autocomplete: the host's completion service (<c>IModelService.CompleteAsync</c>).</summary>
+    public const string Autocomplete = "autocomplete";
+
     /// <summary>Gets every feature flag name, in the order they are written to <c>settings.json</c>.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
@@ -46,6 +49,7 @@ public static class FeatureNames
         GeminiProvider,
         MistralProvider,
         AzureOpenAIProvider,
+        Autocomplete,
     ];
 }
 
@@ -85,6 +89,9 @@ public sealed class FeatureSettings : SettingsNode
     /// <summary>Gets or sets a value indicating whether the Azure OpenAI provider is available.</summary>
     public bool AzureOpenAIProvider { get; set; } = true;
 
+    /// <summary>Gets or sets a value indicating whether ghost-text autocomplete is available. When off, completion requests fail with a policy error.</summary>
+    public bool Autocomplete { get; set; } = true;
+
     /// <summary>Determines whether a feature is on.</summary>
     /// <param name="feature">A name from <see cref="FeatureNames"/>; case is ignored.</param>
     /// <returns><see langword="true"/> when the feature is on. A feature this version does not know is on.</returns>
@@ -104,6 +111,7 @@ public sealed class FeatureSettings : SettingsNode
             "geminiprovider" => GeminiProvider,
             "mistralprovider" => MistralProvider,
             "azureopenaiprovider" => AzureOpenAIProvider,
+            "autocomplete" => Autocomplete,
             _ => true,
         };
     }
@@ -145,6 +153,9 @@ public sealed class FeatureSettings : SettingsNode
                 break;
             case "azureopenaiprovider":
                 AzureOpenAIProvider = false;
+                break;
+            case "autocomplete":
+                Autocomplete = false;
                 break;
         }
     }

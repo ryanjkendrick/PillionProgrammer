@@ -9,7 +9,9 @@ Catalog/        catalog.json (data) and ModelCatalog: default model per profile 
 Routing/        IModelRouter / ModelRouter, RoutingRequest, RoutedModel, IProviderReachability, ICostGovernor
 Resilience/     CircuitBreakerRegistry + IProviderHealthSink, ConcurrencyLimiter, IProgressSink
 Redaction/      RedactingChatClient, RedactingFimClient, StreamingPlaceholderRestorer
-Caching/        AutocompleteCache (LRU, 256 entries)
+Caching/        AutocompleteCache (LRU, 256 entries, exact and type-through hits)
+Autocomplete/   AutocompletePromptBuilder + AutocompleteBudget, CompletionShaper, AutocompleteCounters, PromptEvaluationRates
+Tokens/         token-families.json (data) and ITokenCounter / TokenCounter (Microsoft.ML.Tokenizers or a calibrated estimate)
 Outbound/       IOutboundLog / InMemoryOutboundLog (ring buffer of 500), TokenEstimator
 Templates/      system-prompts.json, fim-formats.json (data) and PromptTemplates
 Providers/      ProviderRegistry (builds providers from settings), IGatewaySettingsSource, ModelInventory
@@ -38,17 +40,116 @@ StreamAttempt.cs   One request against one model: breaker, concurrency slot, ret
    `privacy.redactForLocalProviders`), open the stream and wait for the first token. Retries with jittered exponential
    backoff on 429 and 5xx (never for autocomplete). Cloud chat must start within 60 s; cloud autocomplete must finish
    within 3 s or is dropped silently (an empty stream); local requests never time out, they report
-   `WaitingForLocalModel` after 2 s and `SlowerThanExpected` after 120 s scaled by prompt size to `IProgressSink`.
+   `WaitingForLocalModel` after 2 s and `SlowerThanExpected` to `IProgressSink` after 120 s scaled by prompt size (chat)
+   or after a budget from the measured prompt-evaluation rate with a 10 s floor (autocomplete).
    A failure before the first token moves to the next candidate; a failure after it ends the stream with
    `Error` on the final chunk.
 3. **Stream.** Every chunk carries `ModelId` and `ProviderId`; the final chunk has `IsFinal`, token counts and any
    error. Placeholders are restored as they stream: text from a `<` that could start `<redacted:` is held until the
    closing `>`.
-4. **Record.** One `OutboundRecord` per attempt (time, provider, model, task class, locality, estimated prompt tokens,
-   completion tokens, redaction count, duration, outcome) plus one structured log line; never prompt text.
+4. **Record.** One `OutboundRecord` per attempt (time, provider, model, task class, locality, prompt tokens and whether
+   they were counted or estimated, completion tokens, cache hit, time to first token, redaction count, duration,
+   outcome) plus one structured log line; never prompt text. Autocomplete cache hits are recorded too.
 
-Autocomplete checks the cache first (key: provider/model, SHA-256 of the last 2,048 prefix characters and of the
-first 512 suffix characters); a hit is one final chunk and no outbound request.
+Autocomplete has its own steps (budget, header, cache, stops); see [Autocomplete](#autocomplete).
+
+## Autocomplete
+
+`CompleteAsync` is the host's autocomplete service (design sections 6, 7 and 9). Pillion Host serves it through
+`IModelService.CompleteAsync` while `features.autocomplete` and `features.modelGateway` are on (`PolicyDenied`
+otherwise).
+
+1. **Route.** The Autocomplete task class is routed as above; the router only checks that a budgeted prompt
+   (2,048 tokens) fits the model, because the prompt is built per candidate.
+2. **Cache.** An LRU of 256 entries keyed by provider/model, single- or multi-line, SHA-256 of the last 2,048 prefix
+   characters and SHA-256 of the first 512 suffix characters. A repeated keystroke or a backspace is an exact hit. When
+   the prefix ends with up to 64 characters that start a cached completion for the shorter prefix (the user is typing
+   the suggestion), the rest of that completion is served (a type-through hit). A hit is one final chunk with no
+   request, and it is recorded in the Outbound log with `CacheHit` set and 0 prompt tokens.
+3. **Budget.** `AutocompleteBudget.PromptTokensFor`: 1,024 prompt tokens when the completion model is local and the GPU
+   tier is CPU only, 2,048 on a GPU or in the cloud, and never more than the model's context minus the completion. The
+   budget covers the header, prefix, suffix and FIM framing (counted for an explicit template, 8 tokens reserved for a
+   template the server applies). After the framing:
+
+   | Share | Rule |
+   | --- | --- |
+   | Suffix minimum | 15%, when the suffix needs it |
+   | Prefix minimum | 60%, when the prefix needs it |
+   | Header | at most 15%, and only out of what the two minimums leave |
+   | Remainder | to the prefix first, then the suffix, so the suffix is trimmed first |
+
+   The prefix is cut on line boundaries from the top and always keeps its tail (the caret line; a caret line longer
+   than its allowance keeps its last characters). The suffix is cut on line boundaries from the bottom. No project or
+   user rules are added.
+4. **Header.** Comment lines in the document's language (`//`, `#`, `--`, `<!-- -->`, none for JSON or Markdown), most
+   stable first: `File: <name>`, `Open files: <up to 8 names, sorted>`, `In: <enclosing declaration>` (left out when the
+   kept prefix already shows it), `Recent edit: ...` (up to 3, edits in the current file left out). Items are added in the
+   order file, declaration, open files, edits while they fit the header's allowance.
+5. **Stable prefix.** The header comes first and changes only when the declaration, the open documents or the edits
+   elsewhere change. The prefix starts on a line whose absolute number (from `CaretLine`) is a multiple of 16, so the
+   start moves only in 16-line steps as the file grows. Consecutive keystrokes therefore change only the tail and a
+   resident model reuses its cached prompt: on the development machine, the second request with one more character took
+   78 ms of prompt evaluation against 237 ms for the first (qwen2.5-coder:1.5b, 1,828 prompt tokens).
+6. **FIM templates.** Ollama applies the model's own template when `suffix` is passed, so the Ollama path sends the
+   header plus prefix as `prompt` and the suffix as `suffix`. An OpenAI-compatible local server whose `providers` entry
+   sets `"supportsFim": true, "fimTemplate": "explicit"` (a raw `/v1/completions` server) gets the prompt rendered from
+   the family's template in `Templates/fim-formats.json` (Qwen2.5-Coder, CodeLlama, StarCoder2, DeepSeek-Coder,
+   Codestral) and an empty suffix. The family is matched by model id.
+7. **Stops.** A single-line request (`AllowMultiLine` false) stops at the first newline; then the request's
+   `StopSequences`, the family's stop tokens and the defaults (`\n\n\n`). The gateway applies them again to the stream,
+   whatever the provider honoured, and closes the stream when one matches. A multi-line request may run to 30 lines;
+   the client applies its block rules. Without `MaxTokens`, a single-line request generates up to 64 tokens and a
+   multi-line one up to 256.
+8. **Timeouts.** Cloud autocomplete has a 3 s hard limit and is dropped silently (an empty stream, Outbound outcome
+   `Dropped`). A local request reports `WaitingForLocalModel` after 2 s and `SlowerThanExpected` after three times the
+   prompt size divided by the model's measured prompt-evaluation rate (`PromptEvaluationRates`, from the time to first
+   token of earlier completions; 200 tokens/s until measured), never less than 10 s
+   (`LocalAutocompleteFirstTokenFloor`); it is never failed for being slow, so a cold load shows progress. Autocomplete
+   has one request in flight per provider and is never retried.
+9. **Record.** Every completion writes an `OutboundRecord`: provider, model, locality, prompt tokens (counted when the
+   family has a tokenizer, `PromptTokensCounted`), completion tokens, `CacheHit`, `TimeToFirstToken`, duration,
+   redaction count and outcome. `AutocompleteCounters.Snapshot()` (a singleton, also `ModelGateway.Counters`) reports
+   requests, exact and type-through hits, misses, model requests, drops, failures, cancellations and the hit rate.
+
+### Token counting (`Tokens/`)
+
+`ITokenCounter.ForModel(modelId)` returns the counter for the model's family from `Tokens/token-families.json`; context
+assembly (work item 1.10) uses the same interface.
+
+| Family | Models | Counting |
+| --- | --- | --- |
+| `openai-o200k` | gpt-4o, gpt-4.1, gpt-5, gpt-6, o1, o3, o4 | Microsoft.ML.Tokenizers, `o200k_base` |
+| `openai-cl100k` | gpt-4, gpt-3.5, text-embedding-3 | Microsoft.ML.Tokenizers, `cl100k_base` |
+| `llama3` | llama3*, Llama 3.x | `cl100k_base`: Llama 3 keeps its 100,000 ranks and pre-tokenizer and adds 28,000, so the count is an upper bound in practice |
+| `qwen2.5-coder` | qwen2.5*, qwen2*, qwen3* | estimate, 4.33 non-digit characters per token, 1 token per digit, +10% |
+| `gemma` | gemma*, codegemma* | estimate, 3.57 characters per token, 1 per digit, +10% |
+| `codellama`, `starcoder2`, `deepseek-coder`, `codestral`, default | | estimate at the lowest measured ratio (3.57), not measured |
+
+Tokenizers are created on first use and shared, so a host that only completes with Qwen never loads one. The estimate
+ratios were measured on 2026-10-09 with Ollama 0.40.1 on the corpus in
+`tests/Pillion.ModelGateway.Tests/Fixtures/Tokens/corpus` (four C#, TypeScript and Python files, 17,506 characters, 231
+of them digits): qwen2.5-coder:1.5b took 4,218 tokens (17,275 non-digit characters over 3,987 tokens = 4.33), gemma4:e2b
+5,064 (3.57). Against the measured counts the estimate is 95% to 127% per file; the digit-heavy test file is the one it
+undercounts (by under 5%). `cl100k_base` came within 2% of Qwen's counts on every file.
+
+### Residency and `OLLAMA_MAX_LOADED_MODELS`
+
+The Ollama adapter sends `keep_alive` -1 for the completion model and a fixed `num_ctx` per profile (Local-fast 4,096),
+so the model is loaded once and never reloaded by a context change. Ollama still unloads a model when another request
+needs its memory and the server already holds `OLLAMA_MAX_LOADED_MODELS` models, so set it (a system environment
+variable for the Ollama service, then restart Ollama) to the number of models the tier keeps resident:
+
+| GPU tier (`models.gpuTier`) | Resident | `OLLAMA_MAX_LOADED_MODELS` |
+| --- | --- | --- |
+| CPU only | the 1.5B FIM coder, plus a chat model in RAM | 2 |
+| 8 GB | one 7B FIM coder; chat shares it or runs on the CPU | 2 |
+| 12 GB | a 1.5B coder plus a 14B chat model, or a 7B coder plus an 8B chat model | 2 |
+| 16 GB | a 7B coder plus a 14B chat model | 2 |
+| 24 GB or more | a 7B coder plus a 32B chat model | 2 |
+
+Keep `OLLAMA_NUM_PARALLEL` at 1 on 8 and 12 GB cards: every parallel slot multiplies the context memory of each loaded
+model. On the development machine (RTX 2080 SUPER, 8 GB) qwen2.5-coder:7b at `num_ctx` 4,096 took 4.7 GB of VRAM and
+stayed fully on the GPU next to the 1.5B model (1.2 GB).
 
 ## Providers
 
@@ -264,4 +365,8 @@ feature flag off). Their `Category=Live` classes run only when `PILLION_TEST_ANT
 `PILLION_TEST_AZURE_OPENAI_DEPLOYMENT` for the chat test) are set; no test reads a key from anywhere else.
 Ollama tests with `Category=Live` talk to `http://localhost:11434` and skip themselves when it does not
 answer; the OpenAI-compatible live tests run only when `PILLION_TEST_OPENAI_COMPAT_ENDPOINT` is set (optionally
-`PILLION_TEST_OPENAI_COMPAT_KEY` and `PILLION_TEST_OPENAI_COMPAT_MODEL`). Run only live tests with `dotnet test --filter Category=Live`, or exclude them with `--filter Category!=Live`.
+`PILLION_TEST_OPENAI_COMPAT_KEY` and `PILLION_TEST_OPENAI_COMPAT_MODEL`). Autocomplete: `Autocomplete/` covers the budget table, token counting and its calibration, FIM layouts, stop handling,
+cache keys and counters, GPU-tier budgets and timeouts; `Ollama/AutocompleteLiveTests` (Live) checks a real completion,
+multi-line output, the prompt-cache hit (`prompt_eval_duration`), the recorded calibration, and writes first-token and
+total latency percentiles for qwen2.5-coder:1.5b and :7b to the test output (`--logger "console;verbosity=detailed"`).
+Run only live tests with `dotnet test --filter Category=Live`, or exclude them with `--filter Category!=Live`.

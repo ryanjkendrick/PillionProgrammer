@@ -199,7 +199,7 @@ public class SettingsStoreTests
         Assert.Equal(first, third);
         Assert.Contains("\n  \"version\": 1,", first, StringComparison.Ordinal);
         Assert.Equal(
-            ["version", "providers", "routing", "cloudSwitches", "privacy", "approvals", "costCaps", "indexing", "logging", "features"],
+            ["version", "providers", "routing", "models", "cloudSwitches", "privacy", "approvals", "costCaps", "indexing", "logging", "features"],
             ReadFile(store).Select(p => p.Key));
     }
 
