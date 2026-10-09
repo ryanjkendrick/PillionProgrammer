@@ -75,6 +75,7 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
     private HostState _hostState;
     private ConnectivityState? _connectivity;
     private int _connectivityVersion;
+    private int _settingsVersion;
     private (int RestartAttempt, int MaxRestartAttempts, string? Reason) _lastChange;
     private string _statusText;
     private bool _isChatEnabled = true;
@@ -302,6 +303,7 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
 
         _connection.StateChanged += OnHostStateChanged;
         _connection.ConnectivityChanged += OnConnectivityChanged;
+        _connection.SettingsChanged += OnSettingsChanged;
         Connectivity = _connection.Connectivity;
         ApplyHostState(_connection.State, 0, 0, reason: null);
         if (IsHostUsable)
@@ -544,6 +546,7 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         _disposed = true;
         _connection.StateChanged -= OnHostStateChanged;
         _connection.ConnectivityChanged -= OnConnectivityChanged;
+        _connection.SettingsChanged -= OnSettingsChanged;
         if (_availability is not null)
         {
             _availability.Changed -= OnAvailabilityChanged;
@@ -944,6 +947,34 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         HostState = state;
         _lastChange = (restartAttempt, maxRestartAttempts, reason);
         StatusText = FormatStatus(state, restartAttempt, maxRestartAttempts, reason, Connectivity);
+    }
+
+    /// <summary>
+    /// Raised on a background thread when the host reports changed settings. Lists the models again, without the
+    /// Refresh button, when a section that decides which models are listed or usable changed (providers, routing,
+    /// the cloud switches, privacy or the feature flags).
+    /// </summary>
+    private void OnSettingsChanged(object? sender, HostSettingsChangedEventArgs e)
+    {
+        if (!e.Affects("providers", "routing", "models", "cloudSwitches", "privacy", "features"))
+        {
+            return;
+        }
+
+        var version = Interlocked.Increment(ref _settingsVersion);
+        Run(async () =>
+        {
+            await _joinableTaskFactory.SwitchToMainThreadAsync(_disposal.Token);
+            if (version != Volatile.Read(ref _settingsVersion) || _disposed)
+            {
+                return; // A newer change is on its way.
+            }
+
+            if (IsHostUsable)
+            {
+                await RefreshModelsAsync().ConfigureAwait(true);
+            }
+        });
     }
 
     /// <summary>Raised on a background thread. Updates the status line and lists the models again (availability follows connectivity).</summary>

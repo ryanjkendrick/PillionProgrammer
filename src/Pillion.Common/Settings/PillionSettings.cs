@@ -84,6 +84,12 @@ public sealed class RoutingSettings : SettingsNode
     /// <summary>Gets or sets the model id pinned to each profile; an empty string lets the model catalog decide.</summary>
     public Dictionary<Profile, string> Profiles { get; set; } = CreateDefaultProfiles();
 
+    /// <summary>
+    /// Gets or sets a value indicating whether "Think harder" is on by default: Auto routes to a more capable model
+    /// and asks the provider for more reasoning effort. Off by default. The gateway reads it in a later work item.
+    /// </summary>
+    public bool ThinkHarder { get; set; }
+
     private static Dictionary<TaskClass, Profile> CreateDefaultTasks()
     {
         var map = new Dictionary<TaskClass, Profile>();

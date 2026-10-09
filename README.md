@@ -106,8 +106,11 @@ cursor**, which inserts into the active document at the caret (replacing any sel
 in the list); conversations are kept in memory until Visual Studio closes, and persistence arrives in phase 2. **Tools >
 Options > Pillion Programmer** has the **Providers and keys** page (API keys go to the Windows Credential Manager under
 `PillionProgrammer/<provider id>`, never to settings files) and the **Privacy** page (Local-only mode and the cloud
-switch per task class). Both pages are a view over Pillion Host's `settings.json` and say "Host not ready" until the
-host is running. `tests/Pillion.FakeHost` serves canned models and in-memory settings, so it can stand in for
+switch per task class) and the **Models and routing** page (a profile and a cloud switch per task class, an optional
+model id per profile, the "Think harder by default" placeholder and the GPU tier override). The pages are a view
+over Pillion Host's `settings.json` and say "Host not ready" until the host is running; the host tells the extension
+when settings change (`settingsChanged`), so the chat model picker, open pages and autocomplete follow a save or an edit
+of the file without a Refresh press. `tests/Pillion.FakeHost` serves canned models and in-memory settings, so it can stand in for
 `Host\Pillion.Host.exe` in the experimental instance when you want to try the UI without a model; a message containing
 `/markdown` gets a reply that exercises the Markdown rendering, and `/long` a reply of about 2,000 tokens.
 

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Threading;
@@ -120,6 +121,12 @@ public abstract class OptionsPageViewModel : ObservableObject, IDisposable
     /// <summary>Gets the logger.</summary>
     protected PillionLog? Log { get; }
 
+    /// <summary>
+    /// Gets the top-level settings sections the page shows. While the page is open and has no unsaved edits, a
+    /// <c>settingsChanged</c> notification naming one of them makes the page read the settings again. The default is none.
+    /// </summary>
+    protected virtual IReadOnlyList<string> WatchedSections => Array.Empty<string>();
+
     /// <summary>Gets a token that is cancelled when the page is disposed.</summary>
     protected CancellationToken DisposalToken => _disposal.Token;
 
@@ -139,6 +146,7 @@ public abstract class OptionsPageViewModel : ObservableObject, IDisposable
         {
             _subscribed = true;
             Connection.StateChanged += OnHostStateChanged;
+            Connection.SettingsChanged += OnHostSettingsChanged;
         }
 
         var version = Interlocked.Increment(ref _loadVersion);
@@ -276,6 +284,7 @@ public abstract class OptionsPageViewModel : ObservableObject, IDisposable
         if (_subscribed)
         {
             Connection.StateChanged -= OnHostStateChanged;
+            Connection.SettingsChanged -= OnHostSettingsChanged;
         }
 
         _disposal.Cancel();
@@ -352,6 +361,28 @@ public abstract class OptionsPageViewModel : ObservableObject, IDisposable
         HostState.Failed => HostNotReadyText + ": Pillion Host failed. Use Tools > Pillion: Retry; this page loads when the host is ready.",
         _ => HostNotReadyText + ".",
     };
+
+    /// <summary>
+    /// Raised on a background thread: when settings the page shows changed (after another page's save or an edit of
+    /// <c>settings.json</c>) and the page has no unsaved edits, reads them again. A page with edits keeps them.
+    /// </summary>
+    private void OnHostSettingsChanged(object? sender, HostSettingsChangedEventArgs e)
+    {
+        var watched = WatchedSections;
+        if (watched.Count == 0 || !e.Affects([.. watched]))
+        {
+            return;
+        }
+
+        Run(async () =>
+        {
+            await JoinableTaskFactory.SwitchToMainThreadAsync(DisposalToken);
+            if (LoadState == OptionsLoadState.Loaded && !IsDirty && !IsBusy)
+            {
+                await LoadAsync().ConfigureAwait(true);
+            }
+        });
+    }
 
     /// <summary>Raised on a background thread: loads the page once the host becomes ready while it shows "Host not ready".</summary>
     private void OnHostStateChanged(object? sender, HostStateChangedEventArgs e)
