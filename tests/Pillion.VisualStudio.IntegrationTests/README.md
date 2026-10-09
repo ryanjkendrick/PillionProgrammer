@@ -44,6 +44,8 @@ unless `RunIdeTests` is `true`), so the unit-test run stays fast and never start
 | `HostConnection_ReachesReady_Within30Seconds` | The `IHostConnection` service reaches `Ready` within 30 s with one `Pillion.Host.exe` child |
 | `KillingTheHost_KeepsTheUIResponsive_AndReconnectsWithin15Seconds` | After `Pillion.Host.exe` is killed, a low-priority dispatcher operation posted every 250 ms for 15 s always runs, with no gap of 2 s or more, and the connection is `Ready` again within 15 s with a new host process |
 | `OpenChatCommand_ShowsThePillionChatWindow` | `Tools.PillionOpenChat` shows the "Pillion Chat" tool window |
+| `IdeSignals_DocumentEvents_FireForOpenActivateSaveAndClose` | Work item 1.11: opening, activating, saving and closing a document in a scratch solution raises `IIdeSignals.DocumentOpened`, `ActiveDocumentChanged`, `DocumentSaved` and `DocumentClosed` with the file's path |
+| `IdeSignals_BuildWithACompileError_RaisesBuildEvents_AndAnswersDiagnosticAndOutputQueries` | `DTE.Solution.SolutionBuild.Build(true)` on a scratch project with one compile error raises `BuildStarted`, `BuildStateChanged` and `BuildFinished(success=false)`; `GetDiagnosticsAsync` returns CS0029 for the solution and the active document, `DiagnosticsChanged` fires, and `GetOutputPaneTextAsync("Build", 4000)` contains the error |
 | `AutocompleteAndInlineEditTests.*` | Skipped placeholders for work items 1.1 (proposal source with IntelliCode or Copilot on, completion-list suppression, the IntelliCode check on 17.x) and 1.7 (inline difference view: Enter applies one edit with one undo step, Esc leaves nothing to undo) |
 
 ## Running locally
