@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -92,6 +93,64 @@ public sealed class RealProcessTests : IDisposable
         Assert.Contains("host.shutdown.exited", LogText);
         Assert.DoesNotContain("host.shutdown.killed", LogText);
         Assert.Contains("fakehost: shutdown requested", LogText);
+    }
+
+    /// <summary>
+    /// Design rule (section 13): the UI thread never waits on the host. Runs the real launcher and a real host process
+    /// under a stand-in for Visual Studio's UI thread, kills the host, and checks that the restart (the signature check,
+    /// Process.Start, the job object, the pipe connect and verify, the handshake, every state change) never runs on that
+    /// thread and posts no work to it, and that a probe posted to it every 10 ms is never kept waiting.
+    /// </summary>
+    [Fact]
+    public async Task KillAndRestart_NeverRunsOrPostsAnythingOnTheMainThread()
+    {
+        Assert.True(File.Exists(FakeHostPath), "Build tests/Pillion.FakeHost first: " + FakeHostPath);
+        using var pump = new MainThreadPump();
+        using var context = pump.CreateContext();
+        var launchThreads = new ConcurrentQueue<int>();
+        var handlerThreads = new ConcurrentQueue<int>();
+        using var supervisor = new HostSupervisor(new ThreadRecordingLauncher(CreateLauncher(), launchThreads), context.Factory, _log, SystemClock.Instance, new RestartPolicy());
+        supervisor.StateChanged += (_, _) => handlerThreads.Enqueue(Environment.CurrentManagedThreadId);
+
+        // The package calls Start() on the main thread; it must return at once.
+        var startTook = await pump.InvokeAsync(() =>
+        {
+            var stopwatch = Stopwatch.StartNew();
+            supervisor.Start();
+            return stopwatch.Elapsed;
+        });
+        await supervisor.WhenReadyAsync(CancellationToken.None).WithTimeout(TimeSpan.FromSeconds(30));
+        var firstPid = supervisor.HostProcessId!.Value;
+
+        using var stopProbing = new CancellationTokenSource();
+        var probing = pump.ProbeAsync(TimeSpan.FromMilliseconds(10), stopProbing.Token);
+        using (var first = Process.GetProcessById(firstPid))
+        {
+            first.Kill();
+        }
+
+        await Wait.UntilAsync(() => supervisor.State == HostState.Restarting, "restarting");
+        await Wait.UntilAsync(
+            () => supervisor.State == HostState.Ready && supervisor.HostProcessId is { } pid && pid != firstPid,
+            "ready again with a new host",
+            timeoutMs: 30000);
+        stopProbing.Cancel();
+        await probing;
+
+        Assert.True(startTook < TimeSpan.FromMilliseconds(250), $"Start() kept the main thread for {startTook.TotalMilliseconds:0} ms.");
+        Assert.True(launchThreads.Count >= 2, "the supervisor launched the host twice");
+        Assert.DoesNotContain(pump.ThreadId, launchThreads);
+        Assert.True(handlerThreads.Count >= 4, "Starting, Ready, Restarting, Starting, Ready");
+        Assert.DoesNotContain(pump.ThreadId, handlerThreads);
+        Assert.True(pump.Probes > 20, $"only {pump.Probes} probes ran on the main thread");
+        Assert.True(
+            pump.WorkItems == 0 && pump.LongestWork < TimeSpan.FromMilliseconds(100),
+            $"The supervisor posted {pump.WorkItems} work items to the main thread, the longest taking {pump.LongestWork.TotalMilliseconds:0} ms.");
+        Assert.True(
+            pump.LongestProbeLatency < TimeSpan.FromSeconds(1),
+            $"A probe waited {pump.LongestProbeLatency.TotalMilliseconds:0} ms for the main thread (this machine was busy, or the restart kept it busy).");
+
+        await supervisor.ShutdownAsync(TimeSpan.FromSeconds(2));
     }
 
     [Fact]
@@ -297,6 +356,16 @@ public sealed class RealProcessTests : IDisposable
 
     private HostSupervisor CreateSupervisor(RestartPolicy policy) =>
         new(CreateLauncher(), _context.Factory, _log, SystemClock.Instance, policy);
+}
+
+/// <summary>Wraps a launcher and records the thread each launch begins on, which is where its synchronous part (signature check, Process.Start, job object) runs.</summary>
+internal sealed class ThreadRecordingLauncher(IHostLauncher inner, ConcurrentQueue<int> threads) : IHostLauncher
+{
+    public Task<IHostSession> LaunchAsync(CancellationToken cancellationToken)
+    {
+        threads.Enqueue(Environment.CurrentManagedThreadId);
+        return inner.LaunchAsync(cancellationToken);
+    }
 }
 
 [CollectionDefinition(Name, DisableParallelization = true)]
