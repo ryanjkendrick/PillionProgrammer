@@ -184,7 +184,7 @@ public class OllamaResidencyTests
 
     private static ChatOptions Chat(Profile profile) => new()
     {
-        AdditionalProperties = new AdditionalPropertiesDictionary { [GatewayOptionKeys.Profile] = profile },
+        AdditionalProperties = new AdditionalPropertiesDictionary { [GatewayOptionKeys.Profile] = profile, [GatewayOptionKeys.RequestId] = "req-1" },
     };
 
     private static Task<List<ChatResponseUpdate>> ChatAsync(OllamaProvider provider, string text, Profile profile = Profile.LocalStrong, string model = Coder) =>
@@ -262,8 +262,8 @@ public class OllamaResidencyTests
 
         var messages = rig.Progress.Reports.Select(p => p.Message).ToList();
         Assert.Contains(messages, m => m.StartsWith("Unloading qwen2.5-coder:7b (4,096-token context)", StringComparison.Ordinal));
-        Assert.Contains(messages, m => m.StartsWith("Loading qwen2.5-coder:7b with a 8,192-token context", StringComparison.Ordinal));
-        Assert.All(rig.Progress.Reports, p => Assert.Equal("ollama", p.ProviderId));
+        Assert.Contains(messages, m => m.StartsWith("Loading qwen2.5-coder:7b with 8,192 tokens of context", StringComparison.Ordinal));
+        Assert.All(rig.Progress.Reports, p => Assert.Equal(("ollama", "req-1", Coder), (p.ProviderId, p.RequestId, p.ModelId)));
     }
 
     [Fact]
@@ -378,7 +378,7 @@ public class OllamaResidencyTests
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"{watch.Elapsed}");
         Assert.Equal(PillionErrorCode.ProviderUnavailable, ex.Code);
         Assert.False(ex.IsProviderFault);
-        Assert.Contains("did not finish loading qwen2.5-coder:7b with a 8,192-token context within 0.3 s", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("did not finish loading qwen2.5-coder:7b with 8,192 tokens of context within 0.3 s", ex.Message, StringComparison.Ordinal);
         Assert.Contains("OLLAMA_MAX_LOADED_MODELS", ex.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("chat@", string.Concat(rig.Server.Transcript()), StringComparison.Ordinal);
         Assert.Contains(rig.Progress.Reports, p => p.Message.StartsWith("Loading", StringComparison.Ordinal));
@@ -541,6 +541,42 @@ public class OllamaResidencyTests
         rig.Dispose();
 
         Assert.Empty(rig.Map.GetSnapshot().Models);
+    }
+
+    [Fact]
+    public async Task TheRegistry_GivesProvidersTheTierTheOverridesTheProgressSinkAndTheMap()
+    {
+        var clock = new ManualClock();
+        var server = new FakeOllamaServer(clock);
+        var settings = new PillionSettings();
+        settings.Providers.Add(new ProviderSettings { Id = "ollama", Kind = ProviderKind.Ollama });
+        settings.Models.GpuTier = GpuTierSetting.Gpu16GB;
+        settings.Models.ResidentContext["Qwen2.5-Coder:7B"] = 6144;
+        var progress = new RecordingProgressSink();
+        var map = new LocalResidencyMap();
+        using var registry = new ProviderRegistry(
+            new StaticGatewaySettingsSource(settings),
+            new Common.Secrets.InMemorySecretStore(),
+            [new OllamaProviderFactory(() => server.Handler)],
+            ModelCatalog.Default,
+            progress: progress,
+            time: clock,
+            residency: map);
+        var provider = (OllamaProvider)registry.GetSnapshot().Find("ollama")!;
+
+        // The catalog routes Local-fast to the 1.5B model, so the 7B is a plain chat model here (30m, not pinned).
+        await ChatAsync(provider, "hello", Profile.LocalStrong);
+        var snapshot = await map.RefreshAsync(force: false, CancellationToken.None);
+
+        Assert.Equal(["load@6144/30m", "chat@6144/30m"], server.Transcript());
+        var resident = Assert.Single(snapshot.Models);
+        Assert.Equal((Coder, 6144, "ollama"), (resident.ModelId, resident.ContextLength, resident.ProviderId));
+        Assert.Equal(GpuTier.Gpu16GB, snapshot.Tier);
+        Assert.Contains(progress.Reports, p => p.Message.StartsWith("Loading", StringComparison.Ordinal));
+
+        // Disposing the registry disposes its providers, which leave the map.
+        registry.Dispose();
+        Assert.Empty(map.GetSnapshot().Models);
     }
 
     [Fact]

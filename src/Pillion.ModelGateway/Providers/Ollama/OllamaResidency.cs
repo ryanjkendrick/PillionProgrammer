@@ -607,7 +607,7 @@ internal sealed partial class OllamaResidency : ILocalResidencySource, IDisposab
         var model = request.ModelId;
         var limit = _provider.Options.LoadTimeout;
         var started = _runtime.Time.GetTimestamp();
-        Report(request, ModelProgressKind.WaitingForLocalModel, TimeSpan.Zero, string.Create(CultureInfo.InvariantCulture, $"Loading {model} with a {context:N0}-token context..."));
+        Report(request, ModelProgressKind.WaitingForLocalModel, TimeSpan.Zero, string.Create(CultureInfo.InvariantCulture, $"Loading {model} with {context:N0} tokens of context..."));
 
         var body = new JsonObject
         {
@@ -636,7 +636,7 @@ internal sealed partial class OllamaResidency : ILocalResidencySource, IDisposab
                 PillionErrorCode.ProviderUnavailable,
                 string.Create(
                     CultureInfo.InvariantCulture,
-                    $"Ollama did not finish loading {model} with a {context:N0}-token context within {limit.TotalSeconds:0.#} s.{DescribeOthers(key)} Unload a model you do not need ('ollama stop <model>'), lower models.residentContext for {model}, or set OLLAMA_MAX_LOADED_MODELS."),
+                    $"Ollama did not finish loading {model} with {context:N0} tokens of context within {limit.TotalSeconds:0.#} s.{DescribeOthers(key)} Unload a model you do not need ('ollama stop <model>'), lower models.residentContext for {model}, or set OLLAMA_MAX_LOADED_MODELS."),
                 isProviderFault: false);
         }
         finally
@@ -658,7 +658,7 @@ internal sealed partial class OllamaResidency : ILocalResidencySource, IDisposab
                     request,
                     ModelProgressKind.SlowerThanExpected,
                     elapsed,
-                    string.Create(CultureInfo.InvariantCulture, $"Still loading {request.ModelId} with a {context:N0}-token context ({elapsed.TotalSeconds:0} s of {limit.TotalSeconds:0} s)."));
+                    string.Create(CultureInfo.InvariantCulture, $"Still loading {request.ModelId} with {context:N0} tokens of context ({elapsed.TotalSeconds:0} s of {limit.TotalSeconds:0} s)."));
             }
         }
         catch (OperationCanceledException)
