@@ -14,8 +14,8 @@ namespace Pillion.Contracts;
 /// <see cref="Text"/>. After the final chunk the accumulated text is the validated proposal.
 /// </para>
 /// <para>
-/// Failures follow the chat rule: a failure before any text fails the call with a <see cref="PillionRpcException"/>;
-/// a failure after text arrives as a final chunk with <see cref="Error"/> and <see cref="ResetText"/> set and no text.
+/// The stream either ends with a final chunk (success) or fails: every failure, before or after preview text, fails the
+/// call with a <see cref="PillionRpcException"/> whose <see cref="PillionError"/> says why. Discard any preview then.
 /// </para>
 /// </remarks>
 [DataContract]
@@ -60,9 +60,9 @@ public sealed class InlineEditChunk
     public int CompletionTokens { get; set; }
 
     /// <summary>
-    /// Gets or sets the error that ended the stream after text had been sent, on a final chunk (which then also has
-    /// <see cref="ResetText"/> set and no text); otherwise <see langword="null"/>. A failure before any text fails the
-    /// call instead.
+    /// Gets or sets an error to show with the final chunk. Kept for parity with <see cref="ChatChunk.Error"/>; hosts that
+    /// implement contract 1.2 leave it <see langword="null"/> and fail the call instead (see the remarks), so a client
+    /// treats a final chunk with an error like a failed call.
     /// </summary>
     [DataMember(Order = 8)]
     public PillionError? Error { get; set; }
@@ -83,7 +83,7 @@ public sealed class InlineEditChunk
 
     /// <summary>
     /// Gets or sets a value indicating whether the text received so far must be discarded before this chunk's
-    /// <see cref="Text"/> is appended (the early preview changed, or the request failed after text was sent).
+    /// <see cref="Text"/> is appended (the early preview changed).
     /// </summary>
     [DataMember(Order = 11)]
     public bool ResetText { get; set; }

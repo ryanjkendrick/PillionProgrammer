@@ -92,6 +92,23 @@ public class ContractV12InlineEditTests
     }
 
     [Fact]
+    public void VsixToHostMethodNames_AreUniqueAcrossContracts()
+    {
+        // Pillion Host exposes every target under its CLR method names in one JSON-RPC namespace, so a name used by two
+        // VSIX-to-host contracts reaches only one of them (IInlineEditService has CancelEditAsync for this reason).
+        Type[] vsixToHost = [typeof(IModelService), typeof(IInlineEditService), typeof(IContextService), typeof(IAgentService), typeof(ISettingsService), typeof(IHostLifecycleService)];
+
+        var duplicates = vsixToHost
+            .SelectMany(t => t.GetMethods().Select(m => (Contract: t.Name, m.Name)))
+            .GroupBy(m => m.Name, StringComparer.Ordinal)
+            .Where(g => g.Count() > 1)
+            .Select(g => $"{g.Key}: {string.Join(", ", g.Select(m => m.Contract))}")
+            .ToArray();
+
+        Assert.Empty(duplicates);
+    }
+
+    [Fact]
     public void AOnePointOnePeer_IsStillCompatible()
     {
         Assert.True(ContractVersion.IsCompatible(1, 1));

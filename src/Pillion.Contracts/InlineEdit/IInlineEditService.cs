@@ -15,7 +15,8 @@ public interface IInlineEditService
     /// <summary>
     /// Streams a proposed replacement for the request's scope. Concatenating the <see cref="InlineEditChunk.Text"/> of
     /// every chunk (starting again whenever a chunk has <see cref="InlineEditChunk.ResetText"/> set) gives the full
-    /// replacement; the last chunk has <see cref="InlineEditChunk.IsFinal"/> set.
+    /// replacement; the last chunk has <see cref="InlineEditChunk.IsFinal"/> set. Every failure, even after preview
+    /// text, fails the call with a <see cref="PillionRpcException"/>.
     /// </summary>
     /// <param name="request">The edit request.</param>
     /// <param name="cancellationToken">A token that cancels the stream.</param>
@@ -26,5 +27,5 @@ public interface IInlineEditService
     /// <param name="requestId">The id of the request to cancel.</param>
     /// <param name="cancellationToken">A token that cancels this call.</param>
     /// <returns>A task that completes when the cancellation has been requested.</returns>
-    Task CancelAsync(string requestId, CancellationToken cancellationToken);
+    Task CancelEditAsync(string requestId, CancellationToken cancellationToken);
 }
