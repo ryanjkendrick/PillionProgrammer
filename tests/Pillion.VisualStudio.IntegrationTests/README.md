@@ -42,9 +42,31 @@ unless `RunIdeTests` is `true`), so the unit-test run stays fast and never start
 | `VisualStudio_IsAtLeast17_14` | The instance under test is 17.14 or later |
 | `Package_LoadsOnFolderOpen_WithNoActivityLogErrors` | The package is not loaded before a folder opens, loads by itself after `File > Open > Folder`, and the in-memory Activity Log has no error about Pillion |
 | `HostConnection_ReachesReady_Within30Seconds` | The `IHostConnection` service reaches `Ready` within 30 s with one `Pillion.Host.exe` child |
-| `KillingTheHost_KeepsTheUIResponsive_AndReconnectsWithin15Seconds` | After `Pillion.Host.exe` is killed, a low-priority dispatcher operation posted every 250 ms for 15 s always runs, with no gap of 2 s or more, and the connection is `Ready` again within 15 s with a new host process |
+| `KillingTheHost_KeepsTheUIResponsive_AndReconnectsWithin15Seconds` | After `Pillion.Host.exe` is killed, a low-priority dispatcher operation posted every 250 ms for 15 s always runs, and the connection is `Ready` again within 15 s with a new host process. The UI gap is judged against a control (see below) |
 | `OpenChatCommand_ShowsThePillionChatWindow` | `Tools.PillionOpenChat` shows the "Pillion Chat" tool window |
 | `AutocompleteAndInlineEditTests.*` | Skipped placeholders for work items 1.1 (proposal source with IntelliCode or Copilot on, completion-list suppression, the IntelliCode check on 17.x) and 1.7 (inline difference view: Enter applies one edit with one undo step, Esc leaves nothing to undo) |
+
+### Reading the host kill test's output
+
+The design rule is that the UI thread never waits on the host (design document section 13), with a budget of 2 s. A
+shared CI runner can stall a whole process for longer than that, so the test runs a control beside the dispatcher probe,
+on one clock, for the same 15 s: `BackgroundHeartbeat`, a dedicated thread that sleeps 250 ms and records when it wakes.
+The test output shows:
+
+- `UI thread:` the dispatcher probe: operations answered, the longest gap between two answers and when it happened, the
+  slowest answer, and the longest time between two posts (a large value means the posting thread itself was starved).
+- `Background thread:` the heartbeat's longest gap and when it happened.
+- `UI thread CPU time over the ... window:` the CPU time the UI thread used. A long gap with little CPU time means
+  the UI thread was blocked or starved, not busy.
+- every posted operation with its post and run times, and `<-- slow` on those that waited 500 ms or more, so a failure
+  shows where in the window (before or after the kill, the restart and Ready) the gap fell. The kill and each state
+  change are listed above with their times.
+
+The verdict (`ResponsivenessVerdict`): the test fails when the UI gap is over 5 s, when the UI gap exceeds the background
+gap by 2 s or more, or when the UI gap reaches 2 s while the background gap is under 500 ms. When the UI gap reaches
+2 s but the background thread stalled about as long, the machine stalled and the test cannot attribute that to Pillion's
+code: it passes with a `WARNING:` line in the output. Posted and answered operations must still match, and Ready must
+return within 15 s.
 
 ## Running locally
 

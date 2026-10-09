@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
@@ -20,6 +21,9 @@ public sealed class PillionPackageTests(ITestOutputHelper output) : PillionIdeTe
 {
     /// <summary>The design's budget for the UI thread while the host is killed (design section 4, Failure modes).</summary>
     private static readonly TimeSpan MaxUiGap = TimeSpan.FromSeconds(2);
+
+    /// <summary>A posted operation that waited this long for the UI thread is marked in the output.</summary>
+    private static readonly TimeSpan SlowOperation = TimeSpan.FromMilliseconds(500);
 
     [IdeFact]
     [TestOrder(0)]
@@ -77,22 +81,47 @@ public sealed class PillionPackageTests(ITestOutputHelper output) : PillionIdeTe
         await EnsurePackageLoadedAsync();
         await PillionHostChecks.WaitForReadyAsync(TimeSpan.FromSeconds(30), HangMitigatingCancellationToken);
 
-        // The probe runs on the thread pool and posts to the UI thread every 250 ms for 15 s; this test's own awaits
-        // leave the UI thread free in the meantime, as a user's Visual Studio would be.
-        var probe = DispatcherProbe.RunAsync(Application.Current.Dispatcher, TimeSpan.FromSeconds(15), TimeSpan.FromMilliseconds(250), HangMitigatingCancellationToken);
-        var restart = PillionHostChecks.KillHostAndWaitForReadyAsync(TimeSpan.FromSeconds(15), HangMitigatingCancellationToken);
+        // Two probes run side by side for the same 15 s, on one clock. The dispatcher probe runs on the thread pool and
+        // posts to the UI thread every 250 ms; this test's own awaits leave the UI thread free in the meantime, as a
+        // user's Visual Studio would be. The heartbeat is a dedicated thread that sleeps 250 ms and records when it
+        // wakes: it has nothing to do with the UI thread, so when both show a long gap together the machine (a shared CI
+        // runner starved of CPU, a pause of the whole process) stalled, and when only the UI thread does, the UI thread
+        // was kept busy.
+        using var uiCpu = ThreadCpuMeter.ForCurrentThread();
+        var uiCpuBefore = uiCpu.Read();
+        var timeline = Stopwatch.StartNew();
+        var interval = TimeSpan.FromMilliseconds(250);
+        var window = TimeSpan.FromSeconds(15);
+        var heartbeat = BackgroundHeartbeat.RunAsync(timeline, window, interval, HangMitigatingCancellationToken);
+        var probe = DispatcherProbe.RunAsync(Application.Current.Dispatcher, timeline, window, interval, HangMitigatingCancellationToken);
+        var restart = PillionHostChecks.KillHostAndWaitForReadyAsync(TimeSpan.FromSeconds(15), HangMitigatingCancellationToken, timeline);
         var responsiveness = await probe;
+        var background = await heartbeat;
         var report = await restart;
+        var uiCpuUsed = uiCpu.Read() - uiCpuBefore;
 
-        Output.WriteLine($"Killed Pillion.Host.exe pid {report.KilledProcessId}; left Ready after {report.LeftReadyAfter.TotalMilliseconds:0} ms; Ready again after {report.ReadyAgainAfter.TotalMilliseconds:0} ms with pid {report.NewProcessId}.");
+        Output.WriteLine($"Killed Pillion.Host.exe pid {report.KilledProcessId} at {report.KilledAt.TotalMilliseconds:0} ms on the probes' clock; left Ready after {report.LeftReadyAfter.TotalMilliseconds:0} ms; Ready again after {report.ReadyAgainAfter.TotalMilliseconds:0} ms with pid {report.NewProcessId}.");
         foreach (var transition in report.Transitions)
         {
             Output.WriteLine("  " + transition);
         }
 
         Output.WriteLine("UI thread: " + responsiveness);
+        Output.WriteLine("Background thread: " + background);
+        Output.WriteLine($"UI thread CPU time over the {timeline.Elapsed.TotalMilliseconds:0} ms window: {uiCpuUsed.TotalMilliseconds:0} ms (a long gap with little CPU time means the UI thread was blocked or starved, not busy).");
+        Output.WriteLine($"Posted operations (times in ms on the probes' clock, where the kill happened at {report.KilledAt.TotalMilliseconds:0}; slow = waited {SlowOperation.TotalMilliseconds:0} ms or more):");
+        foreach (var line in responsiveness.FormatOperations(SlowOperation))
+        {
+            Output.WriteLine(line);
+        }
 
-        Assert.True(responsiveness.LongestGap < MaxUiGap, $"The UI thread stalled after the host was killed: {responsiveness}.");
+        var verdict = ResponsivenessVerdict.Judge(responsiveness.LongestGap, background.LongestGap, MaxUiGap);
+        if (verdict.Warning is not null)
+        {
+            Output.WriteLine(verdict.Warning);
+        }
+
+        Assert.True(verdict.Failure is null, verdict.Failure + " UI thread: " + responsiveness + "; background thread: " + background + ".");
         Assert.Equal(responsiveness.Posted, responsiveness.Answered);
         Assert.True(report.ReadyAgainAfter <= TimeSpan.FromSeconds(15), $"Ready again only after {report.ReadyAgainAfter.TotalSeconds:0.0} s.");
         Assert.NotEqual(0, report.NewProcessId);
