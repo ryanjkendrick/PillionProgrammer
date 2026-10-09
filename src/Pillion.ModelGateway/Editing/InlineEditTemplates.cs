@@ -54,7 +54,7 @@ public sealed partial class InlineEditTemplates
                 Read(root, "docStyles", "default"),
                 Read(root, "languages"),
                 Read(root, "sections", "header", "before", "scope", "proposal", "after", "diagnostics", "history", "task", "instruction"),
-                Read(root, "corrections", "unmatched", "malformed", "noBlocks", "noCode", "syntax", "placeholders"));
+                Read(root, "corrections", "unmatched", "malformed", "noBlocks", "noCode", "docOnly", "syntax", "placeholders"));
             return result;
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
@@ -102,7 +102,7 @@ public sealed partial class InlineEditTemplates
     public string Section(string name, params (string Name, string Value)[] values) => Render(_sections[name], values);
 
     /// <summary>Renders a corrective message.</summary>
-    /// <param name="name">The message name (<c>unmatched</c>, <c>malformed</c>, <c>noBlocks</c>, <c>noCode</c>, <c>syntax</c>, <c>placeholders</c>).</param>
+    /// <param name="name">The message name (<c>unmatched</c>, <c>malformed</c>, <c>noBlocks</c>, <c>noCode</c>, <c>docOnly</c>, <c>syntax</c>, <c>placeholders</c>).</param>
     /// <param name="values">The placeholder values.</param>
     /// <returns>The message text.</returns>
     public string Correction(string name, params (string Name, string Value)[] values) => Render(_corrections[name], values);

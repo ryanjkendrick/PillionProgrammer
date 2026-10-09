@@ -78,8 +78,9 @@ public static partial class EditBlockParser
         var replace = new List<string>();
         var index = 0;
 
-        foreach (var line in lines)
+        for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
         {
+            var line = lines[lineIndex];
             var isStart = SearchMarker().IsMatch(line);
             var isDivider = DividerMarker().IsMatch(line);
             var isEnd = ReplaceMarker().IsMatch(line);
@@ -135,10 +136,15 @@ public static partial class EditBlockParser
                     break;
 
                 case State.Replace:
-                    if (isEnd)
+                    if (isEnd || (isDivider && ClosesBlock(lines, lineIndex + 1, isComplete)))
                     {
-                        blocks.Add(new EditBlock(index, EditText.StripLineNumbers([.. search]), EditText.StripLineNumbers([.. replace])));
+                        blocks.Add(Block(index, search, replace));
                         state = State.Outside;
+                    }
+                    else if (isDivider && !isComplete && lines.Skip(lineIndex + 1).All(l => l.Trim().Length == 0 || FenceLine().IsMatch(l)))
+                    {
+                        // While streaming, a trailing '=======' may yet close the block: hold it back.
+                        lineIndex = lines.Count;
                     }
                     else if (isStart)
                     {
@@ -150,7 +156,7 @@ public static partial class EditBlockParser
                     }
                     else
                     {
-                        // A '=======' line here is content: only the first one divides a block.
+                        // Any other '=======' line here is content: only the first one divides a block.
                         replace.Add(line);
                     }
 
@@ -167,11 +173,42 @@ public static partial class EditBlockParser
             }
             else if (state == State.Replace)
             {
-                partial = new EditBlock(index, EditText.StripLineNumbers([.. search]), EditText.StripLineNumbers([.. replace]));
+                partial = Block(index, search, replace);
             }
         }
 
         return new EditParseResult(blocks, malformed, string.Join('\n', prose).Trim(), hasFence, partial);
+    }
+
+    /// <summary>
+    /// Makes a block, removing line numbers copied from the prompt: from SEARCH when every non-blank line has one, and
+    /// then from each REPLACE line that has one (models number the copied lines but not the lines they add).
+    /// </summary>
+    private static EditBlock Block(int index, List<string> search, List<string> replace)
+    {
+        var strippedSearch = EditText.StripLineNumbers([.. search]);
+        var numbered = !strippedSearch.SequenceEqual(search, StringComparer.Ordinal);
+        return new EditBlock(index, strippedSearch, EditText.StripLineNumbers([.. replace], everyLine: !numbered));
+    }
+
+    /// <summary>
+    /// Whether a second '=======' in REPLACE closes the block: small models sometimes end a block with it instead of
+    /// '&gt;&gt;&gt;&gt;&gt;&gt;&gt; REPLACE'. It does when the next non-blank line is a fence (the block's closing
+    /// fence) or the next '&lt;&lt;&lt;&lt;&lt;&lt;&lt; SEARCH', or when nothing follows in a complete reply.
+    /// </summary>
+    private static bool ClosesBlock(List<string> lines, int next, bool isComplete)
+    {
+        for (var i = next; i < lines.Count; i++)
+        {
+            if (lines[i].Trim().Length == 0)
+            {
+                continue;
+            }
+
+            return FenceLine().IsMatch(lines[i]) || SearchMarker().IsMatch(lines[i]);
+        }
+
+        return isComplete;
     }
 
     [GeneratedRegex(@"^\s*<{5,9}\s*(SEARCH)?\s*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]

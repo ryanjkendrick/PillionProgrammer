@@ -128,6 +128,11 @@ public sealed class InlineEditPromptBuilder
     /// <returns>The message.</returns>
     public string NoBlocks() => _templates.Correction("noBlocks");
 
+    /// <summary>The corrective message for a <c>/doc</c> edit that changed code.</summary>
+    /// <param name="changes">The first changed code lines, quoted.</param>
+    /// <returns>The message.</returns>
+    public string DocOnly(IEnumerable<string> changes) => _templates.Correction("docOnly", ("items", string.Join("; ", changes)));
+
     /// <summary>The corrective message for a <c>/test</c> reply without a code block.</summary>
     /// <returns>The message.</returns>
     public string NoCode() => _templates.Correction("noCode");

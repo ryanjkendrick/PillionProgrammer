@@ -61,6 +61,12 @@ public sealed class ModelGatewayOptions
     /// <summary>Gets or sets how long listing one provider's models may take before it is reported unavailable. Default 10 s.</summary>
     public TimeSpan ListModelsTimeout { get; set; } = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// Gets or sets the sampling temperature sent with inline edit requests (other chat requests use the provider's
+    /// default). Default 0.2: an edit should follow the instruction closely and copy the old lines exactly.
+    /// </summary>
+    public float InlineEditTemperature { get; set; } = 0.2f;
+
     /// <summary>Gets the first-token budget for a local request of the given size.</summary>
     /// <param name="promptTokens">The estimated prompt tokens.</param>
     /// <returns>The baseline, scaled up linearly for prompts larger than <see cref="LocalBaselinePromptTokens"/>.</returns>

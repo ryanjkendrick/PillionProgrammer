@@ -192,4 +192,15 @@ public sealed class EditTextTests
     {
         Assert.Equal(" 9| a\n10|     b", EditText.NumberLines("a\n    b\n", 9));
     }
+
+    [Fact]
+    public void CodeChangesBesidesComments_IgnoresAddedCommentsAndIndentation_ButNotCode()
+    {
+        const string Original = "void M()\n{\n    Run();\n}\n";
+
+        Assert.Empty(EditText.CodeChangesBesidesComments(Original, "/// <summary>Runs.</summary>\n  void M()\n{\n    // go\n    Run();\n}\n"));
+        Assert.Empty(EditText.CodeChangesBesidesComments(Original, "''' <summary>VB style.</summary>\n/* block */\n * more\nvoid M()\n{\n    Run();\n}\n"));
+        Assert.Equal(["'int M()'"], EditText.CodeChangesBesidesComments(Original, "/// <summary>Runs.</summary>\nint M()\n{\n    Run();\n}\n"));
+        Assert.Equal(["removed '}'"], EditText.CodeChangesBesidesComments(Original, "void M()\n{\n    Run();\n"));
+    }
 }

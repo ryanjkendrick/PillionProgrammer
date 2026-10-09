@@ -86,6 +86,44 @@ public static partial class EditText
             .ToList();
     }
 
+    /// <summary>
+    /// Compares two versions of code ignoring comment-only lines, blank lines and indentation, for <c>/doc</c>, which may
+    /// add documentation comments and nothing else.
+    /// </summary>
+    /// <param name="original">The code before the edit (LF).</param>
+    /// <param name="proposal">The code after the edit (LF).</param>
+    /// <returns>Up to three code lines of the proposal that differ from the original; empty when only comments changed.</returns>
+    public static IReadOnlyList<string> CodeChangesBesidesComments(string original, string proposal)
+    {
+        ArgumentNullException.ThrowIfNull(original);
+        ArgumentNullException.ThrowIfNull(proposal);
+        static List<string> Code(string text) => SplitLines(text)
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0 && !IsCommentLine(l))
+            .ToList();
+
+        var before = Code(original);
+        var after = Code(proposal);
+        var changes = new List<string>();
+        for (var i = 0; i < Math.Max(before.Count, after.Count) && changes.Count < 3; i++)
+        {
+            var a = i < before.Count ? before[i] : null;
+            var b = i < after.Count ? after[i] : null;
+            if (!string.Equals(a, b, StringComparison.Ordinal))
+            {
+                changes.Add(b is null ? $"removed '{a}'" : $"'{b}'");
+            }
+        }
+
+        return changes;
+    }
+
+    private static bool IsCommentLine(string trimmed) =>
+        trimmed.StartsWith("//", StringComparison.Ordinal) ||
+        trimmed.StartsWith('\'') ||
+        trimmed.StartsWith("/*", StringComparison.Ordinal) ||
+        trimmed.StartsWith('*');
+
     /// <summary>Splits LF text into lines; a text that ends with a newline has an empty last line, so joining restores it.</summary>
     /// <param name="lfText">Text with LF line endings.</param>
     /// <returns>The lines.</returns>
@@ -110,14 +148,18 @@ public static partial class EditText
         return line[..i];
     }
 
-    /// <summary>Removes the line-number prefix the inline edit prompt shows (<c>12| </c>) when every non-blank line has one.</summary>
+    /// <summary>Removes the line-number prefix the inline edit prompt shows (<c>12| </c>).</summary>
     /// <param name="lines">The lines.</param>
-    /// <returns>The lines without the prefixes, or the same lines when not every non-blank line has one.</returns>
-    public static IReadOnlyList<string> StripLineNumbers(IReadOnlyList<string> lines)
+    /// <param name="everyLine">
+    /// <see langword="true"/> to strip only when every non-blank line has a prefix (otherwise the lines are returned as
+    /// they are); <see langword="false"/> to strip it from each line that has one.
+    /// </param>
+    /// <returns>The lines without the prefixes.</returns>
+    public static IReadOnlyList<string> StripLineNumbers(IReadOnlyList<string> lines, bool everyLine = true)
     {
         ArgumentNullException.ThrowIfNull(lines);
         var nonBlank = lines.Where(l => l.Trim().Length > 0).ToList();
-        if (nonBlank.Count == 0 || !nonBlank.All(l => LineNumberPrefix().IsMatch(l)))
+        if (nonBlank.Count == 0 || (everyLine && !nonBlank.All(l => LineNumberPrefix().IsMatch(l))))
         {
             return lines;
         }

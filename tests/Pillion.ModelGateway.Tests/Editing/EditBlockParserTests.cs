@@ -149,9 +149,51 @@ public sealed class EditBlockParserTests
     [Fact]
     public void EmptyReplace_MeansDelete()
     {
+        var deleted = Assert.Single(EditBlockParser.Parse("<<<<<<< SEARCH\nConsole.WriteLine();\n=======\n>>>>>>> REPLACE").Blocks);
+        Assert.Empty(deleted.ReplaceLines);
+    }
+
+    [Theory]
+    [InlineData("<<<<<<< SEARCH\na\n=======\nb\n=======\n")]
+    [InlineData("```csharp\n<<<<<<< SEARCH\na\n=======\nb\n=======\n```\n")]
+    [InlineData("<<<<<<< SEARCH\na\n=======\nb\n=======\n\n<<<<<<< SEARCH\nc\n=======\nd\n>>>>>>> REPLACE\n")]
+    public void ASecondDivider_ClosesTheBlock_WhenOnlyFencesTheEndOrTheNextBlockFollow(string reply)
+    {
+        // Seen from qwen2.5-coder:7b: a block ended with '=======' instead of '>>>>>>> REPLACE'.
+        var result = EditBlockParser.Parse(reply);
+
+        Assert.Empty(result.Malformed);
+        Assert.Equal(["a"], result.Blocks[0].SearchLines);
+        Assert.Equal(["b"], result.Blocks[0].ReplaceLines);
+    }
+
+    [Fact]
+    public void WhileStreaming_ATrailingDivider_IsHeldBack()
+    {
+        var result = EditBlockParser.Parse("<<<<<<< SEARCH\na\n=======\nb\n=======\n", isComplete: false);
+
+        Assert.NotNull(result.Partial);
+        Assert.Equal(["b"], result.Partial.ReplaceLines);
+    }
+
+    [Fact]
+    public void EmptyReplace_LeavesNoLines()
+    {
         var block = Assert.Single(EditBlockParser.Parse("<<<<<<< SEARCH\nConsole.WriteLine();\n=======\n>>>>>>> REPLACE").Blocks);
 
         Assert.Empty(block.ReplaceLines);
+    }
+
+    [Fact]
+    public void WhenSearchWasNumbered_NumberedReplaceLinesAreStripped_AndAddedLinesKept()
+    {
+        // Seen from qwen2.5-coder:7b for /doc: the copied line is numbered, the added comment is not.
+        var reply = "<<<<<<< SEARCH\n 7|     public void Place(Order order)\n=======\n    /// <summary>Places an order.</summary>\n 7|     public void Place(Order order)\n>>>>>>> REPLACE";
+
+        var block = Assert.Single(EditBlockParser.Parse(reply).Blocks);
+
+        Assert.Equal(["    public void Place(Order order)"], block.SearchLines);
+        Assert.Equal(["    /// <summary>Places an order.</summary>", "    public void Place(Order order)"], block.ReplaceLines);
     }
 
     [Fact]
