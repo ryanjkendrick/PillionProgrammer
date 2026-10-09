@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using EnvDTE;
+using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell.Interop;
 using Pillion.VisualStudio.Core.Signals;
 using Task = System.Threading.Tasks.Task;
@@ -178,7 +179,10 @@ public sealed partial class PillionPackageTests
             async () =>
             {
                 await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
-                return dte.Solution.Projects.Count >= 1 && dte.Solution.SolutionBuild.SolutionConfigurations.Count >= 1;
+                var vsSolution = await TestServices.Shell.GetRequiredGlobalServiceAsync<SVsSolution, IVsSolution>(HangMitigatingCancellationToken);
+                await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+                var fullyLoaded = ErrorHandler.Succeeded(vsSolution.GetProperty((int)__VSPROPID4.VSPROPID_IsSolutionFullyLoaded, out var loaded)) && loaded is true;
+                return fullyLoaded && dte.Solution.Projects.Count >= 1 && dte.Solution.SolutionBuild.SolutionConfigurations.Count >= 1;
             },
             TimeSpan.FromSeconds(60),
             "the scratch project to load");
@@ -231,6 +235,12 @@ public sealed partial class PillionPackageTests
             + "    <RootNamespace>Scratch</RootNamespace>" + nl
             + "    <AssemblyName>Scratch</AssemblyName>" + nl
             + "    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>" + nl
+            + "  </PropertyGroup>" + nl
+            // Visual Studio finds a project's configurations from these conditions; without one it skips the project's build.
+            + "  <PropertyGroup Condition=\" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' \">" + nl
+            + "    <DebugSymbols>true</DebugSymbols>" + nl
+            + "    <DebugType>full</DebugType>" + nl
+            + "    <Optimize>false</Optimize>" + nl
             + "    <OutputPath>bin\\Debug\\</OutputPath>" + nl
             + "  </PropertyGroup>" + nl
             + "  <ItemGroup>" + nl
