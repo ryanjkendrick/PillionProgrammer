@@ -124,6 +124,56 @@ An approved file comes back with `IsSensitive`, and the gateway never sends such
 `PauseIndexingAsync` does nothing. The chat side of context (pins, current file, rules, history summary) is in the Model
 Gateway README, Context assembly.
 
+## Inline edits (`InlineEdit/`)
+
+`AddPillionInlineEdit()` registers `InlineEditRpcService` as the `IInlineEditService` target (work item 1.8, design
+sections 5, 8 and 12). `EditAsync` and `CancelEditAsync` need the `modelGateway` and `inlineChat` flags; otherwise
+`PolicyDenied` with a message that names the flag.
+
+1. **Prompt.** `InlineEditPromptBuilder` (in the gateway, `Editing/`) builds a system prompt per command from
+   `src/Pillion.ModelGateway/Templates/inline-edit.json` and one user message: language and file name (never the folder),
+   up to 6,000 characters of context before and after the scope (whole lines nearest it), the scope with `N| ` line
+   numbers from its document line, the diagnostics, earlier instructions of the same `ConversationId`, the task for the
+   slash command and the instruction. A refinement (`PreviousProposal` set) shows the proposal as the code to edit.
+2. **Model call.** `IModelGateway.ChatAsync` with `TaskClass.InlineEdit`: the gateway routes it (Balanced online,
+   Local-strong offline, or the request's `ModelId`/`Profile`), redacts the prompt for a cloud provider (or for a local
+   one when `privacy.redactForLocalProviders` is on), restores placeholders in the reply and writes one Outbound log
+   record per call (a request that is sent back to the model makes one record per attempt, all with its request id).
+   Inline edits are sampled at `ModelGatewayOptions.InlineEditTemperature` (0.2); other chat keeps the provider default.
+3. **Edit format.** The model answers with search-and-replace blocks:
+
+   ```
+   <<<<<<< SEARCH
+   lines copied exactly from the code to edit
+   =======
+   the lines that replace them
+   >>>>>>> REPLACE
+   ```
+
+   Chosen because it is the format code models are most practised in (Aider, Cline and others use it), it carries code
+   without JSON escaping, its whole-line markers cannot be confused with code or Markdown fences, and an exact copy of
+   the old lines makes every edit checkable before anything is shown. `/test` answers with one fenced code block
+   (new code, placed elsewhere) and `/explain` with prose.
+4. **Apply.** `EditBlockApplier` applies the blocks in order to an in-memory copy of the scope: exact match, then
+   ignoring trailing whitespace, then ignoring indentation (the replacement is re-indented to the code); blank edge
+   lines are dropped if the block does not match with them. Malformed blocks, blocks that match zero or several places,
+   code without blocks, and placeholder-shaped tokens (`<redacted:...>`) that are not already in the code are sent back
+   with a corrective message, at most twice (`InlineEditEngine.MaxRetries`); then the call fails. So is a `/doc` edit
+   that changes anything but comment lines (C#, VB, F#, C, C++, JavaScript, TypeScript). A reply with neither
+   blocks nor code means no change: the scope comes back unchanged with a warning and the model's reason.
+5. **Validate.** For `csharp` and `vb`, Roslyn parses `TextBefore + proposal + TextAfter` (parse only, no compilation).
+   If the proposal has more syntax errors than the original, the errors and the proposal go back once; if the answer
+   is no better, the proposal with the fewest errors is returned with a `Warning`. Other languages are not validated.
+6. **Stream.** While the model writes, the engine re-applies the blocks so far and sends the complete lines that can no
+   longer change (the code before the block being written, then each finished replacement line), so the preview starts
+   before the model finishes. The final text is the validated proposal; if it does not start with what was sent, it
+   is sent again with `ResetText`. Every failure fails the call with a `PillionRpcException`, even after preview text:
+   `PolicyDenied` for an unresolvable placeholder, `ProviderUnavailable` (with a retry hint and `Details`
+   `inline-edit: unusable reply`) when the model's blocks could not be used, or the gateway's own error.
+
+Scope text is converted to LF for every step and the proposal is returned in the scope's own line endings.
+Conversations (`InlineEditConversations`) are in memory only: 64 sessions, 8 instructions each.
+
 ## Logging
 
 Console (single line) plus a file sink writing one JSON object per line to `host-YYYYMMDD.log` (local date) in
@@ -139,7 +189,7 @@ deleted, then the oldest are deleted until the remaining ones total at most 100 
 never touched. The default minimum level is Information (Microsoft.* at Warning); set the environment variable
 `Logging__LogLevel__Default=Debug` for more. Never log tokens or request payloads at Information or above.
 
-Event id ranges: 100-199 lifecycle, 200-299 RPC.
+Event id ranges: 100-199 lifecycle, 200-299 RPC, 600-609 inline edits.
 
 ## Connectivity
 
