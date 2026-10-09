@@ -1,42 +1,31 @@
-using System.Diagnostics;
 using System.Text;
 using Pillion.Common.Redaction;
 
 namespace Pillion.Common.Tests.Redaction;
 
+/// <summary>
+/// Smoke tests, not benchmarks: each takes the best of three runs after a warm-up (the first call compiles the regexes),
+/// runs alone in the test process (see <see cref="PerformanceTestGroup"/>) and has its bound scaled by
+/// <see cref="PerformanceBounds"/> on CI. The scanner's own 2 s regex timeout is fail-closed, so a scan that hits it
+/// counts as a slow run, not a crash.
+/// </summary>
+[Collection(PerformanceTestGroup.Name)]
+[Trait("Category", "Performance")]
 public class SecretScannerPerformanceTests
 {
-    /// <summary>
-    /// Smoke test, not a benchmark: a 1 MB file of ordinary code, hashes and base64 (and no secrets) scans in under
-    /// 200 ms. The bound is generous for a development machine; the first call is excluded because it compiles the
-    /// regexes. If this fails on a loaded CI agent, re-run before suspecting the scanner.
-    /// </summary>
+    /// <summary>A 1 MB file of ordinary code, hashes and base64 (and no secrets) scans in under 200 ms on a development machine.</summary>
     [Fact]
-    [Trait("Category", "Smoke")]
     public void OneMegabyteWithNoSecrets_ScansInUnder200Milliseconds()
     {
         var text = BuildRealisticFile(1_048_576);
-        _ = SecretScanner.Scan(text); // warm-up: compiles the regexes and lets the JIT tier up
 
-        var best = TimeSpan.MaxValue;
-        IReadOnlyList<SecretMatch> matches = [];
-        for (var run = 0; run < 3; run++)
-        {
-            var stopwatch = Stopwatch.StartNew();
-            matches = SecretScanner.Scan(text);
-            stopwatch.Stop();
-            if (stopwatch.Elapsed < best)
-            {
-                best = stopwatch.Elapsed;
-            }
-        }
+        var best = PerformanceBounds.BestOf(text, 3, out var matches);
 
         Assert.Empty(matches);
-        Assert.True(best < TimeSpan.FromMilliseconds(200), $"best of 3 runs: {best.TotalMilliseconds:F1} ms for {text.Length} characters");
+        Assert.True(best < PerformanceBounds.For(TimeSpan.FromMilliseconds(200)), $"best of 3 runs: {best.TotalMilliseconds:F1} ms for {text.Length} characters");
     }
 
     [Fact]
-    [Trait("Category", "Smoke")]
     public void OneMegabyteWithManySecrets_StillScansQuickly()
     {
         var text = BuildRealisticFile(1_048_576);
@@ -46,13 +35,45 @@ public class SecretScannerPerformanceTests
             builder.Append("\nid").Append(i).Append(" = ").Append(SecretFactory.Create(SecretKind.AwsAccessKey, i));
         }
 
-        _ = SecretScanner.Scan("warm up");
-        var stopwatch = Stopwatch.StartNew();
-        var matches = SecretScanner.Scan(builder.ToString());
-        stopwatch.Stop();
+        var best = PerformanceBounds.BestOf(builder.ToString(), 3, out var matches);
 
         Assert.Equal(200, matches.Count);
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromMilliseconds(400), $"{stopwatch.Elapsed.TotalMilliseconds:F1} ms");
+        Assert.True(best < PerformanceBounds.For(TimeSpan.FromMilliseconds(400)), $"best of 3 runs: {best.TotalMilliseconds:F1} ms");
+    }
+
+    [Theory]
+    [InlineData("keykeykey")]
+    [InlineData("token=")]
+    [InlineData("password=")]
+    [InlineData("://a:")]
+    [InlineData("-----BEGIN PRIVATE KEY-----\n")]
+    [InlineData("eyJabcdefghij")]
+    [InlineData("sk-")]
+    [InlineData("AccountKey=")]
+    [InlineData("secret: \"")]
+    [InlineData("<add key=\"apiKey\" value=\"")]
+    public void PathologicalInput_DoesNotTimeOutOrBlowUp(string unit)
+    {
+        var builder = new StringBuilder();
+        while (builder.Length < 1_000_000)
+        {
+            builder.Append(unit);
+        }
+
+        var best = PerformanceBounds.BestOf(builder.ToString(), 3, out _);
+
+        Assert.True(best < PerformanceBounds.For(TimeSpan.FromSeconds(1.5)), $"best of 3 runs: {best.TotalMilliseconds:F0} ms");
+    }
+
+    [Fact]
+    public void PathologicalSingleRun_OfValueCharacters_IsLinear()
+    {
+        // One enormous run of base64 characters preceded by a credential-looking name.
+        var text = "secret=" + new string('A', 1_000_000);
+
+        var best = PerformanceBounds.BestOf(text, 3, out _);
+
+        Assert.True(best < PerformanceBounds.For(TimeSpan.FromSeconds(1.5)), $"best of 3 runs: {best.TotalMilliseconds:F0} ms");
     }
 
     private static string BuildRealisticFile(int length)

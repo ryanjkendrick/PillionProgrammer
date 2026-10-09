@@ -106,9 +106,38 @@ public sealed class GpuTierTests(ITestOutputHelper output)
             return;
         }
 
+        // A hosted CI runner has no hardware adapter at all, so an empty list is a valid answer.
         Assert.NotNull(adapters);
         Assert.All(adapters, a => Assert.DoesNotContain("Basic Render", a.Name, StringComparison.OrdinalIgnoreCase));
         Assert.All(adapters, a => Assert.True(a.DedicatedVideoMemoryBytes >= 0));
+    }
+
+    [Fact]
+    public void DxgiProbe_FilterSkipsSoftwareAndMicrosoftAdapters()
+    {
+        const uint SoftwareFlag = 2;
+        var raw = new (string Name, uint VendorId, uint Flags, long DedicatedVideoMemoryBytes)[]
+        {
+            ("Microsoft Basic Render Driver", 0x1414, 0, 0),                    // the runner's adapter: no software flag set
+            ("Microsoft Basic Render Driver", 0x1414, SoftwareFlag, 0),
+            ("Some Vendor WARP", 0x10DE, SoftwareFlag, 0),                      // flagged software by a non-Microsoft vendor
+            ("NVIDIA GeForce RTX 2080 SUPER", 0x10DE, 0, 8031 * MiB),
+            ("Intel UHD Graphics", 0x8086, 0, 128 * MiB),
+        };
+
+        var kept = DxgiProbe.FilterHardware(raw);
+
+        Assert.Equal(["NVIDIA GeForce RTX 2080 SUPER", "Intel UHD Graphics"], kept.Select(a => a.Name));
+    }
+
+    [Fact]
+    public void Detector_WhenDxgiKeepsNoHardwareAdapter_ReportsCpuOnly()
+    {
+        var onlySoftware = DxgiProbe.FilterHardware([("Microsoft Basic Render Driver", 0x1414u, 0u, 0L)]);
+
+        var info = new GpuTierDetector([new FakeProbe("dxgi", onlySoftware)]).Detect();
+
+        Assert.Equal(new GpuInfo(GpuTier.CpuOnly, null, null, "dxgi"), info);
     }
 
     [Theory]
