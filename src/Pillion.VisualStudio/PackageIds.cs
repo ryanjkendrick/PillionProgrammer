@@ -47,4 +47,10 @@ internal static class PackageIds
 
     /// <summary>The "Pillion Chat" command under View &gt; Other Windows.</summary>
     public const int ViewChatCommand = 0x0104;
+
+    /// <summary>"Pillion: Next Suggestion" (Alt+] in the text editor): the next variant of the displayed ghost-text suggestion.</summary>
+    public const int NextSuggestionCommand = 0x0105;
+
+    /// <summary>"Pillion: Previous Suggestion" (Alt+[ in the text editor): the previous variant of the displayed suggestion.</summary>
+    public const int PreviousSuggestionCommand = 0x0106;
 }

@@ -32,6 +32,8 @@
     <!-- Reference assemblies only: Visual Studio supplies these at run time. -->
     <PackageReference Include="Microsoft.VisualStudio.SDK" ExcludeAssets="runtime" />
     <PackageReference Include="Microsoft.VSSDK.BuildTools" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers; buildtransitive" />
+    <!-- Roslyn for the enclosing-declaration lookup; Visual Studio supplies it at run time. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.Common" ExcludeAssets="runtime" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
@@ -44,6 +46,8 @@
   <ItemGroup>
     <!-- OleMenuCommandService derives from System.ComponentModel.Design.MenuCommandService. -->
     <Reference Include="System.Design" />
+    <!-- MEF parts (the ghost-text proposal source, proposal manager and command filter). -->
+    <Reference Include="System.ComponentModel.Composition" />
   </ItemGroup>
 
   <ItemGroup>
