@@ -6,8 +6,8 @@ into both processes.
 
 ## What lives here
 
-- Service interfaces. VSIX to host: `IModelService`, `IContextService`, `IAgentService`, `ISettingsService`,
-  `IHostLifecycleService`. Host to VSIX: `IEditorService`, `IApprovalService`, `IWorkspaceQueryService`.
+- Service interfaces. VSIX to host: `IModelService`, `IInlineEditService`, `IContextService`, `IAgentService`,
+  `ISettingsService`, `IHostLifecycleService`. Host to VSIX: `IEditorService`, `IApprovalService`, `IWorkspaceQueryService`.
 - The DTOs those interfaces exchange, the shared enums, `PillionError` / `PillionRpcException`, and
   `ContractVersion`.
 
@@ -30,6 +30,26 @@ fails the tests. When you change an interface deliberately, update that test and
 commit.
 
 ## Changelog
+
+### 1.2 (pending, phase 1 wave 2)
+
+Additive only; `ContractVersion` stays 1.1 until the lead bumps it at the wave boundary. A 1.1 VSIX never calls the new
+service, and a 1.1 host answers it with StreamJsonRpc's method-not-found error.
+
+| Type | Member | Order | Meaning |
+| --- | --- | --- | --- |
+| `IInlineEditService` (new, VSIX to host) | `EditAsync(InlineEditRequest, CancellationToken)` | | Streams `InlineEditChunk`s: the proposed replacement for the request's scope (work item 1.8) |
+| `IInlineEditService` | `CancelAsync(string requestId, CancellationToken)` | | Cancels an in-flight edit |
+| `InlineEditRequest` (new) | `RequestId`, `FilePath`, `LanguageId`, `ScopeText`, `ScopeStartLine`, `ScopeStartColumn`, `TextBefore`, `TextAfter`, `Instruction`, `Command`, `Diagnostics`, `PreviousProposal`, `ModelId`, `Profile` (defaults to `Auto`), `ConversationId` | 0-14 | The scope (selection, else enclosing member, else current line), its capped context, the instruction and slash shortcut, the diagnostics for `/fix`, the proposal being refined, a model override and the inline session id |
+| `InlineEditChunk` (new) | `RequestId`, `Text`, `IsFinal`, `Explanation`, `ModelId`, `ProviderId`, `PromptTokens`, `CompletionTokens`, `Error`, `RejectedBlocks`, `Warning`, `ResetText` | 0-11 | A delta of the proposed replacement (plain code); `ResetText` discards the text received so far (the early preview changed); the final chunk carries the explanation, totals, bounced-block count and any warning |
+| `InlineEditDiagnostic` (new) | `Line`, `Severity`, `Code`, `Message` | 0-3 | A diagnostic on the scope (zero-based document line) |
+| `InlineEditCommand` (new enum) | `None` 0, `Doc` 1, `Test` 2, `Fix` 3, `Explain` 4 | | The slash shortcut; an integer on the wire |
+
+Stream rules for `EditAsync`: concatenating every chunk's `Text`, starting again at each chunk with `ResetText`, gives
+the proposal once the final chunk has arrived. A failure before any text fails the call with a `PillionRpcException`;
+a failure after text is a final chunk with `Error` and `ResetText` set and no text. `/explain` sends no text, only the
+final chunk's `Explanation`; `/test` sends new test code (not a replacement of the scope) and says where it belongs
+in `Explanation`. See `src/Pillion.Host/README.md` (Inline edits) for the host's behaviour.
 
 ### 1.1 (phase 0, wave 3)
 
