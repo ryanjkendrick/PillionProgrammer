@@ -115,8 +115,10 @@ public sealed class TaskRouteViewModel : ObservableObject
     /// <param name="cloudSwitchKey">The property under <c>cloudSwitches</c>, or <see langword="null"/> when the class has no switch (it always runs locally).</param>
     /// <param name="cloudSwitchDefault">The switch value when the setting is missing (the host's default).</param>
     /// <param name="cloudSwitchNote">The one-line explanation of the switch, or an empty string.</param>
-    public TaskRouteViewModel(TaskClass taskClass, string label, string description, string? cloudSwitchKey, bool cloudSwitchDefault, string cloudSwitchNote)
+    /// <param name="noSwitchText">The short text shown instead of a switch when the class has none.</param>
+    public TaskRouteViewModel(TaskClass taskClass, string label, string description, string? cloudSwitchKey, bool cloudSwitchDefault, string cloudSwitchNote, string noSwitchText = "Local only")
     {
+        NoSwitchText = noSwitchText;
         TaskClass = taskClass;
         Key = RoutingChoices.NameOf(taskClass);
         Label = label;
@@ -152,6 +154,9 @@ public sealed class TaskRouteViewModel : ObservableObject
 
     /// <summary>Gets a value indicating whether the class has a cloud switch (Embedding is always local and has none).</summary>
     public bool HasCloudSwitch => CloudSwitchKey is not null;
+
+    /// <summary>Gets the short text shown instead of a switch when the class has none.</summary>
+    public string NoSwitchText { get; }
 
     /// <summary>Gets the switch value used when the setting is missing.</summary>
     public bool CloudSwitchDefault { get; }

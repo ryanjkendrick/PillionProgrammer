@@ -5,6 +5,7 @@ using Pillion.Common.Connectivity;
 using Pillion.Common.Settings;
 using Pillion.Contracts;
 using Pillion.Host.Connectivity;
+using Pillion.Host.Context;
 using Pillion.Host.Lifecycle;
 using Pillion.Host.Logging;
 using Pillion.Host.Models;
@@ -90,7 +91,10 @@ internal static class PillionHostBuilderExtensions
         builder.Services.AddSingleton<ModelRpcService>();
         builder.Services.AddRpcTarget<IModelService>(sp => sp.GetRequiredService<ModelRpcService>());
 
-        // RPC targets for the context and agent services are registered here by later work items.
+        // Mentions and context (work item 1.10): IContextService resolves @-mentions; search and indexing arrive in phase 2.
+        builder.Services.AddRpcTarget<IContextService, ContextRpcService>();
+
+        // RPC targets for the agent service are registered here by a later work item.
         return builder;
     }
 }

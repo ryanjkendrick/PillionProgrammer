@@ -110,7 +110,7 @@
                                                 </Style>
                                             </CheckBox.Style>
                                         </CheckBox>
-                                        <TextBlock Text="Local only" Foreground="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}">
+                                        <TextBlock Text="{Binding NoSwitchText}" Foreground="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}">
                                             <TextBlock.Style>
                                                 <Style TargetType="TextBlock">
                                                     <Setter Property="Visibility" Value="Collapsed" />
