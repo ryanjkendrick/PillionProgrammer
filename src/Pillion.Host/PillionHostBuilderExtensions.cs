@@ -86,6 +86,7 @@ internal static class PillionHostBuilderExtensions
         builder.Services.AddPillionModelGateway();
         builder.Services.AddSingleton<ModelRpcService>();
         builder.Services.AddRpcTarget<IModelService>(sp => sp.GetRequiredService<ModelRpcService>());
+        builder.Services.AddPillionInlineEdit(); // Inline edits (work item 1.8): IInlineEditService over the gateway.
 
         // RPC targets for the context and agent services are registered here by later work items.
         return builder;
