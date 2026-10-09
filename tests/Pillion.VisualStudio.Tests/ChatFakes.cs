@@ -28,6 +28,15 @@ internal sealed class FakeHostConnection : IHostConnection
 
     public event EventHandler<HostConnectivityChangedEventArgs>? ConnectivityChanged;
 
+    public event EventHandler<HostSettingsChangedEventArgs>? SettingsChanged;
+
+    /// <summary>Raises <see cref="SettingsChanged"/> on a thread-pool thread, as the supervisor does.</summary>
+    public Task RaiseSettingsChangedAsync(params string[] sections)
+    {
+        var args = new HostSettingsChangedEventArgs(sections);
+        return Task.Run(() => SettingsChanged?.Invoke(this, args));
+    }
+
     public ConnectivityState? Connectivity
     {
         get

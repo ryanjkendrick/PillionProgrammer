@@ -59,6 +59,9 @@ public sealed class HostSupervisor : IHostConnection, IDisposable
     public event EventHandler<HostConnectivityChangedEventArgs>? ConnectivityChanged;
 
     /// <inheritdoc/>
+    public event EventHandler<HostSettingsChangedEventArgs>? SettingsChanged;
+
+    /// <inheritdoc/>
     public ConnectivityState? Connectivity
     {
         get
@@ -422,6 +425,7 @@ public sealed class HostSupervisor : IHostConnection, IDisposable
 
         session.HostStateChanged += OnSessionHostStateChanged;
         session.ConnectivityChanged += OnSessionConnectivityChanged;
+        session.SettingsChanged += OnSessionSettingsChanged;
         try
         {
             // The connectivity notification may have arrived during the handshake, before this subscription.
@@ -457,6 +461,7 @@ public sealed class HostSupervisor : IHostConnection, IDisposable
         {
             session.HostStateChanged -= OnSessionHostStateChanged;
             session.ConnectivityChanged -= OnSessionConnectivityChanged;
+            session.SettingsChanged -= OnSessionSettingsChanged;
             SetConnectivity(session, null, force: true);
             var owned = false;
             lock (_gate)
@@ -535,6 +540,38 @@ public sealed class HostSupervisor : IHostConnection, IDisposable
         }
 
         SetState(Mirror(hostState), restartAttempt: 0, reason: null);
+    }
+
+    /// <summary>Forwards the current session's <c>settingsChanged</c> notification (a stale session's is ignored).</summary>
+    private void OnSessionSettingsChanged(object? sender, HostSettingsChangedEventArgs e)
+    {
+        lock (_gate)
+        {
+            if (!ReferenceEquals(sender, _session))
+            {
+                return;
+            }
+        }
+
+        var handlers = SettingsChanged;
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (EventHandler<HostSettingsChangedEventArgs> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(this, e);
+            }
+#pragma warning disable CA1031 // A faulty subscriber must not break supervision.
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                _log.Error("supervisor.settings_handler_failed", "A SettingsChanged handler threw.", ("error", ex.GetType().Name), ("detail", ex.Message));
+            }
+        }
     }
 
     private void OnSessionConnectivityChanged(object? sender, ConnectivityState connectivity) =>

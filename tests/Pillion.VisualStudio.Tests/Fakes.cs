@@ -129,6 +129,11 @@ internal sealed class FakeSession(int processId, HostState initialState) : IHost
 
     public event EventHandler<ConnectivityState>? ConnectivityChanged;
 
+    public event EventHandler<HostSettingsChangedEventArgs>? SettingsChanged;
+
+    public void ReportSettingsChanged(params string[] sections) =>
+        SettingsChanged?.Invoke(this, new HostSettingsChangedEventArgs(sections));
+
     public int ProcessId { get; } = processId;
 
     public HostState LatestHostState => _latest;

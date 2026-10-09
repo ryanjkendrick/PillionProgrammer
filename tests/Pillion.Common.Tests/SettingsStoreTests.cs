@@ -69,6 +69,39 @@ public class SettingsStoreTests
         Assert.Equal("\"information\"", store.GetJson("logging.level"));
         Assert.Equal("1536", store.GetJson("indexing.maxMemoryMb"));
         Assert.Equal("false", store.GetJson("cloudSwitches.selfHealing"));
+        Assert.Equal("false", store.GetJson("routing.thinkHarder"));
+    }
+
+    [Fact]
+    public void RoutingThinkHarder_DefaultsToFalse_AndSurvivesASaveAndReload()
+    {
+        using var temp = new TempDirectory();
+        using var store = NewStore(temp);
+        store.Load();
+        Assert.False(store.GetSettings().Routing.ThinkHarder);
+
+        store.SetJson("routing.thinkHarder", "true");
+
+        using var reloaded = new SettingsStore(store.Paths, new SettingsStoreOptions { WatchForChanges = false });
+        Assert.True(reloaded.GetSettings().Routing.ThinkHarder);
+    }
+
+    [Fact]
+    public void GetDocument_ReturnsACopyOfEverySection_UnknownKeysIncluded()
+    {
+        using var temp = new TempDirectory();
+        using var store = NewStore(temp);
+        store.Load();
+        store.SetJson("autocomplete.disabledLanguages", "[\"vb\"]");
+
+        var document = store.GetDocument();
+
+        Assert.Equal("[\"vb\"]", document["autocomplete"]!["disabledLanguages"]!.ToJsonString());
+        Assert.NotNull(document["routing"]);
+        Assert.NotNull(document["cloudSwitches"]);
+
+        document["routing"] = null; // A copy: the store is unchanged.
+        Assert.Equal("false", store.GetJson("routing.thinkHarder"));
     }
 
     [Fact]

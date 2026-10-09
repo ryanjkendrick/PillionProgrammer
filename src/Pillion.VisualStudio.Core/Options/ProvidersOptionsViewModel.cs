@@ -158,6 +158,9 @@ public sealed class ProvidersOptionsViewModel : OptionsPageViewModel
     }
 
     /// <inheritdoc/>
+    protected override IReadOnlyList<string> WatchedSections { get; } = [SettingsJsonText.ProvidersKey];
+
+    /// <inheritdoc/>
     protected override async Task<Action<OptionsPageViewModel>> LoadCoreAsync(ISettingsService settings, CancellationToken cancellationToken)
     {
         var json = await settings.GetAsync(SettingsJsonText.ProvidersKey, cancellationToken).ConfigureAwait(false);
