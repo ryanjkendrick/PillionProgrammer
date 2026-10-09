@@ -341,9 +341,17 @@ public sealed class HostSupervisorTests : IDisposable
         var cancelled = new TaskCompletionSource<bool>();
         _launcher.Behaviour = async (_, ct) =>
         {
-            using (ct.Register(() => cancelled.TrySetResult(true)))
+            // Observe the cancellation through the awaited delay, not through a ct.Register callback of our own: Task.Delay
+            // registers on the same token, its callback can run first and resume this method inline on the cancelling
+            // thread, and disposing our registration at that point stops our callback from ever running.
+            try
             {
                 await Task.Delay(Timeout.Infinite, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                cancelled.TrySetResult(true);
+                throw;
             }
 
             throw new InvalidOperationException("unreachable");
