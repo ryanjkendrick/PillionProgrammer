@@ -284,7 +284,15 @@ public sealed class RealProcessTests : IDisposable
         Assert.StartsWith("Check the provider", failed.ErrorHint, StringComparison.Ordinal);
         Assert.True(failed.CanRetry);
 
-        // The Options pages over the same connection.
+        // The Options pages over the same connection. The fake host sends settingsChanged after every save.
+        var changedSections = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        supervisor.SettingsChanged += (_, e) =>
+        {
+            foreach (var section in e.Sections)
+            {
+                changedSections.Enqueue(section);
+            }
+        };
         var credentials = new InMemoryCredentialStore();
         using var providers = new ProvidersOptionsViewModel(supervisor, uiContext.Factory, credentials, _log);
         await providers.LoadAsync();
@@ -304,6 +312,23 @@ public sealed class RealProcessTests : IDisposable
         privacy.LocalOnly = true;
         await privacy.SaveAsync();
         Assert.Equal("Saved.", privacy.StatusMessage);
+        await Wait.UntilAsync(() => changedSections.Contains("privacy"), "the host's settingsChanged reached the supervisor");
+
+        // The Models and routing page over the same wire: Chat to Local-strong, the autocomplete cloud switch on.
+        using var routing = new RoutingOptionsViewModel(supervisor, uiContext.Factory, _log);
+        await routing.LoadAsync();
+        Assert.Equal(OptionsLoadState.Loaded, routing.LoadState);
+        Assert.False(routing.TaskRoutes.Single(r => r.TaskClass == TaskClass.Autocomplete).CloudSwitchOn);
+        routing.TaskRoutes.Single(r => r.TaskClass == TaskClass.Chat).SelectedProfile = RoutingChoices.Profiles.Single(p => p.Value == "localStrong");
+        routing.TaskRoutes.Single(r => r.TaskClass == TaskClass.Autocomplete).CloudSwitchOn = true;
+        await routing.SaveAsync();
+        Assert.Equal("Saved.", routing.StatusMessage);
+        await Wait.UntilAsync(() => changedSections.Contains("routing") && changedSections.Contains("cloudSwitches"), "settingsChanged named routing and cloudSwitches");
+
+        using var routingAgain = new RoutingOptionsViewModel(supervisor, uiContext.Factory, _log);
+        await routingAgain.LoadAsync();
+        Assert.Equal("localStrong", routingAgain.TaskRoutes.Single(r => r.TaskClass == TaskClass.Chat).SelectedProfile.Value);
+        Assert.True(routingAgain.TaskRoutes.Single(r => r.TaskClass == TaskClass.Autocomplete).CloudSwitchOn);
 
         // Local-only now greys the cloud model out in the picker.
         await chat.RefreshModelsAsync();

@@ -35,6 +35,9 @@ public interface IHostSession : IDisposable
     /// <summary>Raised on a background thread when the host sends <c>connectivityChanged</c>.</summary>
     event EventHandler<ConnectivityState>? ConnectivityChanged;
 
+    /// <summary>Raised on a background thread when the host sends <c>settingsChanged</c>.</summary>
+    event EventHandler<HostSettingsChangedEventArgs>? SettingsChanged;
+
     /// <summary>
     /// Gets a task that completes when the connection is lost or the process exits. Its result describes what
     /// happened (for example "host process exited with code 3").

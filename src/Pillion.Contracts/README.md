@@ -64,6 +64,13 @@ Additive only, batched with the other phase 1 contract additions into one minor 
   A request with pins, a current file or project rules is assembled by the gateway (budget, priority, per-item caps,
   history summary); a plain request is sent as before. See `src/Pillion.ModelGateway/README.md`, Context assembly.
 
+- **Settings-changed notification and Think harder (work item 1.15).** Notification `settingsChanged`, host to client, one positional argument: a `string[]` of the names of the top-level
+  `settings.json` sections that changed. Sent after the handshake, debounced to 250 ms, after a save and after an
+  external edit of the file. Like `connectivityChanged` it is not a method on a contract interface, so the interface
+  shape tests are unchanged, and a 1.1 client that registers no handler ignores it. See the host README.
+- Setting `routing.thinkHarder` (boolean, default `false`) in `settings.json`; it is read through
+  `ISettingsService`, so no DTO changes.
+
 ### 1.1 (phase 0, wave 3)
 
 Additive only; a 1.0 peer is still accepted by the handshake and ignores the new fields, and a 1.1 peer reads their

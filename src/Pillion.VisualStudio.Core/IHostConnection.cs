@@ -33,6 +33,13 @@ public interface IHostConnection
     event EventHandler<HostConnectivityChangedEventArgs>? ConnectivityChanged;
 
     /// <summary>
+    /// Raised on a background thread when the host reports that settings changed (its <c>settingsChanged</c>
+    /// notification): after a save through <c>ISettingsService</c> and after <c>settings.json</c> was edited on disk.
+    /// The arguments name the top-level sections that changed. Read the settings again; the notification carries no values.
+    /// </summary>
+    event EventHandler<HostSettingsChangedEventArgs>? SettingsChanged;
+
+    /// <summary>
     /// Gets the RPC proxy for a host service interface (for example <see cref="IModelService"/>) on the live connection.
     /// </summary>
     /// <typeparam name="T">A host service interface from Pillion.Contracts.</typeparam>
