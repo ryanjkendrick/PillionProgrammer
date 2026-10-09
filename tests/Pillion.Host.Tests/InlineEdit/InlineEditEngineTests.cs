@@ -7,6 +7,29 @@ namespace Pillion.Host.Tests.InlineEdit;
 public sealed class InlineEditEngineTests
 {
     [Fact]
+    public async Task AReplyAsQwenCoderWritesIt_WithLineNumbersAndAClosingDivider_IsUsed()
+    {
+        // Recorded from qwen2.5-coder:7b for /doc: fenced, numbered lines, closed with '=======', then prose.
+        var reply =
+            "```csharp\n<<<<<<< SEARCH\n" +
+            " 7|     public void Place(Order order)\n 8|     {\n 9|         if (order is null)\n10|         {\n" +
+            "11|             throw new ArgumentNullException(nameof(order));\n12|         }\n13| \n14|         _store.Add(order);\n15|     }\n" +
+            "=======\n" +
+            " 7|     /// <summary>\n 8|     /// Places an order.\n 9|     /// </summary>\n10|     /// <param name=\"order\">The order to place.</param>\n" +
+            "11|     public void Place(Order order)\n12|     {\n13|         if (order is null)\n14|         {\n" +
+            "15|             throw new ArgumentNullException(nameof(order));\n16|         }\n17| \n18|         _store.Add(order);\n19|     }\n" +
+            "=======\n```\n\nAdded XML documentation comments to the `Place` method.";
+        var gateway = new ScriptedGateway().Reply(reply);
+
+        var chunks = await CollectAsync(Engine(gateway).RunAsync(Request(string.Empty, InlineEditCommand.Doc), CancellationToken.None));
+
+        Assert.Equal(
+            "    /// <summary>\n    /// Places an order.\n    /// </summary>\n    /// <param name=\"order\">The order to place.</param>\n" + Scope,
+            Assemble(chunks));
+        Assert.Equal("Added XML documentation comments to the `Place` method.", chunks[^1].Explanation);
+    }
+
+    [Fact]
     public async Task AGoodReply_StreamsTheRewrittenScope_NotTheBlocks()
     {
         var gateway = new ScriptedGateway().Reply(ExtractReply);
@@ -372,6 +395,23 @@ public sealed class InlineEditEngineTests
         await CollectAsync(Engine(gateway).RunAsync(request, CancellationToken.None));
 
         Assert.Contains("- line 14: error CS0103: The name '_store' does not exist", Assert.Single(gateway.Calls).Request.Messages[1].Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Doc_ThatChangesCode_IsSentBack()
+    {
+        // Seen from qwen2.5-coder:7b: /doc also turned void into Order and added a return.
+        var changesCode =
+            "<<<<<<< SEARCH\n    public void Place(Order order)\n=======\n    /// <summary>Places an order.</summary>\n    public Order Place(Order order)\n>>>>>>> REPLACE\n";
+        var commentsOnly =
+            "<<<<<<< SEARCH\n    public void Place(Order order)\n=======\n    /// <summary>Places an order.</summary>\n    public void Place(Order order)\n>>>>>>> REPLACE\n";
+        var gateway = new ScriptedGateway().Reply(changesCode).Reply(commentsOnly);
+
+        var chunks = await CollectAsync(Engine(gateway).RunAsync(Request(string.Empty, InlineEditCommand.Doc), CancellationToken.None));
+
+        Assert.Equal("    /// <summary>Places an order.</summary>\n" + Scope, Assemble(chunks));
+        var correction = gateway.Calls.ToArray()[1].Request.Messages[^1].Content;
+        Assert.Contains("changed code, not only documentation comments: 'public Order Place(Order order)'", correction, StringComparison.Ordinal);
     }
 
     [Fact]

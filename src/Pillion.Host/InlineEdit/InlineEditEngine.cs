@@ -39,6 +39,11 @@ internal sealed partial class InlineEditEngine
 
     private const int MaxReportedErrors = 8;
 
+    private static readonly HashSet<string> CommentDocumented = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "csharp", "vb", "fsharp", "c", "cpp", "javascript", "javascriptreact", "typescript", "typescriptreact",
+    };
+
     private readonly IModelGateway _gateway;
     private readonly InlineEditPromptBuilder _prompts;
     private readonly ISyntaxValidator _validator;
@@ -395,6 +400,17 @@ internal sealed partial class InlineEditEngine
                 _prompts.Unmatched(application.Failures),
                 application.Failures.Count,
                 UnusableError(application.Failures[0].Describe()));
+        }
+
+        // /doc adds comments only; checked for languages whose documentation is comments (not Python docstrings).
+        if (state.Request.Command == InlineEditCommand.Doc &&
+            CommentDocumented.Contains(state.Request.LanguageId ?? string.Empty) &&
+            EditText.CodeChangesBesidesComments(working, application.Text) is { Count: > 0 } changes)
+        {
+            return Evaluation.Bounce(
+                _prompts.DocOnly(changes),
+                0,
+                UnusableError($"/doc changed code, not only comments ({changes[0]})"));
         }
 
         return Evaluation.Done(application.Text, Nullable(parse.Explanation));
