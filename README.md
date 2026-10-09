@@ -171,7 +171,8 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
     "geminiProvider": true,
     "mistralProvider": true,
     "azureOpenAIProvider": true,
-    "autocomplete": true
+    "autocomplete": true,
+    "inlineChat": true
   }
 }
 ```
@@ -189,6 +190,7 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
 | `mistralProvider` | Providers of kind `mistral` (chat and Codestral fill-in-the-middle) are not built or routed to. |
 | `azureOpenAIProvider` | Providers of kind `azure-openai` are not built or routed to. |
 | `autocomplete` | `IModelService.CompleteAsync` (ghost-text autocomplete) fails with `PolicyDenied` and a message that names the flag; chat and model listing are unaffected. The extension stops asking for suggestions (it reads the flag when Pillion Host becomes ready and when the Tools menu opens; an absent flag means on). |
+| `inlineChat` | `IInlineEditService.EditAsync` (inline chat edits, `/doc`, `/test`, `/fix`, `/explain`) fails with `PolicyDenied` and a message that names the flag. Chat, autocomplete and model listing are unaffected. |
 
 A repository can switch flags off for everyone who opens it with `disabledFeatures` in `.pillion/policy.json`, next to
 `localOnly`, `disabledTools`, `exclude` and `denyCommands`:
