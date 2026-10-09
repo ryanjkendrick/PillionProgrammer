@@ -14,6 +14,7 @@ public class InterfaceShapeTests
         [typeof(IAgentService)] = ["StartSessionAsync", "ApproveAsync", "DenyAsync", "StopAsync", "RevertAsync"],
         [typeof(ISettingsService)] = ["GetAsync", "SetAsync", "TestProviderAsync"],
         [typeof(IHostLifecycleService)] = ["HandshakeAsync", "GetStateAsync", "ShutdownAsync"],
+        [typeof(IDiagnosticsService)] = ["GetAutocompleteCountersAsync"],
 
         // Host to VSIX.
         [typeof(IEditorService)] = ["ApplyChangesetAsync", "ShowPreviewAsync", "GetOpenDocumentsAsync"],

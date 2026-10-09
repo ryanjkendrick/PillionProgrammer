@@ -86,6 +86,7 @@ internal static class PillionHostBuilderExtensions
         builder.Services.AddPillionModelGateway();
         builder.Services.AddSingleton<ModelRpcService>();
         builder.Services.AddRpcTarget<IModelService>(sp => sp.GetRequiredService<ModelRpcService>());
+        builder.Services.AddRpcTarget<IDiagnosticsService, DiagnosticsRpcService>(); // Work item 1.5: read-only autocomplete counters.
 
         // RPC targets for the context and agent services are registered here by later work items.
         return builder;
