@@ -62,6 +62,11 @@ The test output shows:
   shows where in the window (before or after the kill, the restart and Ready) the gap fell. The kill and each state
   change are listed above with their times.
 
+`Invoke-IdeTests.ps1` prints the kill, state change, `UI thread:`, `Background thread:` and `WARNING:` lines from the TRX
+file after every run (the console logger shows a passing test's output only in the TRX), and under GitHub Actions turns
+a `WARNING:` line into a workflow warning annotation. The per-operation lines are in the TRX
+(`ide-test-results-vs18` artifact).
+
 The verdict (`ResponsivenessVerdict`): the test fails when the UI gap is over 5 s, when the UI gap exceeds the background
 gap by 2 s or more, or when the UI gap reaches 2 s while the background gap is under 500 ms. When the UI gap reaches
 2 s but the background thread stalled about as long, the machine stalled and the test cannot attribute that to Pillion's
