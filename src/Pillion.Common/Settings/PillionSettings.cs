@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
+using Pillion.Common.Hardware;
 using Pillion.Contracts;
 
 namespace Pillion.Common.Settings;
@@ -106,6 +107,17 @@ public sealed class RoutingSettings : SettingsNode
     }
 }
 
+/// <summary>Local model settings (design section 6, Local model residency).</summary>
+public sealed class ModelsSettings : SettingsNode
+{
+    /// <summary>
+    /// Gets or sets the GPU tier: <see cref="GpuTierSetting.Auto"/> (<c>auto</c>, the default) detects it from the
+    /// adapter's dedicated memory; <c>cpu</c>, <c>8gb</c>, <c>12gb</c>, <c>16gb</c> or <c>24gb</c> override detection.
+    /// The tier picks the resident local models and the autocomplete prompt budget.
+    /// </summary>
+    public GpuTierSetting GpuTier { get; set; } = GpuTierSetting.Auto;
+}
+
 /// <summary>
 /// Which task classes may use cloud providers. A cloud key enables chat only; autocomplete, agent and self-healing
 /// each need their own switch.
@@ -198,6 +210,9 @@ public sealed class PillionSettings : SettingsNode
 
     /// <summary>Gets or sets the routing settings.</summary>
     public RoutingSettings Routing { get; set; } = new();
+
+    /// <summary>Gets or sets the local model settings.</summary>
+    public ModelsSettings Models { get; set; } = new();
 
     /// <summary>Gets or sets the cloud switches.</summary>
     public CloudSwitchSettings CloudSwitches { get; set; } = new();

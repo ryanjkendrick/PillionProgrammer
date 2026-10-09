@@ -21,6 +21,9 @@ public static class FeatureNames
     /// <summary>The OpenAI-compatible provider (and the OpenAI provider, which uses the same adapter).</summary>
     public const string OpenAICompatibleProvider = "openAICompatibleProvider";
 
+    /// <summary>Ghost-text autocomplete: the host's completion service (<c>IModelService.CompleteAsync</c>).</summary>
+    public const string Autocomplete = "autocomplete";
+
     /// <summary>Gets every feature flag name, in the order they are written to <c>settings.json</c>.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
@@ -30,6 +33,7 @@ public static class FeatureNames
         CloudProviders,
         OllamaProvider,
         OpenAICompatibleProvider,
+        Autocomplete,
     ];
 }
 
@@ -57,6 +61,9 @@ public sealed class FeatureSettings : SettingsNode
     /// <summary>Gets or sets a value indicating whether the OpenAI-compatible provider is available.</summary>
     public bool OpenAICompatibleProvider { get; set; } = true;
 
+    /// <summary>Gets or sets a value indicating whether ghost-text autocomplete is available. When off, completion requests fail with a policy error.</summary>
+    public bool Autocomplete { get; set; } = true;
+
     /// <summary>Determines whether a feature is on.</summary>
     /// <param name="feature">A name from <see cref="FeatureNames"/>; case is ignored.</param>
     /// <returns><see langword="true"/> when the feature is on. A feature this version does not know is on.</returns>
@@ -72,6 +79,7 @@ public sealed class FeatureSettings : SettingsNode
             "cloudproviders" => CloudProviders,
             "ollamaprovider" => OllamaProvider,
             "openaicompatibleprovider" => OpenAICompatibleProvider,
+            "autocomplete" => Autocomplete,
             _ => true,
         };
     }
@@ -101,6 +109,9 @@ public sealed class FeatureSettings : SettingsNode
                 break;
             case "openaicompatibleprovider":
                 OpenAICompatibleProvider = false;
+                break;
+            case "autocomplete":
+                Autocomplete = false;
                 break;
         }
     }
