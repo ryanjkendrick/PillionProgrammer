@@ -6,8 +6,8 @@ into both processes.
 
 ## What lives here
 
-- Service interfaces. VSIX to host: `IModelService`, `IContextService`, `IAgentService`, `ISettingsService`,
-  `IHostLifecycleService`. Host to VSIX: `IEditorService`, `IApprovalService`, `IWorkspaceQueryService`.
+- Service interfaces. VSIX to host: `IModelService`, `IInlineEditService`, `IContextService`, `IAgentService`,
+  `ISettingsService`, `IHostLifecycleService`. Host to VSIX: `IEditorService`, `IApprovalService`, `IWorkspaceQueryService`.
 - The DTOs those interfaces exchange, the shared enums, `PillionError` / `PillionRpcException`, and
   `ContractVersion`.
 
@@ -64,6 +64,24 @@ Additive only, batched with the other phase 1 contract additions into one minor 
   A request with pins, a current file or project rules is assembled by the gateway (budget, priority, per-item caps,
   history summary); a plain request is sent as before. See `src/Pillion.ModelGateway/README.md`, Context assembly.
 
+- **Inline edits (work item 1.8).** A new VSIX-to-host service and its DTOs. A 1.1 host answers it with
+  StreamJsonRpc's method-not-found error.
+
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `IInlineEditService` (new, VSIX to host) | `EditAsync(InlineEditRequest, CancellationToken)` | | Streams `InlineEditChunk`s: the proposed replacement for the request's scope (work item 1.8) |
+  | `IInlineEditService` | `CancelEditAsync(string requestId, CancellationToken)` | | Cancels an in-flight edit. Not `CancelAsync`: the host exposes every target under its CLR method names in one namespace, so that name would reach `IModelService.CancelAsync` |
+  | `InlineEditRequest` (new) | `RequestId`, `FilePath`, `LanguageId`, `ScopeText`, `ScopeStartLine`, `ScopeStartColumn`, `TextBefore`, `TextAfter`, `Instruction`, `Command`, `Diagnostics`, `PreviousProposal`, `ModelId`, `Profile` (defaults to `Auto`), `ConversationId` | 0-14 | The scope (selection, else enclosing member, else current line), its capped context, the instruction and slash shortcut, the diagnostics for `/fix`, the proposal being refined, a model override and the inline session id |
+  | `InlineEditChunk` (new) | `RequestId`, `Text`, `IsFinal`, `Explanation`, `ModelId`, `ProviderId`, `PromptTokens`, `CompletionTokens`, `Error`, `RejectedBlocks`, `Warning`, `ResetText` | 0-11 | A delta of the proposed replacement (plain code); `ResetText` discards the text received so far (the early preview changed); the final chunk carries the explanation, token totals, bounced-block count and any warning |
+  | `InlineEditDiagnostic` (new) | `Line`, `Severity`, `Code`, `Message` | 0-3 | A diagnostic on the scope (zero-based document line) |
+  | `InlineEditCommand` (new enum) | `None` 0, `Doc` 1, `Test` 2, `Fix` 3, `Explain` 4 | | The slash shortcut; an integer on the wire |
+
+  Stream rules for `EditAsync`: concatenating every chunk's `Text`, starting again at each chunk with `ResetText`, gives
+  the proposal once the final chunk has arrived. Every failure, before or after preview text, fails the call with a
+  `PillionRpcException` (the client sees the `PillionError` as the error data); discard any preview then. `Error` is
+  there for parity with `ChatChunk` and is not set by a 1.2 host. `/explain` sends no text, only the
+  final chunk's `Explanation`; `/test` sends new test code (not a replacement of the scope) and says where it belongs
+  in `Explanation`. See `src/Pillion.Host/README.md` (Inline edits) for the host's behaviour.
 - **Settings-changed notification and Think harder (work item 1.15).** Notification `settingsChanged`, host to client, one positional argument: a `string[]` of the names of the top-level
   `settings.json` sections that changed. Sent after the handshake, debounced to 250 ms, after a save and after an
   external edit of the file. Like `connectivityChanged` it is not a method on a contract interface, so the interface
