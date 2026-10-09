@@ -340,6 +340,7 @@ public sealed class ChatRenderingTests
 
         var cold = ScrollThrough(transcript, scroller, size);
         var renderedAfterFirstPass = cache.Count;
+        Assert.Equal(turns.Count, renderedAfterFirstPass); // Every turn was rendered once, through the inherited cache.
         var warm = ScrollThrough(transcript, scroller, size);
         Assert.True(scroller.ExtentHeight > 20 * size.Height, "extent " + scroller.ExtentHeight);
         Assert.InRange(panel.Children.Count, 1, 40);
