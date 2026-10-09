@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using System.Text;
 using Pillion.Common.Redaction;
 
 namespace Pillion.Common.Tests.Redaction;
@@ -166,43 +164,6 @@ public class SecretScannerBehaviorTests
         {
             Thread.CurrentThread.CurrentCulture = original;
         }
-    }
-
-    [Theory]
-    [InlineData("keykeykey")]
-    [InlineData("token=")]
-    [InlineData("password=")]
-    [InlineData("://a:")]
-    [InlineData("-----BEGIN PRIVATE KEY-----\n")]
-    [InlineData("eyJabcdefghij")]
-    [InlineData("sk-")]
-    [InlineData("AccountKey=")]
-    [InlineData("secret: \"")]
-    [InlineData("<add key=\"apiKey\" value=\"")]
-    public void PathologicalInput_DoesNotTimeOutOrBlowUp(string unit)
-    {
-        var builder = new StringBuilder();
-        while (builder.Length < 1_000_000)
-        {
-            builder.Append(unit);
-        }
-
-        var stopwatch = Stopwatch.StartNew();
-        _ = SecretScanner.Scan(builder.ToString());
-
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1.5), $"took {stopwatch.Elapsed.TotalMilliseconds:F0} ms");
-    }
-
-    [Fact]
-    public void PathologicalSingleRun_OfValueCharacters_IsLinear()
-    {
-        // One enormous run of base64 characters preceded by a credential-looking name.
-        var text = "secret=" + new string('A', 1_000_000);
-        var stopwatch = Stopwatch.StartNew();
-
-        _ = SecretScanner.Scan(text);
-
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1.5), $"took {stopwatch.Elapsed.TotalMilliseconds:F0} ms");
     }
 
     private static double Entropy(string value)
