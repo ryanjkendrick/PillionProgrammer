@@ -1,0 +1,38 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "codestral-latest",
+      "object": "model",
+      "created": 1756746619,
+      "owned_by": "mistralai",
+      "name": "codestral-latest",
+      "capabilities": { "completion_chat": true, "completion_fim": true, "function_calling": true, "fine_tuning": false, "vision": false, "classification": false },
+      "max_context_length": 128000,
+      "aliases": ["codestral-2508"],
+      "type": "base"
+    },
+    {
+      "id": "mistral-small-latest",
+      "object": "model",
+      "created": 1756746620,
+      "owned_by": "mistralai",
+      "name": "mistral-small-latest",
+      "capabilities": { "completion_chat": true, "completion_fim": false, "function_calling": true, "fine_tuning": false, "vision": true, "classification": false },
+      "max_context_length": 262144,
+      "aliases": [],
+      "type": "base"
+    },
+    {
+      "id": "mistral-embed",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "mistralai",
+      "name": "mistral-embed",
+      "capabilities": { "completion_chat": false, "completion_fim": false, "function_calling": false, "fine_tuning": false, "vision": false, "classification": false },
+      "max_context_length": 8192,
+      "aliases": [],
+      "type": "base"
+    }
+  ]
+}

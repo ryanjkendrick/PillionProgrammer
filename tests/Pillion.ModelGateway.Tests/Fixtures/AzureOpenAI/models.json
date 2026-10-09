@@ -1,0 +1,7 @@
+{
+  "data": [
+    { "id": "gpt-4o", "status": "succeeded", "capabilities": { "chat_completion": true }, "lifecycle_status": "generally-available", "object": "model" },
+    { "id": "text-embedding-3-small", "status": "succeeded", "capabilities": { "embeddings": true }, "lifecycle_status": "generally-available", "object": "model" }
+  ],
+  "object": "list"
+}

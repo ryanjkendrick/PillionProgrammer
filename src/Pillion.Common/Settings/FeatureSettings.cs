@@ -21,6 +21,18 @@ public static class FeatureNames
     /// <summary>The OpenAI-compatible provider (and the OpenAI provider, which uses the same adapter).</summary>
     public const string OpenAICompatibleProvider = "openAICompatibleProvider";
 
+    /// <summary>The Anthropic provider.</summary>
+    public const string AnthropicProvider = "anthropicProvider";
+
+    /// <summary>The Google Gemini provider.</summary>
+    public const string GeminiProvider = "geminiProvider";
+
+    /// <summary>The Mistral provider (chat and Codestral fill-in-the-middle).</summary>
+    public const string MistralProvider = "mistralProvider";
+
+    /// <summary>The Azure OpenAI provider.</summary>
+    public const string AzureOpenAIProvider = "azureOpenAIProvider";
+
     /// <summary>Gets every feature flag name, in the order they are written to <c>settings.json</c>.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
@@ -30,6 +42,10 @@ public static class FeatureNames
         CloudProviders,
         OllamaProvider,
         OpenAICompatibleProvider,
+        AnthropicProvider,
+        GeminiProvider,
+        MistralProvider,
+        AzureOpenAIProvider,
     ];
 }
 
@@ -57,6 +73,18 @@ public sealed class FeatureSettings : SettingsNode
     /// <summary>Gets or sets a value indicating whether the OpenAI-compatible provider is available.</summary>
     public bool OpenAICompatibleProvider { get; set; } = true;
 
+    /// <summary>Gets or sets a value indicating whether the Anthropic provider is available.</summary>
+    public bool AnthropicProvider { get; set; } = true;
+
+    /// <summary>Gets or sets a value indicating whether the Google Gemini provider is available.</summary>
+    public bool GeminiProvider { get; set; } = true;
+
+    /// <summary>Gets or sets a value indicating whether the Mistral provider is available.</summary>
+    public bool MistralProvider { get; set; } = true;
+
+    /// <summary>Gets or sets a value indicating whether the Azure OpenAI provider is available.</summary>
+    public bool AzureOpenAIProvider { get; set; } = true;
+
     /// <summary>Determines whether a feature is on.</summary>
     /// <param name="feature">A name from <see cref="FeatureNames"/>; case is ignored.</param>
     /// <returns><see langword="true"/> when the feature is on. A feature this version does not know is on.</returns>
@@ -72,6 +100,10 @@ public sealed class FeatureSettings : SettingsNode
             "cloudproviders" => CloudProviders,
             "ollamaprovider" => OllamaProvider,
             "openaicompatibleprovider" => OpenAICompatibleProvider,
+            "anthropicprovider" => AnthropicProvider,
+            "geminiprovider" => GeminiProvider,
+            "mistralprovider" => MistralProvider,
+            "azureopenaiprovider" => AzureOpenAIProvider,
             _ => true,
         };
     }
@@ -101,6 +133,18 @@ public sealed class FeatureSettings : SettingsNode
                 break;
             case "openaicompatibleprovider":
                 OpenAICompatibleProvider = false;
+                break;
+            case "anthropicprovider":
+                AnthropicProvider = false;
+                break;
+            case "geminiprovider":
+                GeminiProvider = false;
+                break;
+            case "mistralprovider":
+                MistralProvider = false;
+                break;
+            case "azureopenaiprovider":
+                AzureOpenAIProvider = false;
                 break;
         }
     }
