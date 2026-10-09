@@ -46,6 +46,7 @@ public sealed class AutocompleteAvailability : IDisposable
 
         _started = true;
         _connection.StateChanged += OnHostStateChanged;
+        _connection.SettingsChanged += OnHostSettingsChanged;
         if (IsUsable(_connection.State))
         {
             _ = RefreshAsync(CancellationToken.None);
@@ -126,6 +127,7 @@ public sealed class AutocompleteAvailability : IDisposable
         if (_started)
         {
             _connection.StateChanged -= OnHostStateChanged;
+            _connection.SettingsChanged -= OnHostSettingsChanged;
         }
     }
 
@@ -147,6 +149,15 @@ public sealed class AutocompleteAvailability : IDisposable
         }
 
         return true;
+    }
+
+    /// <summary>Raised on a background thread: reads the flag and the section again when the settings they come from changed.</summary>
+    private void OnHostSettingsChanged(object? sender, HostSettingsChangedEventArgs e)
+    {
+        if (e.Affects("features", AutocompleteSettings.SectionKey))
+        {
+            _ = RefreshAsync(CancellationToken.None);
+        }
     }
 
     private void OnHostStateChanged(object? sender, HostStateChangedEventArgs e)
