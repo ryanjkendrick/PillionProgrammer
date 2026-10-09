@@ -17,6 +17,9 @@
     <PackageReference Include="StreamJsonRpc" />
     <!-- Direct reference so the host deserialises pipe traffic with the patched MessagePack pinned centrally. -->
     <PackageReference Include="MessagePack" />
+    <!-- Roslyn's C# and VB parsers, for syntax validation of inline edits (no compilation; see Directory.Packages.props). -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+    <PackageReference Include="Microsoft.CodeAnalysis.VisualBasic" />
   </ItemGroup>
 
   <ItemGroup>
