@@ -31,26 +31,57 @@ commit.
 
 ## Changelog
 
-### 1.2 (pending, phase 1 wave 2)
+### 1.2 (pending)
 
-Additive only; `ContractVersion` stays 1.1 until the lead bumps it at the wave boundary. A 1.1 VSIX never calls the new
-service, and a 1.1 host answers it with StreamJsonRpc's method-not-found error.
+Additive only, batched with the other phase 1 contract additions into one minor bump at the wave boundary
+(`ContractVersion` still says 1.1 until then). Each bullet below is its own work item's entry.
 
-| Type | Member | Order | Meaning |
-| --- | --- | --- | --- |
-| `IInlineEditService` (new, VSIX to host) | `EditAsync(InlineEditRequest, CancellationToken)` | | Streams `InlineEditChunk`s: the proposed replacement for the request's scope (work item 1.8) |
-| `IInlineEditService` | `CancelEditAsync(string requestId, CancellationToken)` | | Cancels an in-flight edit. Not `CancelAsync`: the host exposes every target under its CLR method names in one namespace, so that name would reach `IModelService.CancelAsync` |
-| `InlineEditRequest` (new) | `RequestId`, `FilePath`, `LanguageId`, `ScopeText`, `ScopeStartLine`, `ScopeStartColumn`, `TextBefore`, `TextAfter`, `Instruction`, `Command`, `Diagnostics`, `PreviousProposal`, `ModelId`, `Profile` (defaults to `Auto`), `ConversationId` | 0-14 | The scope (selection, else enclosing member, else current line), its capped context, the instruction and slash shortcut, the diagnostics for `/fix`, the proposal being refined, a model override and the inline session id |
-| `InlineEditChunk` (new) | `RequestId`, `Text`, `IsFinal`, `Explanation`, `ModelId`, `ProviderId`, `PromptTokens`, `CompletionTokens`, `Error`, `RejectedBlocks`, `Warning`, `ResetText` | 0-11 | A delta of the proposed replacement (plain code); `ResetText` discards the text received so far (the early preview changed); the final chunk carries the explanation, token totals, bounced-block count and any warning |
-| `InlineEditDiagnostic` (new) | `Line`, `Severity`, `Code`, `Message` | 0-3 | A diagnostic on the scope (zero-based document line) |
-| `InlineEditCommand` (new enum) | `None` 0, `Doc` 1, `Test` 2, `Fix` 3, `Explain` 4 | | The slash shortcut; an integer on the wire |
+- **Mentions and context assembly (work item 1.10).** `IContextService` is unchanged; its DTOs and `ChatRequest` grow.
 
-Stream rules for `EditAsync`: concatenating every chunk's `Text`, starting again at each chunk with `ResetText`, gives
-the proposal once the final chunk has arrived. Every failure, before or after preview text, fails the call with a
-`PillionRpcException` (the client sees the `PillionError` as the error data); discard any preview then. `Error` is
-there for parity with `ChatChunk` and is not set by a 1.2 host. `/explain` sends no text, only the
-final chunk's `Explanation`; `/test` sends new test code (not a replacement of the scope) and says where it belongs
-in `Explanation`. See `src/Pillion.Host/README.md` (Inline edits) for the host's behaviour.
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `TaskClass` | `Summarise` | enum value 6 | History compression (Fast online, Local-fast offline); the enum only appends |
+  | `MentionRequest` | `Kind` | 1 | `file`, `folder`, `selection`, `errors`, `clipboard`; empty reads it from the mention text, and a bare `@name` is a fuzzy match |
+  | `MentionRequest` | `WorkspaceRoots` | 2 | `string[]`: the solution or folder roots; relative paths resolve against them |
+  | `MentionRequest` | `CandidateFiles` | 3 | `string[]`: the solution or folder file list for fuzzy `file` and `folder` matching (phase 1 has no index) |
+  | `MentionRequest` | `Payload` | 4 | `string?`: the selection, the clipboard text, or the diagnostics as JSON lines for `errors` |
+  | `MentionRequest` | `MaxTokens` | 5 | Truncation limit for the content (0 is the host default) |
+  | `MentionRequest` | `ApprovedSensitive` | 6 | The user approved pinning an excluded or secret file |
+  | `MentionResolution` | `Kind` | 4 | The kind it resolved as |
+  | `MentionResolution` | `DisplayName` | 5 | Short name for the pin badge |
+  | `MentionResolution` | `TokenCount` | 6 | Tokens of `Content` for the default model, after truncation |
+  | `MentionResolution` | `Truncated` | 7 | `Content` was cut on a line boundary to fit `MaxTokens` |
+  | `MentionResolution` | `Candidates` | 8 | `string[]`: up to 10 paths when a fuzzy match is ambiguous |
+  | `MentionResolution` | `Reason` | 9 | Why it is unresolved |
+  | `MentionResolution` | `RequiresApproval` | 10 | Refused only because the file is excluded or looks secret; ask the user, then resolve again with `ApprovedSensitive` |
+  | `MentionResolution` | `IsSensitive` | 11 | The content came from such a file with approval; it is never sent to a cloud model |
+  | `ChatRequest` | `Pins` | 4 | `MentionResolution[]` already resolved and pinned by the client |
+  | `ChatRequest` | `CurrentFile` | 5 | Path of the file open in the editor |
+  | `ChatRequest` | `CurrentFileRegion` | 6 | `string?`: the text around the caret, or the selection |
+  | `ChatRequest` | `ConversationId` | 7 | Key of the cached rolling history summary |
+  | `ChatRequest` | `ProjectRules` | 8 | `string?`: `.pillion/rules.md`, supplied only after workspace trust |
+
+  A request with pins, a current file or project rules is assembled by the gateway (budget, priority, per-item caps,
+  history summary); a plain request is sent as before. See `src/Pillion.ModelGateway/README.md`, Context assembly.
+
+- **Inline edits (work item 1.8).** A new VSIX-to-host service and its DTOs. A 1.1 host answers it with
+  StreamJsonRpc's method-not-found error.
+
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `IInlineEditService` (new, VSIX to host) | `EditAsync(InlineEditRequest, CancellationToken)` | | Streams `InlineEditChunk`s: the proposed replacement for the request's scope (work item 1.8) |
+  | `IInlineEditService` | `CancelEditAsync(string requestId, CancellationToken)` | | Cancels an in-flight edit. Not `CancelAsync`: the host exposes every target under its CLR method names in one namespace, so that name would reach `IModelService.CancelAsync` |
+  | `InlineEditRequest` (new) | `RequestId`, `FilePath`, `LanguageId`, `ScopeText`, `ScopeStartLine`, `ScopeStartColumn`, `TextBefore`, `TextAfter`, `Instruction`, `Command`, `Diagnostics`, `PreviousProposal`, `ModelId`, `Profile` (defaults to `Auto`), `ConversationId` | 0-14 | The scope (selection, else enclosing member, else current line), its capped context, the instruction and slash shortcut, the diagnostics for `/fix`, the proposal being refined, a model override and the inline session id |
+  | `InlineEditChunk` (new) | `RequestId`, `Text`, `IsFinal`, `Explanation`, `ModelId`, `ProviderId`, `PromptTokens`, `CompletionTokens`, `Error`, `RejectedBlocks`, `Warning`, `ResetText` | 0-11 | A delta of the proposed replacement (plain code); `ResetText` discards the text received so far (the early preview changed); the final chunk carries the explanation, token totals, bounced-block count and any warning |
+  | `InlineEditDiagnostic` (new) | `Line`, `Severity`, `Code`, `Message` | 0-3 | A diagnostic on the scope (zero-based document line) |
+  | `InlineEditCommand` (new enum) | `None` 0, `Doc` 1, `Test` 2, `Fix` 3, `Explain` 4 | | The slash shortcut; an integer on the wire |
+
+  Stream rules for `EditAsync`: concatenating every chunk's `Text`, starting again at each chunk with `ResetText`, gives
+  the proposal once the final chunk has arrived. Every failure, before or after preview text, fails the call with a
+  `PillionRpcException` (the client sees the `PillionError` as the error data); discard any preview then. `Error` is
+  there for parity with `ChatChunk` and is not set by a 1.2 host. `/explain` sends no text, only the
+  final chunk's `Explanation`; `/test` sends new test code (not a replacement of the scope) and says where it belongs
+  in `Explanation`. See `src/Pillion.Host/README.md` (Inline edits) for the host's behaviour.
 
 ### 1.1 (phase 0, wave 3)
 

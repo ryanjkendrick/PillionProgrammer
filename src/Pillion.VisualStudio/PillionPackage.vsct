@@ -49,6 +49,32 @@
           <ButtonText>Pillion: Open Logs</ButtonText>
         </Strings>
       </Button>
+
+      <!--
+        Ghost-text commands. Not on any menu (CommandWellOnly: they appear in Tools > Options > Keyboard); the text view's
+        command filter handles them while a Pillion suggestion is displayed.
+      -->
+      <Button guid="guidPillionCommandSet" id="cmdidNextSuggestion" priority="0x0200" type="Button">
+        <Parent guid="guidPillionCommandSet" id="PillionToolsMenuGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>DefaultDisabled</CommandFlag>
+        <Strings>
+          <ButtonText>Pillion: Next Suggestion</ButtonText>
+          <CanonicalName>Pillion.NextSuggestion</CanonicalName>
+          <LocCanonicalName>Pillion.NextSuggestion</LocCanonicalName>
+        </Strings>
+      </Button>
+
+      <Button guid="guidPillionCommandSet" id="cmdidPreviousSuggestion" priority="0x0201" type="Button">
+        <Parent guid="guidPillionCommandSet" id="PillionToolsMenuGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>DefaultDisabled</CommandFlag>
+        <Strings>
+          <ButtonText>Pillion: Previous Suggestion</ButtonText>
+          <CanonicalName>Pillion.PreviousSuggestion</CanonicalName>
+          <LocCanonicalName>Pillion.PreviousSuggestion</LocCanonicalName>
+        </Strings>
+      </Button>
     </Buttons>
   </Commands>
 
@@ -58,6 +84,10 @@
   -->
   <KeyBindings>
     <KeyBinding guid="guidPillionCommandSet" id="cmdidOpenChat" editor="guidVSStd97" key1="P" mod1="Control Alt Shift" key2="C" />
+    <!-- Next and previous suggestion: Alt+] and Alt+[ in the text editor (design section 5). Word accept (Ctrl+Right) is
+         Edit.WordNext, taken by the text view's command filter only while a Pillion suggestion is displayed. -->
+    <KeyBinding guid="guidPillionCommandSet" id="cmdidNextSuggestion" editor="guidTextEditor" key1="VK_OEM_6" mod1="Alt" />
+    <KeyBinding guid="guidPillionCommandSet" id="cmdidPreviousSuggestion" editor="guidTextEditor" key1="VK_OEM_4" mod1="Alt" />
   </KeyBindings>
 
   <Symbols>
@@ -72,7 +102,12 @@
       <IDSymbol name="cmdidOpenChat" value="0x0103" />
       <IDSymbol name="cmdidViewChat" value="0x0104" />
       <IDSymbol name="PillionViewOtherWindowsGroup" value="0x1021" />
+      <IDSymbol name="cmdidNextSuggestion" value="0x0105" />
+      <IDSymbol name="cmdidPreviousSuggestion" value="0x0106" />
     </GuidSymbol>
+
+    <!-- The Text Editor key-binding scope (GUID_TextEditorFactory). -->
+    <GuidSymbol name="guidTextEditor" value="{8B382828-6202-11d1-8870-0000F87579D2}" />
   </Symbols>
 
 </CommandTable>

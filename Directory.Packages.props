@@ -45,6 +45,16 @@
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 
+  <!--
+    Roslyn, compile-time only, for the VSIX's enclosing-declaration lookup (ghost-text autocomplete). Visual Studio ships
+    and binds its own Roslyn (4.14 in 17.14, 5.x in 18.x, with binding redirects), so the VSIX references it with
+    ExcludeAssets="runtime" and never carries a copy. Pinned to an older 4.x so the API surface used is in every
+    supported Visual Studio.
+  -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.CodeAnalysis.Workspaces.Common" Version="4.8.0" />
+  </ItemGroup>
+
   <!-- Host. The abstractions packages are pinned to the same version as the hosting package that depends on them. -->
   <ItemGroup>
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.12" />

@@ -67,6 +67,14 @@ internal static class DtoSamples
             ],
             ModelId = "local/qwen-coder",
             Profile = Profile.LocalStrong,
+            Pins =
+            [
+                new MentionResolution { Mention = "@file:Calc.cs", IsResolved = true, FilePath = @"C:\src\Calc.cs", Content = "class Calc { }", Kind = "file", DisplayName = "Calc.cs", TokenCount = 5 },
+            ],
+            CurrentFile = @"C:\src\Program.cs",
+            CurrentFileRegion = "var x = Add(1, 2);",
+            ConversationId = "conv-1",
+            ProjectRules = "Use file-scoped namespaces.",
         },
         new ChatChunk
         {
@@ -127,8 +135,31 @@ internal static class DtoSamples
         },
         new SearchRequest { Query = "where is the pipe opened", MaxResults = 10 },
         new SearchResult { FilePath = @"C:\src\Pipe.cs", StartLine = 10, EndLine = 20, Snippet = "new NamedPipeServerStream(", Score = 0.875 },
-        new MentionRequest { Mention = "@file:Program.cs" },
-        new MentionResolution { Mention = "@file:Program.cs", IsResolved = true, FilePath = @"C:\src\Program.cs", Content = "// program" },
+        new MentionRequest
+        {
+            Mention = "@file:Program.cs",
+            Kind = "file",
+            WorkspaceRoots = [@"C:\src"],
+            CandidateFiles = [@"C:\src\Program.cs", @"C:\src\Other\Program.cs"],
+            Payload = "selected text",
+            MaxTokens = 2000,
+            ApprovedSensitive = true,
+        },
+        new MentionResolution
+        {
+            Mention = "@file:Program.cs",
+            IsResolved = true,
+            FilePath = @"C:\src\Program.cs",
+            Content = "// program",
+            Kind = "file",
+            DisplayName = "Program.cs",
+            TokenCount = 3,
+            Truncated = true,
+            Candidates = [@"C:\src\Program.cs", @"C:\src\Other\Program.cs"],
+            Reason = "Two files match.",
+            RequiresApproval = true,
+            IsSensitive = true,
+        },
         new IndexStatus
         {
             IsIndexing = true,
