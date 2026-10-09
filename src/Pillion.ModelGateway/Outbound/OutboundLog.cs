@@ -41,6 +41,8 @@ public enum OutboundOutcome
 /// <param name="PromptTokensCounted">Whether <paramref name="EstimatedPromptTokens"/> was counted with the model's tokenizer rather than estimated.</param>
 /// <param name="CacheHit">Whether an autocomplete request was served from the cache; nothing was sent to the provider then.</param>
 /// <param name="TimeToFirstToken">How long the first token took, when one arrived.</param>
+/// <param name="ContextItems">The number of items in the context report of an assembled chat request (pins, current file, rules, history, ...); 0 when the request was not assembled.</param>
+/// <param name="ContextTrimmed">How many of those items were truncated or dropped to fit the model's window.</param>
 public sealed record OutboundRecord(
     DateTimeOffset Timestamp,
     string RequestId,
@@ -56,7 +58,9 @@ public sealed record OutboundRecord(
     PillionErrorCode? ErrorCode = null,
     bool PromptTokensCounted = false,
     bool CacheHit = false,
-    TimeSpan? TimeToFirstToken = null);
+    TimeSpan? TimeToFirstToken = null,
+    int ContextItems = 0,
+    int ContextTrimmed = 0);
 
 /// <summary>The Outbound log: every request sent to a model provider, from every task class.</summary>
 public interface IOutboundLog
@@ -122,7 +126,9 @@ public sealed partial class InMemoryOutboundLog : IOutboundLog
             record.RedactionCount,
             (long)record.Duration.TotalMilliseconds,
             record.Outcome,
-            errorCode);
+            errorCode,
+            record.ContextItems,
+            record.ContextTrimmed);
     }
 
     /// <inheritdoc/>
@@ -144,7 +150,7 @@ public sealed partial class InMemoryOutboundLog : IOutboundLog
     [LoggerMessage(
         EventId = 420,
         Level = LogLevel.Information,
-        Message = "Outbound {RequestId}: {ProviderId}/{ModelId} {TaskClass} {Locality}, prompt {PromptTokens} tokens ({PromptTokenCount}), completion {CompletionTokens} tokens, cache hit {CacheHit}, first token {FirstTokenMs} ms, {Redactions} redactions, {DurationMs} ms, {Outcome} ({ErrorCode}).")]
+        Message = "Outbound {RequestId}: {ProviderId}/{ModelId} {TaskClass} {Locality}, prompt {PromptTokens} tokens ({PromptTokenCount}), completion {CompletionTokens} tokens, cache hit {CacheHit}, first token {FirstTokenMs} ms, {Redactions} redactions, {DurationMs} ms, {Outcome} ({ErrorCode}), context items {ContextItems} ({ContextTrimmed} truncated or dropped).")]
     private static partial void LogRecord(
         ILogger logger,
         string requestId,
@@ -160,7 +166,9 @@ public sealed partial class InMemoryOutboundLog : IOutboundLog
         int redactions,
         long durationMs,
         OutboundOutcome outcome,
-        string errorCode);
+        string errorCode,
+        int contextItems,
+        int contextTrimmed);
 }
 
 /// <summary>Estimates token counts without a tokenizer: about four characters per token for code and English.</summary>
