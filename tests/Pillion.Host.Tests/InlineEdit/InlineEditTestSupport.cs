@@ -195,8 +195,18 @@ internal static class InlineEditTestSupport
         Command = command,
     };
 
-    public static InlineEditEngine Engine(IModelGateway gateway, InlineEditConversations? conversations = null) =>
-        new(gateway, new InlineEditPromptBuilder(), RoslynSyntaxValidator.Instance, conversations ?? new InlineEditConversations());
+    /// <summary>An engine in the block format (whole-scope mode off): the replies of these tests are edit blocks.</summary>
+    public static InlineEditEngine Engine(IModelGateway gateway, InlineEditConversations? conversations = null, int wholeScopeMaxLines = 0) =>
+        new(
+            gateway,
+            new InlineEditPromptBuilder(),
+            RoslynSyntaxValidator.Instance,
+            conversations ?? new InlineEditConversations(),
+            options: new InlineEditOptions { WholeScopeMaxLines = wholeScopeMaxLines });
+
+    /// <summary>An engine with whole-scope mode on for scopes of up to <paramref name="wholeScopeMaxLines"/> lines.</summary>
+    public static InlineEditEngine WholeEngine(IModelGateway gateway, InlineEditConversations? conversations = null, int wholeScopeMaxLines = InlineEditOptions.DefaultWholeScopeMaxLines) =>
+        Engine(gateway, conversations, wholeScopeMaxLines);
 
     public static async Task<List<InlineEditChunk>> CollectAsync(IAsyncEnumerable<InlineEditChunk> stream, TimeSpan? timeout = null)
     {
