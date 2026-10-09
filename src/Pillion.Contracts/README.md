@@ -31,6 +31,17 @@ commit.
 
 ## Changelog
 
+### 1.2 (pending)
+
+Additive only; `ContractVersion` is not changed by this entry (the bump happens with the phase 1 contract work).
+
+- Notification `settingsChanged`, host to client, one positional argument: a `string[]` of the names of the top-level
+  `settings.json` sections that changed. Sent after the handshake, debounced to 250 ms, after a save and after an
+  external edit of the file. Like `connectivityChanged` it is not a method on a contract interface, so the interface
+  shape tests are unchanged, and a 1.1 client that registers no handler ignores it. See the host README.
+- Setting `routing.thinkHarder` (boolean, default `false`) in `settings.json`; it is read through
+  `ISettingsService`, so no DTO changes.
+
 ### 1.1 (phase 0, wave 3)
 
 Additive only; a 1.0 peer is still accepted by the handshake and ignores the new fields, and a 1.1 peer reads their
