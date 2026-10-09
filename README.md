@@ -149,7 +149,11 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
     "connectivityProbes": true,
     "cloudProviders": true,
     "ollamaProvider": true,
-    "openAICompatibleProvider": true
+    "openAICompatibleProvider": true,
+    "anthropicProvider": true,
+    "geminiProvider": true,
+    "mistralProvider": true,
+    "azureOpenAIProvider": true
   }
 }
 ```
@@ -162,6 +166,10 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
 | `cloudProviders` | Every provider that does not run on this machine is hidden from routing (listed as unavailable with the reason) and nothing is probed. An OpenAI-compatible server on `localhost` or another loopback or `.local` address is local and stays. |
 | `ollamaProvider` | Providers of kind `ollama` are not built or routed to. |
 | `openAICompatibleProvider` | Providers of kind `openai-compatible` and `openai` (one adapter) are not built or routed to. |
+| `anthropicProvider` | Providers of kind `anthropic` are not built or routed to. |
+| `geminiProvider` | Providers of kind `gemini` are not built or routed to. |
+| `mistralProvider` | Providers of kind `mistral` (chat and Codestral fill-in-the-middle) are not built or routed to. |
+| `azureOpenAIProvider` | Providers of kind `azure-openai` are not built or routed to. |
 
 A repository can switch flags off for everyone who opens it with `disabledFeatures` in `.pillion/policy.json`, next to
 `localOnly`, `disabledTools`, `exclude` and `denyCommands`:

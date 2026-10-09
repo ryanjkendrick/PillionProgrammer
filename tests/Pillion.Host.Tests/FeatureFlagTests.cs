@@ -23,7 +23,7 @@ public sealed class FeatureFlagTests : IDisposable
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
     private static readonly string[] AllFlags =
-        ["chat", "modelGateway", "connectivityProbes", "cloudProviders", "ollamaProvider", "openAICompatibleProvider", "autocomplete"];
+        ["chat", "modelGateway", "connectivityProbes", "cloudProviders", "ollamaProvider", "openAICompatibleProvider", "anthropicProvider", "geminiProvider", "mistralProvider", "azureOpenAIProvider", "autocomplete"];
 
     private readonly TempDirectory _data = new();
     private readonly FakeSettings _settings = new();
@@ -416,7 +416,7 @@ public sealed class FeatureFlagStoreTests : IDisposable
 
         // A fresh settings file has the features section with everything on.
         var raw = JsonNode.Parse((await settings.GetAsync("features", CancellationToken.None).WaitAsync(Wait))!)!.AsObject();
-        Assert.Equal(7, raw.Count);
+        Assert.Equal(FeatureNames.All.Count, raw.Count);
         Assert.All(raw, p => Assert.True(p.Value!.GetValue<bool>(), p.Key));
         Assert.NotEmpty(await models.ListModelsAsync(CancellationToken.None).WaitAsync(Wait));
 

@@ -1,0 +1,4 @@
+data: {"candidates":[{"content":{"parts":[{"text":"**Planning** a greeting","thought":true}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":30,"totalTokenCount":30,"thoughtsTokenCount":0}}
+
+data: {"candidates":[{"content":{"parts":[{"text":"Hi there"}],"role":"model"},"finishReason":"MAX_TOKENS","index":0}],"usageMetadata":{"promptTokenCount":30,"candidatesTokenCount":4,"totalTokenCount":58,"thoughtsTokenCount":24}}
+

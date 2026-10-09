@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "comment": "The model catalog (design section 6): data, not code. 'profiles' maps each profile to a default model id per provider kind; routing.profiles in settings overrides it. 'families' lists capability descriptors for known model families, matched in order against the model id (case-insensitive, '*' is a wildcard); the last entry must be the '*' default. Providers that report capabilities themselves (Ollama's /api/show) override the chat, fim, vision, tools and embeddings flags and the context window; the OpenAI-compatible adapter reads only the context window, when /models reports one. The openai and openai-compatible defaults are OpenAI model ids taken from the OpenAI model list in October 2026 and are only defaults: set routing.profiles (bare id or provider/model) for a gateway with different ids, such as OpenRouter's openai/... names. The context windows of the gpt-6 family are conservative placeholders. Costs are left at 0 (unknown) until the cost governor ships.",
+  "comment": "The model catalog (design section 6): data, not code. 'profiles' maps each profile to a default model id per provider kind; routing.profiles in settings overrides it. 'families' lists capability descriptors for known model families, matched in order against the model id (case-insensitive, '*' is a wildcard); the last entry must be the '*' default. Providers that report capabilities themselves (Ollama's /api/show) override the chat, fim, vision, tools and embeddings flags and the context window; the OpenAI-compatible adapter reads only the context window, when /models reports one. The anthropic defaults are the Claude API ids on the Anthropic models overview page, the gemini defaults the model codes on the Gemini API models page, and the mistral defaults aliases and ids from the Mistral documentation (October 2026; see the note on each family). Azure OpenAI has no defaults because deployment names are chosen by the user: pin a profile to a deployment with routing.profiles (azure/my-deployment) or list the deployments in providers[].models. A family's reasoningEffort says the adapter may set the provider's reasoning-effort control (Anthropic output_config.effort, Gemini thinkingLevel); note is documentation only. Every descriptor, cost included, is a default that a provider's own listing can override (the Anthropic, Gemini and Mistral adapters read context windows, output limits and capabilities from their model lists). The openai and openai-compatible defaults are OpenAI model ids taken from the OpenAI model list in October 2026 and are only defaults: set routing.profiles (bare id or provider/model) for a gateway with different ids, such as OpenRouter's openai/... names. The context windows of the gpt-6 family are conservative placeholders. Costs are left at 0 (unknown) until the cost governor ships.",
   "profiles": {
     "ollama": {
       "LocalFast": "qwen2.5-coder:1.5b",
@@ -15,6 +15,21 @@
       "Fast": "gpt-6-luna",
       "Balanced": "gpt-6.1-sol",
       "Frontier": "gpt-6-astra"
+    },
+    "anthropic": {
+      "Fast": "claude-haiku-5-5",
+      "Balanced": "claude-sonnet-5-5",
+      "Frontier": "claude-opus-5-5"
+    },
+    "gemini": {
+      "Fast": "gemini-3.5-flash-lite",
+      "Balanced": "gemini-3.8-flash",
+      "Frontier": "gemini-3.1-pro-preview"
+    },
+    "mistral": {
+      "Fast": "codestral-latest",
+      "Balanced": "mistral-small-latest",
+      "Frontier": "mistral-medium-3-5"
     }
   },
   "families": [
@@ -247,6 +262,58 @@
       "toolCalling": "native"
     },
     {
+      "match": "claude-fable-5-1*",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "chat": true,
+      "vision": true,
+      "promptCaching": true,
+      "reasoningEffort": true,
+      "toolCalling": "native",
+      "inputCostPerMillionTokens": 10,
+      "outputCostPerMillionTokens": 50,
+      "note": "Anthropic models overview (platform.claude.com/docs/en/about-claude/models/overview), October 2026."
+    },
+    {
+      "match": "claude-opus-5-5*",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "chat": true,
+      "vision": true,
+      "promptCaching": true,
+      "reasoningEffort": true,
+      "toolCalling": "native",
+      "inputCostPerMillionTokens": 4,
+      "outputCostPerMillionTokens": 20,
+      "note": "Anthropic models overview, October 2026."
+    },
+    {
+      "match": "claude-sonnet-5-5*",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "chat": true,
+      "vision": true,
+      "promptCaching": true,
+      "reasoningEffort": true,
+      "toolCalling": "native",
+      "inputCostPerMillionTokens": 2,
+      "outputCostPerMillionTokens": 10,
+      "note": "Anthropic models overview, October 2026."
+    },
+    {
+      "match": "claude-haiku-5-5*",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "chat": true,
+      "vision": true,
+      "promptCaching": true,
+      "reasoningEffort": true,
+      "toolCalling": "native",
+      "inputCostPerMillionTokens": 0.10,
+      "outputCostPerMillionTokens": 0.50,
+      "note": "Anthropic models overview, October 2026; the page prices Haiku 5.5 from these rates."
+    },
+    {
       "match": "claude*",
       "contextWindow": 200000,
       "maxOutputTokens": 32768,
@@ -254,6 +321,65 @@
       "vision": true,
       "promptCaching": true,
       "toolCalling": "native"
+    },
+    {
+      "match": "gemini-3.8-flash*",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "chat": true,
+      "vision": true,
+      "reasoningEffort": true,
+      "toolCalling": "native",
+      "inputCostPerMillionTokens": 1.50,
+      "outputCostPerMillionTokens": 7.50,
+      "note": "Gemini model page and pricing page, October 2026. Promotional rate is 0.75 and 3.75 until 2026-12-31; the rate from 2027-01-01 is listed so that cost caps are not under-counted."
+    },
+    {
+      "match": "gemini-3.5-flash-lite*",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "chat": true,
+      "vision": true,
+      "reasoningEffort": true,
+      "toolCalling": "native",
+      "inputCostPerMillionTokens": 0.30,
+      "outputCostPerMillionTokens": 2.50,
+      "note": "Gemini model page and pricing page, October 2026."
+    },
+    {
+      "match": "gemini-3.1-flash-lite*",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "chat": true,
+      "vision": true,
+      "reasoningEffort": true,
+      "toolCalling": "native",
+      "inputCostPerMillionTokens": 0.25,
+      "outputCostPerMillionTokens": 1.50,
+      "note": "Gemini pricing page, October 2026. Text, image and video input rate."
+    },
+    {
+      "match": "gemini-3.1-pro*",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "chat": true,
+      "vision": true,
+      "reasoningEffort": true,
+      "toolCalling": "native",
+      "inputCostPerMillionTokens": 2.00,
+      "outputCostPerMillionTokens": 12.00,
+      "note": "Gemini model page and pricing page, October 2026; preview model. Rates are for prompts up to 200K tokens (4.00 and 18.00 above)."
+    },
+    {
+      "match": "gemini-2.5-pro*",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "chat": true,
+      "vision": true,
+      "toolCalling": "native",
+      "inputCostPerMillionTokens": 1.25,
+      "outputCostPerMillionTokens": 10.00,
+      "note": "Gemini pricing page, October 2026. Rates are for prompts up to 200K tokens (2.50 and 15.00 above). Uses thinkingBudget, not thinkingLevel."
     },
     {
       "match": "gemini*",
@@ -286,10 +412,25 @@
     },
     {
       "match": "codestral*",
-      "contextWindow": 262144,
+      "contextWindow": 128000,
       "maxOutputTokens": 8192,
       "chat": true,
-      "toolCalling": "native"
+      "fim": true,
+      "toolCalling": "native",
+      "inputCostPerMillionTokens": 0.3,
+      "outputCostPerMillionTokens": 0.9,
+      "note": "Mistral Codestral 25.08 model card (docs.mistral.ai/models/model-cards/codestral-25-08), October 2026: 128k context, FIM on /v1/fim/completions, 0.3 and 0.9 per million tokens (the card does not label input and output; input first is assumed). FIM is only used by the Mistral adapter."
+    },
+    {
+      "match": "mistral-medium-3-5*",
+      "contextWindow": 256000,
+      "maxOutputTokens": 8192,
+      "chat": true,
+      "vision": true,
+      "toolCalling": "native",
+      "inputCostPerMillionTokens": 1.5,
+      "outputCostPerMillionTokens": 7.5,
+      "note": "Mistral Medium 3.5 model card (docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04), October 2026. The card does not state a maximum output; 8192 is a conservative placeholder."
     },
     {
       "match": "mistral*",
