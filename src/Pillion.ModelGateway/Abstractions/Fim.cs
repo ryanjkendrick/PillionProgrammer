@@ -42,4 +42,7 @@ public sealed record FimRequest
 
     /// <summary>Gets the context size to request from a local runtime, or <see langword="null"/> for the provider's per-profile default.</summary>
     public int? ContextSize { get; init; }
+
+    /// <summary>Gets the id of the gateway request, so a local runtime can attach its load and unload progress to it.</summary>
+    public string? RequestId { get; init; }
 }

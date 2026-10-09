@@ -11,6 +11,8 @@ internal sealed class FakeOllamaHandler : HttpMessageHandler
 {
     private readonly ConcurrentDictionary<string, Func<HttpRequestMessage, JsonObject?, HttpResponseMessage>> _routes = new(StringComparer.Ordinal);
 
+    private readonly ConcurrentDictionary<string, Func<HttpRequestMessage, JsonObject?, CancellationToken, Task<HttpResponseMessage>>> _asyncRoutes = new(StringComparer.Ordinal);
+
     public ConcurrentQueue<(string Path, JsonObject? Body)> Requests { get; } = new();
 
     /// <summary>Gets or sets a value indicating whether every request fails as if nothing listened on the port.</summary>
@@ -44,6 +46,9 @@ internal sealed class FakeOllamaHandler : HttpMessageHandler
 
     public void On(string route, Func<HttpRequestMessage, JsonObject?, HttpResponseMessage> respond) => _routes[route] = respond;
 
+    /// <summary>Routes a request to a handler that may wait (for example, to model a server that never answers); it sees the request's cancellation token.</summary>
+    public void OnAsync(string route, Func<HttpRequestMessage, JsonObject?, CancellationToken, Task<HttpResponseMessage>> respond) => _asyncRoutes[route] = respond;
+
     public Func<HttpRequestMessage, JsonObject?, HttpResponseMessage> RouteFor(string route) => _routes[route];
 
     public IEnumerable<JsonObject> BodiesFor(string path) => Requests.Where(r => r.Path == path).Select(r => r.Body!);
@@ -65,6 +70,11 @@ internal sealed class FakeOllamaHandler : HttpMessageHandler
         }
 
         Requests.Enqueue((path, body));
+        if (_asyncRoutes.TryGetValue($"{request.Method} {path}", out var respondAsync))
+        {
+            return await respondAsync(request, body, cancellationToken);
+        }
+
         return _routes.TryGetValue($"{request.Method} {path}", out var respond)
             ? respond(request, body)
             : Respond(HttpStatusCode.NotFound, "404 page not found", "text/plain");

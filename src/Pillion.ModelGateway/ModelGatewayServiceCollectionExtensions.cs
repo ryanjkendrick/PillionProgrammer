@@ -36,7 +36,7 @@ public sealed class GatewayProviderTester : IProviderTester
 public static class ModelGatewayServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the Model Gateway: the catalog, prompt templates, token counter, GPU tier detector, autocomplete counters, provider registry (with the Ollama, OpenAI-compatible, OpenAI, Anthropic, Gemini, Mistral and Azure OpenAI factories; the Azure factory uses an <see cref="ITokenCredentialProvider"/> if the host registers one), router,
+    /// Registers the Model Gateway: the catalog, prompt templates, token counter, GPU tier detector, autocomplete counters, the local residency map, provider registry (with the Ollama, OpenAI-compatible, OpenAI, Anthropic, Gemini, Mistral and Azure OpenAI factories; the Azure factory uses an <see cref="ITokenCredentialProvider"/> if the host registers one), router,
     /// circuit breakers, concurrency limiter, autocomplete cache, Outbound log and <see cref="IModelGateway"/>. The
     /// default <see cref="IProviderTester"/> is replaced by <see cref="GatewayProviderTester"/>. Extension points that
     /// later work items supply (<see cref="IProviderReachability"/>, <see cref="IProviderHealthSink"/>,
@@ -61,6 +61,7 @@ public static class ModelGatewayServiceCollectionExtensions
         services.TryAddSingleton<IGpuTierDetector>(sp => new GpuTierDetector(sp.GetService<ILogger<GpuTierDetector>>()));
         services.TryAddSingleton<AutocompleteCounters>();
         services.TryAddSingleton<PromptEvaluationRates>();
+        services.TryAddSingleton<LocalResidencyMap>();
         services.TryAddSingleton(new ContextAssemblerOptions());
         services.TryAddSingleton(sp => new ContextAssembler(
             sp.GetRequiredService<ITokenCounter>(),
@@ -87,7 +88,11 @@ public static class ModelGatewayServiceCollectionExtensions
             sp.GetRequiredService<ISecretStore>(),
             sp.GetServices<IModelProviderFactory>(),
             sp.GetRequiredService<ModelCatalog>(),
-            sp.GetService<ILoggerFactory>()));
+            sp.GetService<ILoggerFactory>(),
+            sp.GetRequiredService<IProgressSink>(),
+            sp.GetRequiredService<IGpuTierDetector>(),
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<LocalResidencyMap>()));
         services.TryAddSingleton<IProviderRegistry>(sp => sp.GetRequiredService<ProviderRegistry>());
 
         services.TryAddSingleton<ModelInventory>();
@@ -122,7 +127,8 @@ public static class ModelGatewayServiceCollectionExtensions
             sp.GetRequiredService<IGpuTierDetector>(),
             sp.GetRequiredService<AutocompleteCounters>(),
             sp.GetRequiredService<PromptEvaluationRates>(),
-            sp.GetRequiredService<ContextAssembler>()));
+            sp.GetRequiredService<ContextAssembler>(),
+            sp.GetRequiredService<LocalResidencyMap>()));
 
         // Test connection probes the named provider through the gateway (replacing the settings' NoProviderTester).
         services.Replace(ServiceDescriptor.Singleton<IProviderTester, GatewayProviderTester>());

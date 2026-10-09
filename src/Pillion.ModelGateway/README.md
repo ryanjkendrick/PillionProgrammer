@@ -15,8 +15,8 @@ Context/        ContextAssembler (budget, priority, caps, rolling summary), Cont
 Tokens/         token-families.json (data) and ITokenCounter / TokenCounter (Microsoft.ML.Tokenizers or a calibrated estimate)
 Outbound/       IOutboundLog / InMemoryOutboundLog (ring buffer of 500), TokenEstimator
 Templates/      system-prompts.json, fim-formats.json (data) and PromptTemplates
-Providers/      ProviderRegistry (builds providers from settings), IGatewaySettingsSource, ModelInventory
-Providers/Ollama/  The native Ollama adapter
+Providers/      ProviderRegistry (builds providers from settings), IGatewaySettingsSource, ModelInventory, ProviderRuntime, LocalResidencyMap
+Providers/Ollama/  The native Ollama adapter and its residency manager (OllamaResidency)
 Providers/OpenAICompatible/  The OpenAI-compatible adapter (OpenAI, LM Studio, llama.cpp, vLLM, OpenRouter, gateways)
 Providers/Anthropic/  Providers/Gemini/  Providers/Mistral/  Providers/AzureOpenAI/  The cloud adapters (no SDKs)
 Providers/Cloud/   HTTP, SSE, error mapping and endpoint/proxy/CA plumbing shared by the four cloud adapters
@@ -136,23 +136,77 @@ undercounts (by under 5%). `cl100k_base` came within 2% of Qwen's counts on ever
 
 ### Residency and `OLLAMA_MAX_LOADED_MODELS`
 
-The Ollama adapter sends `keep_alive` -1 for the completion model and a fixed `num_ctx` per profile (Local-fast 4,096),
-so the model is loaded once and never reloaded by a context change. Ollama still unloads a model when another request
-needs its memory and the server already holds `OLLAMA_MAX_LOADED_MODELS` models, so set it (a system environment
-variable for the Ollama service, then restart Ollama) to the number of models the tier keeps resident:
+Ollama keeps one runner for every model and `num_ctx` it has been asked for. A request that wants a different context size
+than the resident runner has needs a second runner, and on a small GPU the second runner cannot start beside the first:
+Ollama waits for memory that never comes (a chat at Local-strong's 8,192 tokens next to the autocomplete model pinned at
+4,096 hung for good on the 8 GB development machine). The adapter therefore keeps **one resident configuration per
+model** (`Providers/Ollama/OllamaResidency.cs`) instead of sending a fixed size per profile:
+
+1. **Reuse.** The adapter knows what is loaded from `/api/ps` (`context_length`, `size_vram`, `expires_at`; read at most
+   every 30 s, or on demand) and from its own requests. A request that needs no more than the resident context `C` is sent
+   with `C`, whatever its profile default says. A request's need is its estimated prompt tokens plus its output limit
+   (512 tokens when it sets none). An Ollama that does not report `context_length` falls back to the profile default,
+   and one without `/api/ps` to the earlier behaviour (a fixed size per profile, no preload).
+2. **Growing.** A request that needs more than `C` gets the next power of two that holds it, at least the profile default,
+   limited by the model's window and by what the tier's memory can hold. Where the tier can hold two instances (the
+   catalog's memory estimate for a second instance fits what is free) Ollama is asked for the second one. Otherwise
+   (always for a 7B model on 8 GB) the resident instance is released (`keep_alive` 0, then `/api/ps` is polled until the
+   model is gone) and the model is loaded once at the larger size, with the autocomplete model's `keep_alive` -1 again,
+   so autocomplete keeps working and the pin now sits at the larger size. Nothing shrinks it back until Ollama unloads it.
+3. **No waiting for ever.** Every unload and load runs under a timeout (`loadTimeoutSeconds`, default 120, and
+   `releaseTimeoutSeconds`, default 30, in the provider's entry) and reports `WaitingForLocalModel`, then
+   `SlowerThanExpected` every 5 s, to the progress sink. On expiry the request fails with `ProviderUnavailable`, not counted
+   against the circuit breaker, naming the models that are resident and what to do; a request that needs more than the
+   tier can hold fails at once with `ContextOverflow` and says how many tokens fit.
+
+**Shared model on 8 GB.** When the completion model and the chat model are the same model and the tier cannot hold two
+instances, it is loaded at the largest `num_ctx` any routed task class asks for (the profile defaults: autocomplete 4,096,
+chat and inline edit 8,192) capped at the catalog's recommended resident context for the tier (`residency.recommendedContext`
+in `catalog.json`). The caps are what one instance of the model can hold beside the display and the desktop:
+
+| Model (Q4_K_M) | Weights | Cache per 1,024 tokens | CPU | 8 GB | 12 GB | 16 GB | 24 GB+ |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| qwen2.5-coder:1.5b | 1,050 MiB | 28 MiB | 4,096 | 8,192 | 8,192 | 16,384 | 16,384 |
+| qwen2.5-coder:7b | 4,300 MiB | 56 MiB | 4,096 | **4,096** | 8,192 | 16,384 | 32,768 |
+| qwen2.5-coder:14b | 8,800 MiB | 192 MiB | 4,096 | 4,096 | 8,192 | 8,192 | 16,384 |
+| qwen2.5-coder:32b | 19,200 MiB | 256 MiB | 4,096 | 4,096 | 4,096 | 4,096 | 8,192 |
+
+The tier budget for the "second instance" and "does it fit" checks is the nominal size minus 1 GiB (7 GiB on 8 GB, 11 on 12,
+15 on 16, 23 on 24+); the CPU tier never loads a second instance. A model the catalog has no estimate for (any other family)
+takes the single-instance path and the 4,096-token cap when shared. The 7B figures were checked on the development machine
+(4,528 MiB at 4,096 tokens in `/api/ps`); the others are computed from the model architectures and file sizes.
+
+**Override.** `models.residentContext` sets the context a model is loaded at on any tier, by model id:
+
+```json
+{ "models": { "residentContext": { "qwen2.5-coder:7b": 8192 } } }
+```
+
+Model ids contain dots, so edit the object in `settings.json` rather than setting a dotted key path. A request that needs
+more than the override still grows the model as in 2. (`numCtx` in a provider entry still sets the per-profile defaults.)
+
+**What is resident.** `ModelGateway.Residency` (`LocalResidencyMap`, a singleton) lists the loaded models with their
+context size, GPU memory, keep-alive and whether they are pinned: `GetSnapshot()` reports what was observed last without any
+I/O, for the status bar, and `RefreshAsync(force)` asks Ollama (at most once per 30 s unless `force`, which an explicit
+Refresh in the UI would use). The host has no RPC for it yet.
+
+**`OLLAMA_MAX_LOADED_MODELS`.** Ollama also unloads a model when another request needs its memory and the server already holds
+`OLLAMA_MAX_LOADED_MODELS` models. Set it (a system environment variable for the Ollama service, then restart Ollama) to the
+number of models the tier keeps resident, and one higher where the adapter may load a second instance of the same model
+(16 GB and up, where Ollama counts it as another loaded model):
 
 | GPU tier (`models.gpuTier`) | Resident | `OLLAMA_MAX_LOADED_MODELS` |
 | --- | --- | --- |
 | CPU only | the 1.5B FIM coder, plus a chat model in RAM | 2 |
-| 8 GB | one 7B FIM coder; chat shares it or runs on the CPU | 2 |
+| 8 GB | one 7B FIM coder, shared with chat at 4,096 tokens (grown on demand); a bigger chat model runs on the CPU | 2 |
 | 12 GB | a 1.5B coder plus a 14B chat model, or a 7B coder plus an 8B chat model | 2 |
-| 16 GB | a 7B coder plus a 14B chat model | 2 |
-| 24 GB or more | a 7B coder plus a 32B chat model | 2 |
+| 16 GB | a 7B coder plus a 14B chat model | 3 |
+| 24 GB or more | a 7B coder plus a 32B chat model | 3 |
 
 Keep `OLLAMA_NUM_PARALLEL` at 1 on 8 and 12 GB cards: every parallel slot multiplies the context memory of each loaded
 model. On the development machine (RTX 2080 SUPER, 8 GB) qwen2.5-coder:7b at `num_ctx` 4,096 took 4.7 GB of VRAM and
-stayed fully on the GPU next to the 1.5B model (1.2 GB).
-
+stayed fully on the GPU next to the 1.5B model (1.2 GB). Other programs use the GPU too (the desktop, a browser, LM Studio):
+if a load times out with models listed in the message, unload one with `ollama stop <model>`.
 ## Context assembly
 
 `Context/ContextAssembler.cs` builds the prompt of a chat request (design section 7, Context assembly), independent of
@@ -221,10 +275,13 @@ when settings change and reused when their entry did not.
   cached per digest), `api/chat` (NDJSON), `api/generate` with `suffix` and `raw: false` for FIM.
 - Minimum version 0.6.4, the first release whose `api/show` returns `capabilities`. It is checked before the first
   request and by Test connection, not in the constructor, so Ollama may start after Pillion.
-- `num_ctx` is fixed per profile: Local-fast 4,096, Local-strong 8,192 (others 8,192). Override per provider with
-  `"numCtx": { "localFast": 4096, "localStrong": 16384 }` in its `providers` entry.
+- `num_ctx` defaults per profile: Local-fast 4,096, Local-strong 8,192 (others 8,192). Override per provider with
+  `"numCtx": { "localFast": 4096, "localStrong": 16384 }` in its `providers` entry. The size actually sent follows the
+  resident configuration of the model (see Residency above): the context it already has when that is enough, else the
+  next size up; `models.residentContext` sets it per model.
 - `keep_alive`: `-1` for FIM requests and for chat on a model used for autocomplete (the routed Local-fast model), `30m`
-  for other chat.
+  for other chat. A model is loaded explicitly (an empty `/api/generate` request) before a request that would load it, so
+  the load has its own timeout (`loadTimeoutSeconds`, `releaseTimeoutSeconds`, `progressIntervalSeconds` in the entry).
 - Errors: 404 or "model ... not found" is `ModelNotInstalled`; connection failures are `ProviderUnavailable`; context
   length errors are `ContextOverflow`; "does not support insert" is `ProviderUnavailable` without counting against the
   circuit.
@@ -427,5 +484,6 @@ answer; the OpenAI-compatible live tests run only when `PILLION_TEST_OPENAI_COMP
 cache keys and counters, GPU-tier budgets and timeouts; `Ollama/AutocompleteLiveTests` (Live) checks a real completion,
 multi-line output, the prompt-cache hit (`prompt_eval_duration`), the recorded calibration, and writes first-token and
 total latency percentiles for qwen2.5-coder:1.5b and :7b to the test output (`--logger "console;verbosity=detailed"`).
+Residency: `Ollama/OllamaResidencyTests` runs the adapter against a stateful fake server that, like Ollama, never starts a second runner of a model beside a resident one on a full GPU (reuse of the resident size, release and reload on 8 GB with the pin restored, the second instance on 16 GB, the load and unload timeouts, `ContextOverflow`, the 30 s `/api/ps` cache, the `models.residentContext` override); `Ollama/OllamaResidencyLiveTests` (Live) repeats the 8 GB scenarios against the real server and restores what was resident.
 Context assembly: `Context/` covers truncation, the exclusion and secret-file rules, the assembler (budget maths, priority, caps, summary trigger and cache, stable leading sections, the phase 2 hooks), chat through the gateway with fake providers, a timing benchmark, and `ContextLiveTests` (Live: a pinned file answered by gemma4:e2b, the summariser on a long fake history).
 Run only live tests with `dotnet test --filter Category=Live`, or exclude them with `--filter Category!=Live`.

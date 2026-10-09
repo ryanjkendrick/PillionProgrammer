@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Pillion.Common.Connectivity;
+using Pillion.Common.Hardware;
 using Pillion.Common.Secrets;
 using Pillion.Common.Settings;
 using Pillion.Contracts;
@@ -72,6 +73,7 @@ public sealed partial class ProviderRegistry : IProviderRegistry, IDisposable
     private readonly ModelCatalog _catalog;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger _logger;
+    private readonly ProviderRuntime _runtime;
     private readonly Dictionary<ProviderKind, IModelProviderFactory> _factories = [];
     private readonly ConcurrentDictionary<string, (string Fingerprint, IModelProvider Provider)> _built = new(StringComparer.OrdinalIgnoreCase);
     private ProviderRegistrySnapshot? _snapshot;
@@ -83,12 +85,20 @@ public sealed partial class ProviderRegistry : IProviderRegistry, IDisposable
     /// <param name="factories">The provider factories; the last one registered for a kind wins.</param>
     /// <param name="catalog">The model catalog.</param>
     /// <param name="loggerFactory">Creates loggers.</param>
+    /// <param name="progress">Receives the load and unload progress of local providers; dropped when <see langword="null"/>.</param>
+    /// <param name="gpuTierDetector">Detects the GPU tier that local residency rules use under <c>models.gpuTier</c> auto; <see cref="GpuTierDetector.Shared"/> when <see langword="null"/>.</param>
+    /// <param name="time">The clock of the residency rules.</param>
+    /// <param name="residency">The map local providers register with, for the status bar and diagnostics.</param>
     public ProviderRegistry(
         IGatewaySettingsSource settings,
         ISecretStore secrets,
         IEnumerable<IModelProviderFactory> factories,
         ModelCatalog catalog,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        IProgressSink? progress = null,
+        IGpuTierDetector? gpuTierDetector = null,
+        TimeProvider? time = null,
+        LocalResidencyMap? residency = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(secrets);
@@ -105,6 +115,13 @@ public sealed partial class ProviderRegistry : IProviderRegistry, IDisposable
             _factories[factory.Kind] = factory;
         }
 
+        var detector = gpuTierDetector ?? GpuTierDetector.Shared;
+        _runtime = new ProviderRuntime(
+            progress ?? new NoProgressSink(),
+            () => GpuTiers.Resolve(_settings.GetCurrent().Settings.Models.GpuTier, detector).Tier,
+            model => FindResidentContext(_settings.GetCurrent().Settings.Models.ResidentContext, model),
+            time ?? TimeProvider.System,
+            residency);
         _settings.Changed += OnSettingsChanged;
     }
 
@@ -205,7 +222,7 @@ public sealed partial class ProviderRegistry : IProviderRegistry, IDisposable
 
             try
             {
-                var context = new ProviderCreationContext(apiKey, _catalog, _loggerFactory, FindAutocompleteModel(effective.Settings, settings));
+                var context = new ProviderCreationContext(apiKey, _catalog, _loggerFactory, FindAutocompleteModel(effective.Settings, settings), _runtime);
                 var provider = factory.Create(settings, context);
                 _built[settings.Id] = (fingerprint, provider);
                 providers.Add(provider);
@@ -222,6 +239,7 @@ public sealed partial class ProviderRegistry : IProviderRegistry, IDisposable
         foreach (var id in _built.Keys.Where(id => !providers.Any(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase))).ToList())
         {
             _built.TryRemove(id, out _);
+            _runtime.Residency?.Unregister(id);
         }
 
         return new ProviderRegistrySnapshot(effective, providers, hidden);
@@ -237,6 +255,25 @@ public sealed partial class ProviderRegistry : IProviderRegistry, IDisposable
         {
             return null;
         }
+    }
+
+    /// <summary>Finds the <c>models.residentContext</c> entry of a model; a trailing <c>:latest</c> and letter case do not matter.</summary>
+    internal static int? FindResidentContext(IReadOnlyDictionary<string, int>? overrides, string modelId)
+    {
+        if (overrides is null || overrides.Count == 0)
+        {
+            return null;
+        }
+
+        foreach (var (id, tokens) in overrides)
+        {
+            if (tokens > 0 && ModelInventory.ModelIdsEqual(id.Trim(), modelId))
+            {
+                return tokens;
+            }
+        }
+
+        return null;
     }
 
     private string? FindAutocompleteModel(PillionSettings settings, ProviderSettings provider)

@@ -33,14 +33,29 @@ internal sealed class OllamaChatClient : IChatClient
         await _provider.EnsureVersionAsync(cancellationToken).ConfigureAwait(false);
 
         var model = string.IsNullOrWhiteSpace(options?.ModelId) ? _modelId : options.ModelId;
+        var messageList = messages as IReadOnlyList<ChatMessage> ?? messages.ToList();
+
+        // One resident configuration per model: the plan names the context the model already has when that is enough, and
+        // loads or reloads it (under a timeout, reporting progress) when it is not.
+        var plan = await _provider.Residency.PrepareAsync(
+            new ResidencyRequest(
+                model,
+                IsFim: false,
+                ProfileOf(options),
+                ExplicitContext(options),
+                OllamaResidency.EstimateNeed(messageList.Select(m => m.Text), options?.MaxOutputTokens),
+                KeepAlive(options),
+                RequestId(options)),
+            cancellationToken).ConfigureAwait(false);
+
         var body = new JsonObject
         {
             ["model"] = model,
-            ["messages"] = new JsonArray(messages.Select(ToJson).ToArray<JsonNode?>()),
+            ["messages"] = new JsonArray(messageList.Select(ToJson).ToArray<JsonNode?>()),
             ["stream"] = true,
-            ["options"] = BuildOptions(_provider.Options, options),
+            ["options"] = BuildOptions(plan.NumCtx, options),
         };
-        OllamaProvider.SetKeepAlive(body, KeepAlive(options) ?? _provider.KeepAliveFor(model, isFim: false));
+        OllamaProvider.SetKeepAlive(body, plan.KeepAlive);
 
         var responseId = Guid.NewGuid().ToString("N");
         await foreach (var line in _provider.Http.PostStreamAsync("api/chat", body, model, cancellationToken).ConfigureAwait(false))
@@ -97,10 +112,11 @@ internal sealed class OllamaChatClient : IChatClient
         // The provider owns the HTTP client.
     }
 
-    internal static JsonObject BuildOptions(OllamaOptions ollama, ChatOptions? options)
+    internal static JsonObject BuildOptions(OllamaOptions ollama, ChatOptions? options) =>
+        BuildOptions(ExplicitContext(options) ?? ollama.ContextSizeFor(ProfileOf(options)), options);
+
+    internal static JsonObject BuildOptions(int contextSize, ChatOptions? options)
     {
-        var profile = options?.AdditionalProperties?.TryGetValue(GatewayOptionKeys.Profile, out var p) == true && p is Profile value ? value : (Profile?)null;
-        var contextSize = options?.AdditionalProperties?.TryGetValue(GatewayOptionKeys.ContextSize, out var c) == true && c is int size ? size : ollama.ContextSizeFor(profile);
         var result = new JsonObject { ["num_ctx"] = contextSize };
         if (options?.Temperature is { } temperature)
         {
@@ -119,6 +135,15 @@ internal sealed class OllamaChatClient : IChatClient
 
         return result;
     }
+
+    private static Profile? ProfileOf(ChatOptions? options) =>
+        options?.AdditionalProperties?.TryGetValue(GatewayOptionKeys.Profile, out var p) == true && p is Profile value ? value : null;
+
+    private static int? ExplicitContext(ChatOptions? options) =>
+        options?.AdditionalProperties?.TryGetValue(GatewayOptionKeys.ContextSize, out var c) == true && c is int size ? size : null;
+
+    private static string? RequestId(ChatOptions? options) =>
+        options?.AdditionalProperties?.TryGetValue(GatewayOptionKeys.RequestId, out var r) == true ? r as string : null;
 
     private static string? KeepAlive(ChatOptions? options) =>
         options?.AdditionalProperties?.TryGetValue(GatewayOptionKeys.KeepAlive, out var k) == true ? Convert.ToString(k, CultureInfo.InvariantCulture) : null;
@@ -160,7 +185,18 @@ internal sealed class OllamaFimClient : IFimClient
         ArgumentNullException.ThrowIfNull(request);
         await _provider.EnsureVersionAsync(cancellationToken).ConfigureAwait(false);
 
-        var options = new JsonObject { ["num_ctx"] = request.ContextSize ?? _provider.Options.ContextSizeFor(request.Profile ?? Profile.LocalFast) };
+        var plan = await _provider.Residency.PrepareAsync(
+            new ResidencyRequest(
+                _modelId,
+                IsFim: true,
+                request.Profile ?? Profile.LocalFast,
+                request.ContextSize,
+                OllamaResidency.EstimateNeed([request.Prefix, request.Suffix], request.MaxTokens),
+                KeepAliveOverride: null,
+                request.RequestId),
+            cancellationToken).ConfigureAwait(false);
+
+        var options = new JsonObject { ["num_ctx"] = plan.NumCtx };
         if (request.MaxTokens > 0)
         {
             options["num_predict"] = request.MaxTokens;
@@ -185,7 +221,7 @@ internal sealed class OllamaFimClient : IFimClient
             ["stream"] = true,
             ["options"] = options,
         };
-        OllamaProvider.SetKeepAlive(body, _provider.KeepAliveFor(_modelId, isFim: true));
+        OllamaProvider.SetKeepAlive(body, plan.KeepAlive);
 
         await foreach (var line in _provider.Http.PostStreamAsync("api/generate", body, _modelId, cancellationToken).ConfigureAwait(false))
         {
