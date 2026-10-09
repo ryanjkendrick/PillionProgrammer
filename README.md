@@ -26,7 +26,9 @@ PillionProgrammer.NoVsix.slnf    Solution filter without the VSIX, for dotnet bu
 global.json                      .NET SDK version (10.0.401, roll forward to latest feature band)
 Directory.Build.props            Shared build settings (nullable, warnings as errors, analyzers, versioning)
 Directory.Packages.props         Central package versions (all pinned)
-.github/workflows/ci.yml         CI: build the full solution, run tests, upload the .vsix
+nuget.config                     Package sources: nuget.org, plus Microsoft's vssdk feed for the VS test framework only
+.github/workflows/ci.yml         CI: build the full solution, run tests, upload the .vsix, VS integration tests on 18.x and 17.14
+tools/vs-tests/                  Deploy the VSIX to an Experimental Instance and run the VS integration tests
 docs/                            Project documents
 src/
   Pillion.Contracts/             RPC interfaces and DTOs (netstandard2.0); see its README for the versioning rule
@@ -41,6 +43,8 @@ tests/
   Pillion.ModelGateway.Tests/
   Pillion.Host.Tests/
   Pillion.VisualStudio.Tests/    Supervisor, launch protocol and signature policy tests (net48)
+  Pillion.VisualStudio.IntegrationTests/         Tests inside the Visual Studio 2026 Experimental Instance; see its README
+  Pillion.VisualStudio.IntegrationTests.VS2022/  The same tests built for Visual Studio 2022 17.14
   Pillion.FakeHost/              Stand-in host process used by Pillion.VisualStudio.Tests (not a test project)
 ```
 
@@ -65,6 +69,19 @@ dotnet test PillionProgrammer.NoVsix.slnf -c Release
 ```
 
 The extension package is written to `src/Pillion.VisualStudio/bin/Release/net48/Pillion.VisualStudio.vsix`.
+
+### Visual Studio integration tests
+
+`dotnet test` above does not start Visual Studio. The integration tests run inside the Experimental Instance of
+Visual Studio 2026 or Visual Studio 2022 17.14, with the built VSIX installed there first, and need no model:
+
+```
+pwsh tools/vs-tests/Install-ToExp.ps1 -DevEnvPath "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\devenv.exe"
+pwsh tools/vs-tests/Invoke-IdeTests.ps1 -DevEnvPath "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\devenv.exe"
+```
+
+Use the 2022 `devenv.exe` for 17.14. Results go to `TestResults/ide-VS18` or `TestResults/ide-VS2022`; CI runs both
+versions. See [tests/Pillion.VisualStudio.IntegrationTests/README.md](tests/Pillion.VisualStudio.IntegrationTests/README.md).
 
 To debug the extension, open `PillionProgrammer.sln` in Visual Studio, set `Pillion.VisualStudio` as the startup
 project and press F5; it deploys to and starts the experimental instance (`/rootsuffix Exp`). Open any solution or

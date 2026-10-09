@@ -13,6 +13,8 @@ jobs:
     name: Build and test
     # windows-latest is Windows Server 2025 with Visual Studio 2026; the .NET 10 SDK needs MSBuild 18 or later.
     runs-on: windows-latest
+    outputs:
+      built: ${{ steps.build.outcome }}
     env:
       DOTNET_NOLOGO: true
       DOTNET_CLI_TELEMETRY_OPTOUT: true
@@ -35,8 +37,11 @@ jobs:
         run: msbuild PillionProgrammer.sln /t:Restore /p:Configuration=Release /nologo
 
       - name: Build (full solution, including the VSIX)
+        id: build
         run: msbuild PillionProgrammer.sln /p:Configuration=Release /m /nologo /clp:Summary
 
+      # The Visual Studio integration-test projects are not test projects for dotnet test (RunIdeTests is not set), so
+      # this step never starts Visual Studio; they run in the steps below.
       - name: Test
         run: dotnet test PillionProgrammer.NoVsix.slnf --configuration Release --no-build --logger trx --results-directory TestResults
 
@@ -48,9 +53,118 @@ jobs:
           path: TestResults/**/*.trx
           if-no-files-found: warn
 
+      # The steps below need only the build, so they also run when a unit test failed.
       - name: Upload VSIX
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: Pillion.VisualStudio.vsix
           path: src/Pillion.VisualStudio/bin/Release/net48/Pillion.VisualStudio.vsix
           if-no-files-found: error
+
+      # For the Visual Studio 2022 job, whose runner cannot build the solution (it has no MSBuild 18).
+      - name: Upload Visual Studio 2022 integration tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ide-tests-vs2022
+          path: tests/Pillion.VisualStudio.IntegrationTests.VS2022/bin/Release/net48/
+          if-no-files-found: error
+
+      - name: Find Visual Studio 2026
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        id: vs
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -version '[18.0,19.0)' -products * -latest -format json | ConvertFrom-Json | Select-Object -First 1
+          if (-not $vs) { throw 'No Visual Studio 18.x on this runner.' }
+          Write-Host "Visual Studio $($vs.catalog.productDisplayVersion) at $($vs.installationPath)"
+          "devenv=$(Join-Path $vs.installationPath 'Common7\IDE\devenv.exe')" >> $env:GITHUB_OUTPUT
+
+      - name: Install the VSIX into the Experimental Instance (18.x)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: pwsh
+        run: tools/vs-tests/Install-ToExp.ps1 -DevEnvPath '${{ steps.vs.outputs.devenv }}'
+
+      - name: Integration tests (18.x)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 30
+        shell: pwsh
+        run: tools/vs-tests/Invoke-IdeTests.ps1 -DevEnvPath '${{ steps.vs.outputs.devenv }}' -ResultsDirectory TestResults/ide-VS18
+
+      - name: Upload integration test results and logs (18.x)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ide-test-results-vs18
+          path: TestResults/ide-VS18/
+          if-no-files-found: warn
+
+  vs2022:
+    name: Integration tests (Visual Studio 2022)
+    # Installs the VSIX built by the first job and runs the test assemblies it built. Nothing is built here: this
+    # runner has Visual Studio 2022 only, and its MSBuild 17 cannot build the solution (the .NET 10 SDK needs MSBuild 18).
+    needs: build
+    # Runs whenever the first job built the VSIX and the tests, even if one of its unit tests failed.
+    if: ${{ !cancelled() && needs.build.outputs.built == 'success' }}
+    runs-on: windows-2022
+
+    steps:
+      - name: Check out (scripts only)
+        uses: actions/checkout@v7
+
+      - name: Check for Visual Studio 2022 17.14 or later with IntelliCode
+        id: vs
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -version '[17.14,18.0)' -products * -latest -format json | ConvertFrom-Json | Select-Object -First 1
+          if (-not $vs) {
+            $found = (& $vswhere -all -products * -format json | ConvertFrom-Json | ForEach-Object { "$($_.displayName) $($_.catalog.productDisplayVersion)" }) -join ', '
+            Write-Host "::notice title=Visual Studio 2022 integration tests skipped::This runner has no Visual Studio 2022 17.14 or later (found: $found)."
+            "ok=false" >> $env:GITHUB_OUTPUT
+            return
+          }
+          $intelliCode = & $vswhere -version '[17.14,18.0)' -products * -latest -requires Microsoft.VisualStudio.Component.IntelliCode -format json | ConvertFrom-Json | Select-Object -First 1
+          if (-not $intelliCode) {
+            Write-Host "::notice title=Visual Studio 2022 integration tests skipped::Visual Studio $($vs.catalog.productDisplayVersion) on this runner has no IntelliCode component, which Pillion requires on 17.x."
+            "ok=false" >> $env:GITHUB_OUTPUT
+            return
+          }
+          Write-Host "Visual Studio $($vs.catalog.productDisplayVersion) at $($vs.installationPath), with IntelliCode"
+          "ok=true" >> $env:GITHUB_OUTPUT
+          "devenv=$(Join-Path $vs.installationPath 'Common7\IDE\devenv.exe')" >> $env:GITHUB_OUTPUT
+
+      - name: Download VSIX
+        if: steps.vs.outputs.ok == 'true'
+        uses: actions/download-artifact@v7
+        with:
+          name: Pillion.VisualStudio.vsix
+          path: artifacts/vsix
+
+      - name: Download integration tests
+        if: steps.vs.outputs.ok == 'true'
+        uses: actions/download-artifact@v7
+        with:
+          name: ide-tests-vs2022
+          path: artifacts/ide-tests-vs2022
+
+      - name: Install the VSIX into the Experimental Instance (17.x)
+        if: steps.vs.outputs.ok == 'true'
+        shell: pwsh
+        run: tools/vs-tests/Install-ToExp.ps1 -DevEnvPath '${{ steps.vs.outputs.devenv }}' -VsixPath artifacts/vsix/Pillion.VisualStudio.vsix
+
+      - name: Integration tests (17.x)
+        if: steps.vs.outputs.ok == 'true'
+        timeout-minutes: 30
+        shell: pwsh
+        run: tools/vs-tests/Invoke-IdeTests.ps1 -DevEnvPath '${{ steps.vs.outputs.devenv }}' -TestAssembly artifacts/ide-tests-vs2022/Pillion.VisualStudio.IntegrationTests.dll -ResultsDirectory TestResults/ide-VS2022
+
+      - name: Upload integration test results and logs (17.x)
+        if: always() && steps.vs.outputs.ok == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ide-test-results-vs2022
+          path: TestResults/ide-VS2022/
+          if-no-files-found: warn
