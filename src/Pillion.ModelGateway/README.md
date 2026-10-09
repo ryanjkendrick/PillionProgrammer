@@ -15,6 +15,8 @@ Templates/      system-prompts.json, fim-formats.json (data) and PromptTemplates
 Providers/      ProviderRegistry (builds providers from settings), IGatewaySettingsSource, ModelInventory
 Providers/Ollama/  The native Ollama adapter
 Providers/OpenAICompatible/  The OpenAI-compatible adapter (OpenAI, LM Studio, llama.cpp, vLLM, OpenRouter, gateways)
+Providers/Anthropic/  Providers/Gemini/  Providers/Mistral/  Providers/AzureOpenAI/  The cloud adapters (no SDKs)
+Providers/Cloud/   HTTP, SSE, error mapping and endpoint/proxy/CA plumbing shared by the four cloud adapters
 ModelGateway.cs    IModelGateway: ChatAsync, CompleteAsync, ListModelsAsync, TestProviderAsync
 StreamAttempt.cs   One request against one model: breaker, concurrency slot, retries, timeouts, Outbound record
 ```
@@ -116,8 +118,122 @@ LM Studio, the llama.cpp server, vLLM and enterprise gateways.
   count; `ProbeAsync` folds that into `ProviderProbeResult`, with a rejected key counting as not usable.
 - Catalog: `openai` and `openai-compatible` map Fast, Balanced and Frontier to OpenAI's current ids (`gpt-6-luna`,
   `gpt-6.1-sol`, `gpt-6-astra`); override with `routing.profiles` for gateways with other ids. Families cover the GPT,
-  o-series, Claude, Gemini, DeepSeek, Llama, Mistral and embedding, audio and image families. Azure OpenAI is not
-  implemented (phase 1).
+  o-series, Claude, Gemini, DeepSeek, Llama, Mistral and embedding, audio and image families. Azure OpenAI is a separate
+  adapter (below).
+
+### Cloud adapters (`Providers/Anthropic`, `Gemini`, `Mistral`, `AzureOpenAI`)
+
+Work item 1.14. Four adapters over `HttpClient` with no SDK, each in its own folder with its own feature flag (all on by
+default, see the root README), sharing `Providers/Cloud` for the HTTP request loop, server-sent-event reader, error
+mapping, endpoint resolution and the proxy and CA bundle handling (the same code as the OpenAI-compatible adapter's
+`OpenAITransport`). Chat streams from every one of them and every chunk names the model and provider. Tool calls are not
+sent or read in phase 1.
+
+| Kind | Chat | FIM | Embeddings | Default endpoint | Credential | Flag |
+| --- | --- | --- | --- | --- | --- | --- |
+| `anthropic` | `POST /v1/messages` (SSE) | No (chat-framed only) | No | `https://api.anthropic.com` | `x-api-key` | `anthropicProvider` |
+| `gemini` | `POST /v1beta/models/{model}:streamGenerateContent?alt=sse` | No (chat-framed only) | Not implemented (TODO below) | `https://generativelanguage.googleapis.com` | `x-goog-api-key` | `geminiProvider` |
+| `mistral` | `POST /v1/chat/completions` (OpenAI-shaped SSE) | `POST /v1/fim/completions` for Codestral | Not implemented | `https://api.mistral.ai/v1` | `Authorization: Bearer` | `mistralProvider` |
+| `azure-openai` | `POST /openai/deployments/{deployment}/chat/completions?api-version=` (SSE) | No (chat-framed only) | Not implemented | none: `https://<resource>.openai.azure.com` | `api-key`, or an Entra ID bearer token | `azureOpenAIProvider` |
+
+Common to all four:
+
+- `RequiresApiKey` is true, so a provider without a key in `ISecretStore` (secret name = provider id) is hidden from
+  routing with "No API key is stored for this provider". Azure OpenAI is hidden only when neither a key nor an
+  `ITokenCredentialProvider` exists. The key is read for every request and never kept; a key with control characters is
+  refused before anything is sent; redirects are never followed.
+- Network options come from the provider entry exactly as for the OpenAI-compatible adapter: `"proxy"` (`"system"`,
+  `"none"` or a URL) and `"caBundle"` (a PEM file; a missing or empty file hides the provider with a message). A custom
+  `endpoint` works for enterprise gateways and keeps its path (`https://gw.example/anthropic` sends to
+  `https://gw.example/anthropic/v1/messages`; a bare Mistral host gets `/v1`).
+- Errors: 401 and 403 (and Gemini sending 400 for an invalid key) are `ProviderUnavailable` with a message that the
+  credential was rejected, never repeating the server text; a 404 on a request that names a model is `ModelNotInstalled`;
+  context-length wording (`prompt is too long`, `input token count ... exceeds`, `maximum context length`, HTTP 413) is
+  `ContextOverflow`; 429, 503, 529 and other 5xx are retryable `ProviderException`s carrying the status, so the gateway
+  retry policy and circuit breaker apply; billing problems (HTTP 402, "credit balance is too low") are not retried;
+  connection and TLS failures are `ProviderUnavailable`. Error events inside a stream (Anthropic `event: error`, Google
+  and OpenAI-style `error` payloads, Mistral `"object":"error"`) are mapped the same way, with the status the error has
+  outside a stream (`overloaded_error` is 529, `rate_limit_error` 429, `UNAVAILABLE` 503).
+- Test connection (`ProbeAsync`; `ProbeDetailedAsync` returns a `CloudProbeResult` with reachable, authenticated and the
+  model count) calls the model list with the credential under a 15 second limit. A rejected credential is reachable but
+  not usable.
+- Catalog: each kind has Fast, Balanced and Frontier defaults and family descriptors (context window, maximum output,
+  vision, tools, prompt caching, reasoning effort, cost per million tokens) in `Catalog/catalog.json`, each with a `note`
+  naming the page it came from (October 2026). They are defaults: the Anthropic, Gemini and Mistral adapters replace the
+  window, output limit and capabilities with what the provider model list reports, and `routing.profiles` or
+  `providers[].models` override the model choice.
+
+#### Anthropic
+
+- `anthropic-version` is `2023-06-01`, the only version on the versioning page; `"anthropicVersion"` overrides it.
+- System messages go in the top-level `system` field. `max_tokens` is required by the API: the request limit, else 8,192
+  (capped by the model maximum output); thinking counts toward it. Sampling parameters are never sent, because Claude
+  Opus 4.7 and later reject non-default `temperature`, `top_p` and `top_k`.
+- Reasoning effort: `ChatOptions.Reasoning.Effort` maps to `output_config.effort` (`Low` and `None` to `low`, `Medium`,
+  `High`, `ExtraHigh` to `xhigh`) when the catalog family, or the model list (`capabilities.effort.supported`), says the
+  model supports it. Adaptive thinking stays on; thinking blocks are read and dropped, only text is streamed. The manual
+  `thinking.budget_tokens` mode is not sent, because current models reject it.
+- Usage: input tokens are `input_tokens` plus cache creation and cache read tokens from `message_start`; output tokens
+  come from `message_delta`. Stop reasons map to finish reasons (`max_tokens` and `model_context_window_exceeded` to
+  Length, `refusal` to ContentFilter).
+- Models: `GET /v1/models?limit=1000`, following `has_more` and `last_id`, reading `max_input_tokens`, `max_tokens`,
+  `capabilities.image_input` and `capabilities.effort`.
+- Catalog: Fast `claude-haiku-5-5`, Balanced `claude-sonnet-5-5`, Frontier `claude-opus-5-5` (the models overview names
+  Opus 5.5 as the starting point and Fable 5.1, `claude-fable-5-1`, for the most demanding work; pin it with
+  `routing.profiles` to use it).
+
+#### Google Gemini
+
+- Requests go to `/{apiVersion}/models/{model}:streamGenerateContent?alt=sse`, `apiVersion` defaulting to `v1beta`
+  (`"apiVersion"` overrides it). The key travels in the `x-goog-api-key` header, never in the URL. `contents` use the roles
+  `user` and `model`; system messages become `systemInstruction`; `generationConfig` carries `maxOutputTokens`,
+  `temperature` and up to five `stopSequences`. Model names with the `models/` prefix are accepted.
+- Reasoning effort maps to `generationConfig.thinkingConfig.thinkingLevel` (`low`, `medium`, `high`; `None` sends `low`,
+  `minimal` is never sent because not every model accepts it) for the Gemini 3 families the catalog marks. Gemini 2.5 uses
+  a thinking budget instead and is left at its default. Thought parts are dropped; thinking tokens count as output tokens
+  in the usage.
+- Models: `GET /{apiVersion}/models?pageSize=1000`, following `nextPageToken`, reading `inputTokenLimit`,
+  `outputTokenLimit` and `supportedGenerationMethods` (`generateContent` is chat, `embedContent` is an embedding model).
+- A blocked prompt (`promptFeedback.blockReason`) ends the stream with a ContentFilter finish and no text.
+- TODO: embeddings through `embedContent` (and `batchEmbedContents`) are not implemented. The gateway has no embedding
+  path on `IModelProvider` yet; embedding models are listed with the Embeddings capability so the router and the context
+  engine can find them once that path exists.
+- Catalog: Fast `gemini-3.5-flash-lite`, Balanced `gemini-3.8-flash`, Frontier `gemini-3.1-pro-preview` (a preview
+  model: the Gemini models page lists no stable 3.x Pro model).
+
+#### Mistral
+
+- Chat reuses the OpenAI-compatible request body and chunk parser as internal helpers, but not its transport, errors or
+  endpoint rules. `stream_options` is not sent (the reference does not document it; the final chunk carries `usage`).
+  Models: `GET /v1/models`, accepting `{"data":[...]}` or a bare array, reading `max_context_length` and `capabilities`
+  (`completion_chat`, `completion_fim`, `vision`, `function_calling`).
+- FIM: `GetFimClient` returns a client for models whose capabilities say FIM (the catalog marks the `codestral` family;
+  the model list `completion_fim` wins), and `null` for other models. It posts `prompt` (the prefix), `suffix`,
+  `max_tokens`, `temperature`, `stop` and `stream: true` to `/v1/fim/completions` and streams `choices[0].delta.content`
+  (also accepting `message.content` and `text`). Mistral applies the Codestral template itself, so the prefix and suffix
+  are sent raw.
+- A Codestral-specific host (`codestral.mistral.ai`) needs no special support: set `endpoint` to it.
+- Catalog: Fast `codestral-latest` (the cloud autocomplete model; it also chats), Balanced `mistral-small-latest`,
+  Frontier `mistral-medium-3-5`.
+
+#### Azure OpenAI
+
+- `endpoint` is required (`https://<resource>.openai.azure.com`) and the entry `models` are deployment names. Listing
+  returns them without calling the network, with capabilities looked up by deployment name; a deployment with a custom
+  name takes its capabilities from `"modelFamilies": { "prod-chat": "gpt-4o" }` in the entry. There are no catalog
+  defaults for Fast, Balanced and Frontier: pin them with `routing.profiles` (`azure/prod-chat`) or let the router take
+  the first listed deployment.
+- `api-version` is `2024-10-21`, the latest generally available data plane inference version on Microsoft Learn;
+  `"apiVersion"` overrides it. (The newer `/openai/v1/` surface needs no `api-version` and is not used yet.) The body is
+  the official OpenAI body: `max_completion_tokens`, and no `temperature` or `stop` for reasoning-named deployments. The
+  deployment is in the URL, so the body has no `model`.
+- Authentication, `"authentication"` in the entry: `"auto"` (default) sends the stored key as `api-key`, else an Entra ID
+  bearer token when the host registered an `ITokenCredentialProvider`; `"apiKey"` and `"entra"` force one. The token scope
+  is `https://cognitiveservices.azure.com/.default` (`"tokenScope"` overrides it). The adapter has no `Azure.Identity`
+  dependency: the host implements `ITokenCredentialProvider` over a `TokenCredential` and registers it, and
+  `StaticTokenCredentialProvider` serves tests. A failing provider is reported as "could not get a Microsoft Entra ID
+  token" without its message.
+- Test connection calls `GET /openai/models?api-version=`; a 404 or 405 means reachable but unverified.
 
 ## Extension points for later work items
 
@@ -129,7 +245,8 @@ LM Studio, the llama.cpp server, vLLM and enterprise gateways.
 | `IProgressSink` | `NoProgressSink` | Chat window (0.11) |
 | `ICostGovernor` | `NoCostCaps` | Cost governance (phase 1) |
 | `IOutboundLog` | `InMemoryOutboundLog` | Persistence with the audit trail |
-| `IModelProviderFactory` | Ollama, OpenAI-compatible, OpenAI | Anthropic, Gemini, Mistral, Azure OpenAI (phase 1) |
+| `IModelProviderFactory` | Ollama, OpenAI-compatible, OpenAI, Anthropic, Gemini, Mistral, Azure OpenAI | In-process plug-ins are out of version 1 |
+| `ITokenCredentialProvider` | none (Azure OpenAI then uses keys) | Pillion Host: an `Azure.Identity` `TokenCredential` for Entra ID (a later item) |
 
 ## Tests
 
@@ -137,6 +254,14 @@ LM Studio, the llama.cpp server, vLLM and enterprise gateways.
 redaction round trip, Outbound log, catalog and templates, the Ollama adapter against recorded fixtures
 (`Fixtures/Ollama`) and the OpenAI-compatible adapter against fixtures in the documented wire shape
 (`Fixtures/OpenAICompatible`), including real-socket tests for the proxy, streaming and a TLS handshake under a custom CA.
+The Anthropic, Gemini, Mistral and Azure OpenAI adapters have the same kind of tests (`Providers/<Name>`, fixtures in
+`Fixtures/<Name>`, written by hand in each API documented wire shape): model listing, a streamed chat with usage,
+cancellation mid-stream, 401, a missing model, a context-length error, 429 and 529 or 503, connection refused, an error
+event inside a stream, Test connection, Mistral FIM, Azure key and Entra ID paths and the deployment URL, and a
+gateway-level test per provider (routed with the cloud switch on and a key, hidden without one, skipped with the
+feature flag off). Their `Category=Live` classes run only when `PILLION_TEST_ANTHROPIC_KEY`, `PILLION_TEST_GEMINI_KEY`,
+`PILLION_TEST_MISTRAL_KEY`, or `PILLION_TEST_AZURE_OPENAI_ENDPOINT` with `PILLION_TEST_AZURE_OPENAI_KEY` (and
+`PILLION_TEST_AZURE_OPENAI_DEPLOYMENT` for the chat test) are set; no test reads a key from anywhere else.
 Ollama tests with `Category=Live` talk to `http://localhost:11434` and skip themselves when it does not
 answer; the OpenAI-compatible live tests run only when `PILLION_TEST_OPENAI_COMPAT_ENDPOINT` is set (optionally
 `PILLION_TEST_OPENAI_COMPAT_KEY` and `PILLION_TEST_OPENAI_COMPAT_MODEL`). Run only live tests with `dotnet test --filter Category=Live`, or exclude them with `--filter Category!=Live`.

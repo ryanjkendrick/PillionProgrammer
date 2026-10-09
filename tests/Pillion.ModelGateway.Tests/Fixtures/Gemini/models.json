@@ -1,0 +1,28 @@
+{
+  "models": [
+    {
+      "name": "models/gemini-3.8-flash",
+      "displayName": "Gemini 3.8 Flash",
+      "description": "Our most intelligent Flash model.",
+      "inputTokenLimit": 1048576,
+      "outputTokenLimit": 65536,
+      "supportedGenerationMethods": ["generateContent", "countTokens", "streamGenerateContent"],
+      "thinking": true
+    },
+    {
+      "name": "models/gemini-3.5-flash-lite",
+      "displayName": "Gemini 3.5 Flash-Lite",
+      "inputTokenLimit": 1048576,
+      "outputTokenLimit": 65536,
+      "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
+      "thinking": true
+    },
+    {
+      "name": "models/gemini-embedding-001",
+      "displayName": "Gemini Embedding",
+      "inputTokenLimit": 2048,
+      "outputTokenLimit": 1,
+      "supportedGenerationMethods": ["embedContent", "batchEmbedContents"]
+    }
+  ]
+}

@@ -177,6 +177,8 @@ public sealed class ModelCatalog
 
         public bool PromptCaching { get; set; }
 
+        public bool ReasoningEffort { get; set; }
+
         public ToolCallingSupport ToolCalling { get; set; }
 
         public decimal InputCostPerMillionTokens { get; set; }
@@ -193,6 +195,7 @@ public sealed class ModelCatalog
             Embeddings = Embeddings,
             Streaming = Streaming,
             PromptCaching = PromptCaching,
+            ReasoningEffort = ReasoningEffort,
             ToolCalling = ToolCalling,
             InputCostPerMillionTokens = InputCostPerMillionTokens,
             OutputCostPerMillionTokens = OutputCostPerMillionTokens,

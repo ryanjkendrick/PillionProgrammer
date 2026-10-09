@@ -1,0 +1,4 @@
+data: {"id":"cmpl-2","object":"chat.completion.chunk","model":"mistral-small-latest","choices":[{"index":0,"delta":{"content":"Hel"},"finish_reason":null}]}
+
+data: {"object":"error","message":"Service unavailable","type":"service_unavailable","param":null,"code":"503"}
+

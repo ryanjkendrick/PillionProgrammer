@@ -1,0 +1,10 @@
+data: {"id":"fim-1","object":"chat.completion.chunk","created":1767225600,"model":"codestral-latest","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"fim-1","object":"chat.completion.chunk","created":1767225600,"model":"codestral-latest","choices":[{"index":0,"delta":{"content":"a"},"finish_reason":null}]}
+
+data: {"id":"fim-1","object":"chat.completion.chunk","created":1767225600,"model":"codestral-latest","choices":[{"index":0,"delta":{"content":" + "},"finish_reason":null}]}
+
+data: {"id":"fim-1","object":"chat.completion.chunk","created":1767225600,"model":"codestral-latest","choices":[{"index":0,"delta":{"content":"b"},"finish_reason":"stop"}],"usage":{"prompt_tokens":14,"total_tokens":19,"completion_tokens":5}}
+
+data: [DONE]
+
