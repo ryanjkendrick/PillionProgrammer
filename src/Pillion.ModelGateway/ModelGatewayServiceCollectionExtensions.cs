@@ -5,6 +5,7 @@ using Pillion.Common.Secrets;
 using Pillion.Common.Settings;
 using Pillion.Contracts;
 using Pillion.ModelGateway.Providers.Anthropic;
+using Pillion.ModelGateway.Providers.AzureOpenAI;
 using Pillion.ModelGateway.Providers.Gemini;
 using Pillion.ModelGateway.Providers.Mistral;
 using Pillion.ModelGateway.Providers.Ollama;
@@ -34,7 +35,7 @@ public sealed class GatewayProviderTester : IProviderTester
 public static class ModelGatewayServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the Model Gateway: the catalog, prompt templates, provider registry (with the Ollama, OpenAI-compatible, OpenAI, Anthropic, Gemini and Mistral factories), router,
+    /// Registers the Model Gateway: the catalog, prompt templates, provider registry (with the Ollama, OpenAI-compatible, OpenAI, Anthropic, Gemini, Mistral and Azure OpenAI factories; the Azure factory uses an <see cref="ITokenCredentialProvider"/> if the host registers one), router,
     /// circuit breakers, concurrency limiter, autocomplete cache, Outbound log and <see cref="IModelGateway"/>. The
     /// default <see cref="IProviderTester"/> is replaced by <see cref="GatewayProviderTester"/>. Extension points that
     /// later work items supply (<see cref="IProviderReachability"/>, <see cref="IProviderHealthSink"/>,
@@ -68,6 +69,7 @@ public static class ModelGatewayServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IModelProviderFactory, AnthropicProviderFactory>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IModelProviderFactory, GeminiProviderFactory>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IModelProviderFactory, MistralProviderFactory>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IModelProviderFactory, AzureOpenAIProviderFactory>());
         services.TryAddSingleton(sp => new ProviderRegistry(
             sp.GetRequiredService<IGatewaySettingsSource>(),
             sp.GetRequiredService<ISecretStore>(),
