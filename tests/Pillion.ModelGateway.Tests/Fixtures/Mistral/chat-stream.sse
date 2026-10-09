@@ -1,0 +1,12 @@
+data: {"id":"cmpl-1","object":"chat.completion.chunk","created":1767225600,"model":"mistral-small-latest","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"cmpl-1","object":"chat.completion.chunk","created":1767225600,"model":"mistral-small-latest","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
+
+data: {"id":"cmpl-1","object":"chat.completion.chunk","created":1767225600,"model":"mistral-small-latest","choices":[{"index":0,"delta":{"content":" from"},"finish_reason":null}]}
+
+data: {"id":"cmpl-1","object":"chat.completion.chunk","created":1767225600,"model":"mistral-small-latest","choices":[{"index":0,"delta":{"content":" Pillion"},"finish_reason":null}]}
+
+data: {"id":"cmpl-1","object":"chat.completion.chunk","created":1767225600,"model":"mistral-small-latest","choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop"}],"usage":{"prompt_tokens":18,"total_tokens":24,"completion_tokens":6}}
+
+data: [DONE]
+
