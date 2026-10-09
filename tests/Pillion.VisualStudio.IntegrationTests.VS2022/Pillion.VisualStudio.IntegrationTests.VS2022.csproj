@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The Visual Studio integration tests for Visual Studio 2022 (17.14 or later): the sources of
+    tests/Pillion.VisualStudio.IntegrationTests compiled against the 0.1.800-beta test framework, the last version that
+    can drive 17.x (the Visual Studio 2026 build uses a newer one that installs only into 18.x; see
+    Directory.Packages.props). IDE_VS2022 makes every test target VisualStudioVersion.VS2022.
+
+    Same assembly name as the 18.x build, so the test names, the TestOrderer reference and the README read the same.
+    Not run by `dotnet test PillionProgrammer.NoVsix.slnf` (IsTestProject is false unless RunIdeTests is true).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>Pillion.VisualStudio.IntegrationTests</AssemblyName>
+    <RootNamespace>Pillion.VisualStudio.IntegrationTests</RootNamespace>
+    <DefineConstants>$(DefineConstants);IDE_VS2022</DefineConstants>
+    <IsTestProject Condition="'$(RunIdeTests)' != 'true'">false</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Pillion.VisualStudio.IntegrationTests\**\*.cs" Exclude="..\Pillion.VisualStudio.IntegrationTests\bin\**;..\Pillion.VisualStudio.IntegrationTests\obj\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.VisualStudio.SDK" />
+    <PackageReference Include="Microsoft.VisualStudio.Extensibility.Testing.Xunit" VersionOverride="$(PillionIdeTestFrameworkVS2022Version)" />
+    <PackageReference Include="Microsoft.VisualStudio.Extensibility.Testing.SourceGenerator" VersionOverride="$(PillionIdeTestFrameworkVS2022Version)" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="System.Management" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="WindowsBase" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Compile-time only, as in the 18.x build: devenv.exe supplies the installed extension's copies. -->
+    <ProjectReference Include="..\..\src\Pillion.VisualStudio.Core\Pillion.VisualStudio.Core.csproj" Private="false" />
+    <ProjectReference Include="..\..\src\Pillion.Contracts\Pillion.Contracts.csproj" Private="false" />
+  </ItemGroup>
+
+</Project>

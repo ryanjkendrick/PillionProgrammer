@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Visual Studio integration tests: [IdeFact] tests that run inside the Experimental Instance of Visual Studio 2026
+    (18.x), on the Microsoft.VisualStudio.Extensibility.Testing.Xunit framework. The framework starts
+    devenv.exe /rootsuffix Exp, loads this assembly into it and runs each test on the UI thread. The same sources build
+    for Visual Studio 2022 17.14 in tests/Pillion.VisualStudio.IntegrationTests.VS2022, against an older framework
+    version (see Directory.Packages.props). The tests install nothing of Pillion's: they expect the VSIX to be deployed
+    to that Experimental Instance already (tools/vs-tests/Install-ToExp.ps1). See README.md in this folder.
+
+    Not run by `dotnet test PillionProgrammer.NoVsix.slnf`: IsTestProject is false unless RunIdeTests is true, so the
+    unit-test run stays fast and never launches Visual Studio. Run them with tools/vs-tests/Invoke-IdeTests.ps1, or
+    `dotnet test tests/Pillion.VisualStudio.IntegrationTests -p:RunIdeTests=true`.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>Pillion.VisualStudio.IntegrationTests</RootNamespace>
+    <IsTestProject Condition="'$(RunIdeTests)' != 'true'">false</IsTestProject>
+    <!--
+      The test framework references Microsoft.VisualStudio.Interop 18.0 and the 17.14 SDK supplies 17.0. The conflict is
+      expected and handled: App.config redirects the runner to 17.0, and devenv.exe binds its own copy.
+    -->
+    <MSBuildWarningsAsMessages>$(MSBuildWarningsAsMessages);MSB3277</MSBuildWarningsAsMessages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Runs in two processes: the test runner (which starts Visual Studio and talks to it through DTE and remoting)
+      and devenv.exe. The runner needs the SDK's interop assemblies next to the test assembly; inside devenv.exe the
+      Visual Studio copies win, through devenv.exe's binding redirects.
+    -->
+    <PackageReference Include="Microsoft.VisualStudio.SDK" />
+    <PackageReference Include="Microsoft.VisualStudio.Extensibility.Testing.Xunit" />
+    <PackageReference Include="Microsoft.VisualStudio.Extensibility.Testing.SourceGenerator" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="System.Management" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="WindowsBase" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Compile-time only (Private="false"): inside devenv.exe these types must be the ones the installed extension
+      loaded, or the IHostConnection service would not cast to the test's IHostConnection. PillionIdeTest resolves both
+      assemblies to the copies already loaded in devenv.exe.
+    -->
+    <ProjectReference Include="..\..\src\Pillion.VisualStudio.Core\Pillion.VisualStudio.Core.csproj" Private="false" />
+    <ProjectReference Include="..\..\src\Pillion.Contracts\Pillion.Contracts.csproj" Private="false" />
+  </ItemGroup>
+
+</Project>

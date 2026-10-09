@@ -67,4 +67,30 @@
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.0" />
   </ItemGroup>
+
+  <!--
+    Visual Studio integration tests: the [IdeFact] framework used by Roslyn and the VS SDK samples. It is not on
+    nuget.org; Microsoft publishes it only to the public Azure Artifacts feed "vssdk" (see nuget.config), and there is no
+    stable version. No single version drives both Visual Studio versions we support, so there are two pins:
+
+    - Visual Studio 2026 (18.x), tests/Pillion.VisualStudio.IntegrationTests: 5.3.0-2.26228.15, the last 5.3 build
+      from dotnet/roslyn (where the framework moved; microsoft/vs-extension-testing was archived in August 2026). It
+      installs its in-IDE test service with Visual Studio's own VSIXInstaller.exe. That service's manifest targets
+      [18.0,19.0), so VSIXInstaller refuses it on 17.x (exit code 2003, NoApplicableSKUsException). Built against
+      Microsoft.VisualStudio.Interop 18.0 (see the App.config redirect in that project); its other dependencies match
+      the 17.14 SDK graph, unlike the newer 5.10 and 5.13 builds (System.Collections.Immutable 10.0).
+    - Visual Studio 2022 (17.14), tests/Pillion.VisualStudio.IntegrationTests.VS2022 (same sources):
+      0.1.800-beta, the last release of microsoft/vs-extension-testing. Its own installer for 18.x looks for
+      Microsoft.VisualStudio.ExtensionManager.Implementation 17.0 where 18.10 no longer has it, so it cannot drive 18.x
+      ("Could not load file or assembly 'Microsoft.VisualStudio.ExtensionManager.Implementation, Version=17.0.0.0'").
+
+    Bump each together with its SourceGenerator, and only after running the integration tests on that version.
+  -->
+  <PropertyGroup>
+    <PillionIdeTestFrameworkVS2022Version>0.1.800-beta</PillionIdeTestFrameworkVS2022Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.VisualStudio.Extensibility.Testing.Xunit" Version="5.3.0-2.26228.15" />
+    <PackageVersion Include="Microsoft.VisualStudio.Extensibility.Testing.SourceGenerator" Version="5.3.0-2.26228.15" />
+  </ItemGroup>
 </Project>
