@@ -97,12 +97,19 @@ it under `Host\` in the VSIX; that step is skipped when no host source has chang
 Chat**) opens the Chat window: pick a model (or **Auto**, which lets Pillion Host choose), type a message, Enter
 sends and Shift+Enter starts a new line. Each reply is headed with the model and provider that answered, and the
 status line shows the connectivity state (Online, Degraded, Offline or Local-only), as does the status bar
-("Pillion: Ready, Online"). **Tools >
+("Pillion: Ready, Online"). Replies render as Markdown (Markdig): headings, lists, tables, quotes, inline code and
+emphasis use Visual Studio's theme colours; images are never downloaded (their alt text is shown); a link opens in the
+default browser only after a confirmation that shows its address. Each fenced code block is a read-only editor view
+coloured for the language in its fence tag (`csharp`, `ts`, `json`, `powershell` and so on), with **Copy** and **Insert at
+cursor**, which inserts into the active document at the caret (replacing any selection) as one undo step. The
+**Conversation** list at the top keeps every conversation of the session (**New**, **Rename**, **Delete**, and switching
+in the list); conversations are kept in memory until Visual Studio closes, and persistence arrives in phase 2. **Tools >
 Options > Pillion Programmer** has the **Providers and keys** page (API keys go to the Windows Credential Manager under
 `PillionProgrammer/<provider id>`, never to settings files) and the **Privacy** page (Local-only mode and the cloud
 switch per task class). Both pages are a view over Pillion Host's `settings.json` and say "Host not ready" until the
 host is running. `tests/Pillion.FakeHost` serves canned models and in-memory settings, so it can stand in for
-`Host\Pillion.Host.exe` in the experimental instance when you want to try the UI without a model.
+`Host\Pillion.Host.exe` in the experimental instance when you want to try the UI without a model; a message containing
+`/markdown` gets a reply that exercises the Markdown rendering, and `/long` a reply of about 2,000 tokens.
 
 To publish Pillion Host as a self-contained win-x64 app:
 
