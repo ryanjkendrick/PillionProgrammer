@@ -25,6 +25,10 @@ internal sealed class FakeSettingsService : ISettingsService
         """;
 
     private readonly Lock _gate = new();
+
+    /// <summary>Raised after a successful <see cref="SetAsync"/> with the top-level section it changed (the host's <c>settingsChanged</c>).</summary>
+    public event Action<string>? SectionChanged;
+
     private readonly JsonObject _root = (JsonObject)JsonNode.Parse(InitialSettings)!;
 
     public Task<string?> GetAsync(string key, CancellationToken cancellationToken)
@@ -107,6 +111,7 @@ internal sealed class FakeSettingsService : ISettingsService
         }
 
         Console.Error.WriteLine("fakehost: settings set " + key);
+        SectionChanged?.Invoke(segments[0]);
         return Task.CompletedTask;
     }
 

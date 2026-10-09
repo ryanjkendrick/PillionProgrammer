@@ -88,6 +88,17 @@
     <PackageVersion Include="Microsoft.Bcl.Memory" Version="10.0.12" />
   </ItemGroup>
 
+  <!--
+    Roslyn's parsers, used by Pillion Host for syntax validation only (work item 1.8, design section 8): an inline edit
+    to a C# or VB file is parsed with CSharpSyntaxTree / VisualBasicSyntaxTree to count syntax errors before the VSIX
+    previews it. Nothing is compiled and no workspace is loaded. 5.0.0 is the newest stable release in the local
+    package cache; the host is not loaded into devenv.exe, so it does not have to match Visual Studio's own Roslyn.
+  -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.VisualBasic" Version="5.0.0" />
+  </ItemGroup>
+
   <!-- Tests. -->
   <ItemGroup>
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />

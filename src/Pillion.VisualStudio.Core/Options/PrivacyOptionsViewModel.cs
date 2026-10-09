@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Threading;
 using System.Threading.Tasks;
@@ -129,6 +130,9 @@ public sealed class PrivacyOptionsViewModel : OptionsPageViewModel
 
     /// <summary>Gets the cloud switches, one per task class.</summary>
     public ObservableCollection<CloudSwitchViewModel> CloudSwitches { get; }
+
+    /// <inheritdoc/>
+    protected override IReadOnlyList<string> WatchedSections { get; } = ["privacy", SettingsJsonText.CloudSwitchesKey];
 
     /// <inheritdoc/>
     protected override async Task<Action<OptionsPageViewModel>> LoadCoreAsync(ISettingsService settings, CancellationToken cancellationToken)

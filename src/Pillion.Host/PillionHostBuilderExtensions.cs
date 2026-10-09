@@ -66,6 +66,9 @@ internal static class PillionHostBuilderExtensions
         // Connectivity (work item 0.10): the monitor, its probes and the connectivityChanged notification.
         builder.Services.AddPillionConnectivity();
 
+        // The settingsChanged notification (work item 1.15): which top-level settings sections changed.
+        builder.Services.AddPillionSettingsNotifications();
+
         // The gateway reads the same effective settings as the monitor (one source of truth for Local-only), asks the
         // monitor which providers are reachable, and reports circuit-breaker evidence back to it. Registered before
         // AddPillionModelGateway, whose TryAdd defaults (AlwaysReachable, NoProviderHealthSink) then stay out.
@@ -87,6 +90,7 @@ internal static class PillionHostBuilderExtensions
         builder.Services.AddPillionModelGateway();
         builder.Services.AddSingleton<ModelRpcService>();
         builder.Services.AddRpcTarget<IModelService>(sp => sp.GetRequiredService<ModelRpcService>());
+        builder.Services.AddPillionInlineEdit(); // Inline edits (work item 1.8): IInlineEditService over the gateway.
         builder.Services.AddRpcTarget<IDiagnosticsService, DiagnosticsRpcService>(); // Work item 1.5: read-only autocomplete counters.
 
         // Mentions and context (work item 1.10): IContextService resolves @-mentions; search and indexing arrive in phase 2.

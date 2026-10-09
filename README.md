@@ -100,8 +100,11 @@ status line shows the connectivity state (Online, Degraded, Offline or Local-onl
 ("Pillion: Ready, Online"). **Tools >
 Options > Pillion Programmer** has the **Providers and keys** page (API keys go to the Windows Credential Manager under
 `PillionProgrammer/<provider id>`, never to settings files) and the **Privacy** page (Local-only mode and the cloud
-switch per task class). Both pages are a view over Pillion Host's `settings.json` and say "Host not ready" until the
-host is running. `tests/Pillion.FakeHost` serves canned models and in-memory settings, so it can stand in for
+switch per task class) and the **Models and routing** page (a profile and a cloud switch per task class, an optional
+model id per profile, the "Think harder by default" placeholder and the GPU tier override). The pages are a view
+over Pillion Host's `settings.json` and say "Host not ready" until the host is running; the host tells the extension
+when settings change (`settingsChanged`), so the chat model picker, open pages and autocomplete follow a save or an edit
+of the file without a Refresh press. `tests/Pillion.FakeHost` serves canned models and in-memory settings, so it can stand in for
 `Host\Pillion.Host.exe` in the experimental instance when you want to try the UI without a model.
 
 To publish Pillion Host as a self-contained win-x64 app:
@@ -171,7 +174,8 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
     "geminiProvider": true,
     "mistralProvider": true,
     "azureOpenAIProvider": true,
-    "autocomplete": true
+    "autocomplete": true,
+    "inlineChat": true
   }
 }
 ```
@@ -189,6 +193,7 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
 | `mistralProvider` | Providers of kind `mistral` (chat and Codestral fill-in-the-middle) are not built or routed to. |
 | `azureOpenAIProvider` | Providers of kind `azure-openai` are not built or routed to. |
 | `autocomplete` | `IModelService.CompleteAsync` (ghost-text autocomplete) fails with `PolicyDenied` and a message that names the flag; chat and model listing are unaffected. The extension stops asking for suggestions (it reads the flag when Pillion Host becomes ready and when the Tools menu opens; an absent flag means on). |
+| `inlineChat` | `IInlineEditService.EditAsync` (inline chat edits, `/doc`, `/test`, `/fix`, `/explain`) fails with `PolicyDenied` and a message that names the flag. Chat, autocomplete and model listing are unaffected. |
 
 A repository can switch flags off for everyone who opens it with `disabledFeatures` in `.pillion/policy.json`, next to
 `localOnly`, `disabledTools`, `exclude` and `denyCommands`:

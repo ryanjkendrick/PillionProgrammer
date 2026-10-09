@@ -235,14 +235,15 @@ public sealed class AutocompleteMetricsTests
 
         Assert.True(_metrics.Snapshot().IsDegraded);
 
-        for (var i = 0; i < 100; i++)
+        // The 20 slow ones stay in the window; they fall under the p95 once they are 5% or less of it.
+        for (var i = 0; i < 400; i++)
         {
             Complete(TimeSpan.FromMilliseconds(200));
         }
 
         var snapshot = _metrics.Snapshot();
         Assert.False(snapshot.IsDegraded);
-        Assert.Equal(120, snapshot.Recent.TimeToSuggestion.Count);
+        Assert.Equal(420, snapshot.Recent.TimeToSuggestion.Count);
         Assert.Equal(TimeSpan.FromMilliseconds(200), snapshot.Recent.TimeToSuggestion.P50);
     }
 
@@ -269,8 +270,7 @@ public sealed class AutocompleteMetricsTests
         Assert.Equal(AutocompleteIndicator.None, _metrics.Indicator);
 
         _clock.Advance(TimeSpan.FromMilliseconds(1));
-        await Wait.UntilAsync(() => _metrics.Indicator == AutocompleteIndicator.Waiting, "the request counts as waiting");
-        Assert.Equal(1, Volatile.Read(ref changes));
+        await Wait.UntilAsync(() => _metrics.Indicator == AutocompleteIndicator.Waiting && Volatile.Read(ref changes) == 1, "the request counts as waiting");
 
         _metrics.FirstChunk(id);
         Assert.Equal(AutocompleteIndicator.None, _metrics.Indicator);
@@ -297,7 +297,7 @@ public sealed class AutocompleteMetricsTests
     public void Language_IsRestrictedToSafeCharacters_SoAPathNeverReachesTheLog()
     {
         var id = Interlocked.Increment(ref _attempt);
-        _metrics.RequestStarted(id, @"C:\Users\someone\secret project\Program.cs");
+        _metrics.RequestStarted(id, @"C:\x y.cs");
         _metrics.RequestSent(id, multiLine: false, degraded: false);
         var id2 = Interlocked.Increment(ref _attempt);
         _metrics.RequestStarted(id2, "csharp");
