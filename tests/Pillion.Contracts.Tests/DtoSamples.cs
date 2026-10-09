@@ -37,6 +37,13 @@ internal static class DtoSamples
             FilePath = @"C:\src\Calc.cs",
             MaxTokens = 64,
             TaskClass = TaskClass.InlineEdit,
+            CaretLine = 12,
+            CaretColumn = 34,
+            EnclosingDeclaration = "public int Add(int a, int b)",
+            OpenDocuments = [@"C:\src\Calc.cs", @"C:\src\Program.cs"],
+            RecentEdits = ["Calc.cs:12 + return"],
+            AllowMultiLine = true,
+            StopSequences = ["\n\n"],
         },
         new CompletionChunk
         {
