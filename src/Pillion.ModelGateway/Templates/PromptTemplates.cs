@@ -26,16 +26,19 @@ public sealed record FimFormat(string Family, string Match, string Template, IRe
 
 /// <summary>
 /// The prompt templates shipped as data under <c>Templates/</c> (design section 6): system prompt variants and FIM
-/// token formats per family. Ollama applies its own FIM template through <c>suffix</c>, so the formats are only data
-/// until an adapter for a raw server needs them.
+/// token formats per family. Ollama applies its own FIM template through <c>suffix</c>, so the Ollama path sends the raw
+/// prefix and suffix; a raw OpenAI-compatible server (provider entry <c>"fimTemplate": "explicit"</c>) gets the prompt
+/// rendered from the family's format. Every format's stop sequences apply to completions from its family.
 /// </summary>
 public sealed class PromptTemplates
 {
     private readonly Dictionary<string, string> _systemPrompts;
     private readonly List<(Regex Pattern, FimFormat Format)> _fimFormats;
 
-    private PromptTemplates(Dictionary<string, string> systemPrompts, List<(Regex, FimFormat)> fimFormats, int defaultMaxTokens, float defaultTemperature, IReadOnlyList<string> defaultStops)
+    private PromptTemplates(Dictionary<string, string> systemPrompts, List<(Regex, FimFormat)> fimFormats, int defaultMaxTokens, float defaultTemperature, IReadOnlyList<string> defaultStops, int singleLineMaxTokens, int multiLineMaxTokens)
     {
+        SingleLineMaxTokens = singleLineMaxTokens;
+        MultiLineMaxTokens = multiLineMaxTokens;
         _systemPrompts = systemPrompts;
         _fimFormats = fimFormats;
         DefaultFimMaxTokens = defaultMaxTokens;
@@ -51,6 +54,12 @@ public sealed class PromptTemplates
 
     /// <summary>Gets the default number of tokens for a FIM completion when the request does not set one.</summary>
     public int DefaultFimMaxTokens { get; }
+
+    /// <summary>Gets the tokens a single-line autocomplete request generates when it does not set a limit.</summary>
+    public int SingleLineMaxTokens { get; }
+
+    /// <summary>Gets the tokens a multi-line autocomplete request generates when it does not set a limit.</summary>
+    public int MultiLineMaxTokens { get; }
 
     /// <summary>Gets the default FIM sampling temperature.</summary>
     public float DefaultFimTemperature { get; }
@@ -119,7 +128,9 @@ public sealed class PromptTemplates
                 formats,
                 defaults.GetProperty("maxTokens").GetInt32(),
                 defaults.GetProperty("temperature").GetSingle(),
-                defaults.GetProperty("stop").EnumerateArray().Select(s => s.GetString()!).ToList());
+                defaults.GetProperty("stop").EnumerateArray().Select(s => s.GetString()!).ToList(),
+                defaults.TryGetProperty("maxTokensSingleLine", out var single) ? single.GetInt32() : 64,
+                defaults.TryGetProperty("maxTokensMultiLine", out var multi) ? multi.GetInt32() : 256);
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
         {

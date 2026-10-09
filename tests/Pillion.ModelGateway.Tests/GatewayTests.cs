@@ -351,7 +351,13 @@ public class GatewayTests
         Assert.Equal("c2", hit.RequestId);
         Assert.Equal("qwen2.5-coder:1.5b", hit.ModelId);
         Assert.Equal(1, harness.Local!.FimCalls);
-        Assert.Single(harness.OutboundLog.GetRecent());
+
+        // The hit is recorded too, marked as a cache hit with nothing sent.
+        var records = harness.OutboundLog.GetRecent();
+        Assert.Equal(2, records.Count);
+        Assert.False(records[0].CacheHit);
+        Assert.True(records[1].CacheHit);
+        Assert.Equal(0, records[1].EstimatedPromptTokens);
 
         await harness.Gateway.CompleteAsync(GatewayHarness.CompletionRequest(suffix: "; // changed"), CancellationToken.None).CollectAsync();
         Assert.Equal(2, harness.Local.FimCalls);

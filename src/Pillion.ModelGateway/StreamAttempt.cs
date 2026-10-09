@@ -12,8 +12,11 @@ internal sealed record AttemptPolicy
     /// <summary>Gets the task class.</summary>
     public required TaskClass TaskClass { get; init; }
 
-    /// <summary>Gets the estimated prompt tokens.</summary>
+    /// <summary>Gets the prompt tokens (estimated unless <see cref="PromptTokensCounted"/>).</summary>
     public required int PromptTokens { get; init; }
+
+    /// <summary>Gets a value indicating whether <see cref="PromptTokens"/> was counted with the model's tokenizer.</summary>
+    public bool PromptTokensCounted { get; init; }
 
     /// <summary>Gets the hard limit for the whole request (cloud autocomplete), or <see langword="null"/>.</summary>
     public TimeSpan? OverallDeadline { get; init; }
@@ -72,6 +75,7 @@ internal sealed class StreamAttempt<T> : IAsyncDisposable
     private bool _breakerAcquired;
     private readonly Queue<T> _buffered = new();
     private bool _finished;
+    private long? _firstTokenTimestamp;
 
     public StreamAttempt(
         GatewayServices services,
@@ -97,6 +101,9 @@ internal sealed class StreamAttempt<T> : IAsyncDisposable
 
     /// <summary>Gets or sets the number of completion tokens the provider reported (0 to estimate from the text).</summary>
     public int ReportedCompletionTokens { get; set; }
+
+    /// <summary>Gets the time from the start of the attempt to its first token, or <see langword="null"/> before one arrived.</summary>
+    public TimeSpan? TimeToFirstToken => _firstTokenTimestamp is { } first ? _services.Time.GetElapsedTime(_startTimestamp, first) : null;
 
     /// <summary>Gets or sets the number of characters generated, for the estimate.</summary>
     public long GeneratedCharacters { get; set; }
@@ -234,7 +241,10 @@ internal sealed class StreamAttempt<T> : IAsyncDisposable
                 PillionRpcException r => r.Error.Code,
                 OperationCanceledException => PillionErrorCode.Cancelled,
                 _ => null,
-            }));
+            },
+            _policy.PromptTokensCounted,
+            CacheHit: false,
+            TimeToFirstToken));
     }
 
     public async ValueTask DisposeAsync()
@@ -315,6 +325,7 @@ internal sealed class StreamAttempt<T> : IAsyncDisposable
             _buffered.Enqueue(_enumerator.Current);
             if (_hasContent(_enumerator.Current))
             {
+                _firstTokenTimestamp = _services.Time.GetTimestamp();
                 return;
             }
         }

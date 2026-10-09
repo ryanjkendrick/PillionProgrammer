@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "comment": "Fill-in-the-middle token formats per model family (design section 6, Prompt templates). Ollama applies a model's own FIM template when 'suffix' is passed, so for Ollama these are data only; raw llama.cpp servers will receive explicit tokens built from them. {prefix} and {suffix} are replaced by the text around the caret. 'match' patterns are matched in order against the model id, case-insensitively, '*' being a wildcard.",
+  "comment": "Fill-in-the-middle token formats per model family (design section 6, Prompt templates). Ollama applies a model's own FIM template when 'suffix' is passed, so the Ollama path sends the raw prefix and suffix; an OpenAI-compatible /v1/completions server whose provider entry sets \"fimTemplate\": \"explicit\" receives the prompt built from the template here, with no suffix. {prefix} and {suffix} are replaced by the text around the caret. 'match' patterns are matched in order against the model id without its provider or namespace prefix, case-insensitively, '*' being a wildcard. 'stop' sequences are added to every completion from the family, after a single-line request's newline and the request's own stop sequences. 'defaults': maxTokens for FIM outside autocomplete, maxTokensSingleLine and maxTokensMultiLine for autocomplete requests that do not set MaxTokens, temperature, and stop sequences for every family.",
   "formats": [
     {
       "family": "qwen2.5-coder",
@@ -35,6 +35,8 @@
   ],
   "defaults": {
     "maxTokens": 128,
+    "maxTokensSingleLine": 64,
+    "maxTokensMultiLine": 256,
     "temperature": 0.2,
     "stop": [ "\n\n\n" ]
   }

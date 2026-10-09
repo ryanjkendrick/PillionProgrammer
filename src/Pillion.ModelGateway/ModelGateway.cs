@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Pillion.Common.Hardware;
 using Pillion.Common.Redaction;
 using Pillion.Common.Settings;
 using Pillion.Contracts;
@@ -71,6 +72,11 @@ public sealed partial class ModelGateway : IModelGateway
     private readonly ICostGovernor _costs;
     private readonly GatewayServices _services;
     private readonly ILogger _logger;
+    private readonly ITokenCounter _tokens;
+    private readonly IGpuTierDetector _gpu;
+    private readonly AutocompleteCounters _counters;
+    private readonly PromptEvaluationRates _rates;
+    private int _gpuLogged;
 
     /// <summary>Initializes a new instance of the <see cref="ModelGateway"/> class.</summary>
     /// <param name="registry">The configured providers.</param>
@@ -88,6 +94,10 @@ public sealed partial class ModelGateway : IModelGateway
     /// <param name="options">The gateway options.</param>
     /// <param name="time">The clock.</param>
     /// <param name="logger">The logger.</param>
+    /// <param name="tokenCounter">Counts prompt and completion tokens; <see cref="TokenCounter.Default"/> when <see langword="null"/>.</param>
+    /// <param name="gpuTierDetector">Detects the GPU tier for the autocomplete budget; <see cref="GpuTierDetector.Shared"/> when <see langword="null"/>.</param>
+    /// <param name="counters">The autocomplete counters; a new instance when <see langword="null"/>.</param>
+    /// <param name="rates">The measured prompt-evaluation rates; a new instance when <see langword="null"/>.</param>
     public ModelGateway(
         IProviderRegistry registry,
         IModelRouter router,
@@ -103,7 +113,11 @@ public sealed partial class ModelGateway : IModelGateway
         IProgressSink progress,
         ModelGatewayOptions options,
         TimeProvider? time = null,
-        ILogger<ModelGateway>? logger = null)
+        ILogger<ModelGateway>? logger = null,
+        ITokenCounter? tokenCounter = null,
+        IGpuTierDetector? gpuTierDetector = null,
+        AutocompleteCounters? counters = null,
+        PromptEvaluationRates? rates = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _router = router ?? throw new ArgumentNullException(nameof(router));
@@ -121,6 +135,11 @@ public sealed partial class ModelGateway : IModelGateway
             progress ?? throw new ArgumentNullException(nameof(progress)),
             time ?? TimeProvider.System);
         _logger = logger ?? NullLogger<ModelGateway>.Instance;
+        _tokens = tokenCounter ?? TokenCounter.Default;
+        _gpu = gpuTierDetector ?? GpuTierDetector.Shared;
+        _counters = counters ?? new AutocompleteCounters();
+        _counters.Attach(cache);
+        _rates = rates ?? new PromptEvaluationRates();
     }
 
     /// <inheritdoc/>
@@ -299,28 +318,66 @@ public sealed partial class ModelGateway : IModelGateway
         }
     }
 
+    /// <summary>Gets the autocomplete counters (requests, cache hits and misses, model requests, drops, failures).</summary>
+    public AutocompleteCounters Counters => _counters;
+
+    /// <summary>Gets the measured prompt-evaluation rates of the local completion models.</summary>
+    public PromptEvaluationRates PromptEvaluationRates => _rates;
+
+    /// <summary>Gets the GPU tier the autocomplete budget is chosen by: the <c>models.gpuTier</c> setting, else the detected tier.</summary>
+    /// <returns>The GPU information.</returns>
+    public GpuInfo GetGpuInfo()
+    {
+        var setting = _registry.GetSnapshot().Settings.Settings.Models.GpuTier;
+        var info = GpuTiers.Resolve(setting, _gpu);
+        if (Interlocked.Exchange(ref _gpuLogged, 1) == 0)
+        {
+            LogGpuTier(_logger, info);
+        }
+
+        return info;
+    }
+
     /// <inheritdoc/>
     public async IAsyncEnumerable<CompletionChunk> CompleteAsync(CompletionRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        var started = _services.Time.GetTimestamp();
         var taskClass = request.TaskClass;
-        var fim = new FimRequest
-        {
-            Prefix = request.Prefix ?? string.Empty,
-            Suffix = request.Suffix ?? string.Empty,
-            MaxTokens = request.MaxTokens > 0 ? request.MaxTokens : _templates.DefaultFimMaxTokens,
-            StopSequences = _templates.DefaultFimStopSequences,
-            Temperature = _templates.DefaultFimTemperature,
-        };
+        var isAutocomplete = taskClass == TaskClass.Autocomplete;
+        var multiLine = request.AllowMultiLine;
+        var prefix = request.Prefix ?? string.Empty;
+        var suffix = request.Suffix ?? string.Empty;
+        _counters.Request();
 
-        var route = _router.Resolve(taskClass, fim);
+        // Routing only checks that the budgeted prompt fits the model's context; the prompt is built per candidate.
+        var route = _router.Resolve(new RoutingRequest { TaskClass = taskClass, EstimatedPromptTokens = AutocompleteBudget.GpuPromptTokens });
         LogRouted(_logger, request.RequestId, route.QualifiedId, route.Profile, route.Reason);
 
-        // Cache: repeated keystrokes and backspaces are served without a request.
-        var cacheKey = AutocompleteCache.CreateKey(route.ProviderId, route.ModelId, fim.Prefix, fim.Suffix);
-        if (_cache.TryGet(cacheKey, out var cached))
+        // Cache: repeated keystrokes, backspaces and typing into a shown suggestion are served without a request.
+        var hit = _cache.Lookup(route.ProviderId, route.ModelId, multiLine, prefix, suffix, out var cached);
+        if (hit != CacheHitKind.None)
         {
+            var counter = _tokens.ForModel(route.ModelId);
+            var completionTokens = counter.Count(cached);
+            var elapsed = _services.Time.GetElapsedTime(started);
+            _services.OutboundLog.Record(new OutboundRecord(
+                _services.Time.GetUtcNow() - elapsed,
+                request.RequestId,
+                route.ProviderId,
+                route.ModelId,
+                taskClass,
+                route.IsLocal,
+                0,
+                completionTokens,
+                0,
+                elapsed,
+                OutboundOutcome.Succeeded,
+                ErrorCode: null,
+                PromptTokensCounted: counter.IsExact,
+                CacheHit: true,
+                TimeToFirstToken: elapsed));
             yield return new CompletionChunk
             {
                 RequestId = request.RequestId,
@@ -328,23 +385,17 @@ public sealed partial class ModelGateway : IModelGateway
                 IsFinal = true,
                 ModelId = route.ModelId,
                 ProviderId = route.ProviderId,
-                CompletionTokens = TokenEstimator.Estimate(cached),
+                CompletionTokens = completionTokens,
             };
             yield break;
         }
 
-        var promptTokens = TokenEstimator.Estimate(fim.Prefix) + TokenEstimator.Estimate(fim.Suffix);
-        var redactForLocal = _registry.GetSnapshot().Settings.Settings.Privacy.RedactForLocalProviders;
-        var isAutocomplete = taskClass == TaskClass.Autocomplete;
-        var policy = new AttemptPolicy
-        {
-            RequestId = request.RequestId,
-            TaskClass = taskClass,
-            PromptTokens = promptTokens,
-            MaxRetries = isAutocomplete ? 0 : _services.Options.MaxRetries,
-        };
+        var snapshot = _registry.GetSnapshot();
+        var redactForLocal = snapshot.Settings.Settings.Privacy.RedactForLocalProviders;
+        var gpu = GetGpuInfo();
 
         RoutedModel? model = null;
+        FimPlan? plan = null;
         StreamAttempt<string>? attempt = null;
         RedactionSession? session = null;
         Exception? lastFailure = null;
@@ -356,32 +407,46 @@ public sealed partial class ModelGateway : IModelGateway
         {
             foreach (var candidate in candidates)
             {
-                var provider = _registry.GetSnapshot().Find(candidate.ProviderId);
+                var provider = snapshot.Find(candidate.ProviderId);
                 var client = provider?.GetFimClient(candidate.ModelId);
                 if (provider is null || client is null)
                 {
                     continue;
                 }
 
+                if (lastFailure is not null)
+                {
+                    _services.Progress.Report(new ModelProgress(request.RequestId, candidate.ProviderId, candidate.ModelId, ModelProgressKind.FallingBack, TimeSpan.Zero, $"Trying {candidate.QualifiedId} instead: {lastFailure.Message}"));
+                }
+
+                var candidatePlan = PlanFim(request, candidate, snapshot.FindSettings(candidate.ProviderId), gpu.Tier);
                 session = provider.IsLocal && !redactForLocal ? null : new RedactionSession();
                 if (session is not null)
                 {
                     client = new RedactingFimClient(client, session);
                 }
 
-                var routedFim = fim with { Profile = candidate.Profile };
                 var currentSession = session;
                 var fimClient = client;
+                var fim = candidatePlan.Request;
+                _counters.ModelRequest();
                 attempt = new StreamAttempt<string>(
                     _services,
                     candidate,
-                    policy with
+                    new AttemptPolicy
                     {
+                        RequestId = request.RequestId,
+                        TaskClass = taskClass,
+                        PromptTokens = candidatePlan.Prompt.PromptTokens,
+                        PromptTokensCounted = candidatePlan.Prompt.IsExact,
+                        MaxRetries = isAutocomplete ? 0 : _services.Options.MaxRetries,
                         OverallDeadline = !candidate.IsLocal && isAutocomplete ? _services.Options.CloudAutocompleteTimeout : null,
                         FirstTokenTimeout = !candidate.IsLocal && !isAutocomplete ? _services.Options.CloudFirstTokenTimeout : null,
-                        LocalBudget = candidate.IsLocal ? _services.Options.LocalFirstTokenBudget(promptTokens) : null,
+                        LocalBudget = !candidate.IsLocal ? null : isAutocomplete
+                            ? _rates.BudgetFor(candidate.QualifiedId, candidatePlan.Prompt.PromptTokens, _services.Options.LocalAutocompleteFirstTokenFloor)
+                            : _services.Options.LocalFirstTokenBudget(candidatePlan.Prompt.PromptTokens),
                     },
-                    token => fimClient.CompleteAsync(routedFim, token),
+                    token => fimClient.CompleteAsync(fim, token),
                     text => text.Length > 0,
                     () => currentSession?.Redactions.Count ?? 0,
                     cancellationToken);
@@ -390,11 +455,13 @@ public sealed partial class ModelGateway : IModelGateway
                 {
                     await attempt.StartAsync().ConfigureAwait(false);
                     model = candidate;
+                    plan = candidatePlan;
                     break;
                 }
                 catch (AutocompleteDroppedException)
                 {
                     attempt.Complete(OutboundOutcome.Dropped);
+                    _counters.Dropped();
                     dropped = true;
                     break;
                 }
@@ -410,7 +477,17 @@ public sealed partial class ModelGateway : IModelGateway
                 }
                 catch (Exception ex)
                 {
-                    attempt.Complete(ex is OperationCanceledException ? OutboundOutcome.Cancelled : OutboundOutcome.Failed, ex);
+                    var cancelled = ex is OperationCanceledException;
+                    attempt.Complete(cancelled ? OutboundOutcome.Cancelled : OutboundOutcome.Failed, ex);
+                    if (cancelled)
+                    {
+                        _counters.Cancelled();
+                    }
+                    else
+                    {
+                        _counters.Failed();
+                    }
+
                     throw ToRpcException(ex);
                 }
             }
@@ -420,21 +497,28 @@ public sealed partial class ModelGateway : IModelGateway
                 yield break;
             }
 
-            if (model is null || attempt is null)
+            if (model is null || attempt is null || plan is null)
             {
+                _counters.Failed();
                 throw ToRpcException(lastFailure ?? new ProviderException(
                     PillionErrorCode.ModelNotInstalled,
                     "No fill-in-the-middle model is available. Install one, for example qwen2.5-coder, or switch cloud autocomplete on.",
                     isProviderFault: false));
             }
 
-            // A cloud autocomplete is buffered so the hard limit can still drop it; local completions stream.
+            if (model.IsLocal && attempt.TimeToFirstToken is { } firstToken)
+            {
+                _rates.Observe(model.QualifiedId, plan.Prompt.PromptTokens, firstToken);
+            }
+
+            // A cloud autocomplete is buffered so the hard limit can still drop it; local completions stream. The shaper
+            // applies the stop sequences and the line limit whatever the provider honoured.
+            var shaper = new CompletionShaper(plan.Request.StopSequences, multiLine ? AutocompleteBudget.MultiLineMaxLines : isAutocomplete ? 1 : int.MaxValue);
             var buffer = model.IsLocal ? null : new StringBuilder();
-            var all = new StringBuilder();
             PillionError? streamError = null;
             var outcome = OutboundOutcome.Succeeded;
             Exception? failure = null;
-            while (true)
+            while (!shaper.IsComplete)
             {
                 string text;
                 try
@@ -449,6 +533,7 @@ public sealed partial class ModelGateway : IModelGateway
                 catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
                 {
                     attempt.Complete(OutboundOutcome.Cancelled, ex);
+                    _counters.Cancelled();
                     throw;
                 }
                 catch (AutocompleteDroppedException)
@@ -470,44 +555,62 @@ public sealed partial class ModelGateway : IModelGateway
                 }
 
                 attempt.GeneratedCharacters += text.Length;
-                all.Append(text);
-                if (buffer is not null)
+                var shown = shaper.Push(text);
+                if (shown.Length == 0)
                 {
-                    buffer.Append(text);
                     continue;
                 }
 
-                yield return new CompletionChunk { RequestId = request.RequestId, Text = text, ModelId = model.ModelId, ProviderId = model.ProviderId };
+                if (buffer is not null)
+                {
+                    buffer.Append(shown);
+                    continue;
+                }
+
+                yield return new CompletionChunk { RequestId = request.RequestId, Text = shown, ModelId = model.ModelId, ProviderId = model.ProviderId };
             }
 
             if (dropped)
             {
                 attempt.Complete(OutboundOutcome.Dropped);
+                _counters.Dropped();
                 yield break;
             }
+
+            var rest = streamError is null ? shaper.Flush() : string.Empty;
+            buffer?.Append(rest);
+            var completion = shaper.Text;
+            var counter = _tokens.ForModel(model.ModelId);
+            var completionTokens = counter.Count(completion);
+            attempt.ReportedCompletionTokens = completionTokens;
 
             if (buffer is not null && streamError is not null && isAutocomplete)
             {
                 // A failed cloud suggestion is dropped too: half a suggestion is worse than none.
                 attempt.Complete(outcome, failure);
+                _counters.Failed();
                 yield break;
             }
 
             attempt.Complete(outcome, failure);
-            if (outcome == OutboundOutcome.Succeeded && all.Length > 0)
+            if (outcome == OutboundOutcome.Succeeded && completion.Length > 0)
             {
-                _cache.Set(AutocompleteCache.CreateKey(model.ProviderId, model.ModelId, fim.Prefix, fim.Suffix), all.ToString());
+                _cache.Set(AutocompleteCache.CreateKey(model.ProviderId, model.ModelId, prefix, suffix, multiLine), completion);
+            }
+            else if (outcome == OutboundOutcome.Failed)
+            {
+                _counters.Failed();
             }
 
             yield return new CompletionChunk
             {
                 RequestId = request.RequestId,
-                Text = buffer?.ToString() ?? string.Empty,
+                Text = buffer?.ToString() ?? rest,
                 IsFinal = true,
                 ModelId = model.ModelId,
                 ProviderId = model.ProviderId,
-                PromptTokens = promptTokens,
-                CompletionTokens = (int)((attempt.GeneratedCharacters + 3) / 4),
+                PromptTokens = plan.Prompt.PromptTokens,
+                CompletionTokens = completionTokens,
                 Error = streamError,
             };
         }
@@ -521,6 +624,69 @@ public sealed partial class ModelGateway : IModelGateway
             session?.Dispose();
         }
     }
+
+    /// <summary>Builds the prompt and the FIM request for one candidate model.</summary>
+    /// <param name="request">The completion request.</param>
+    /// <param name="candidate">The candidate model.</param>
+    /// <param name="providerSettings">The candidate provider's settings entry.</param>
+    /// <param name="tier">The GPU tier.</param>
+    /// <returns>The plan.</returns>
+    internal FimPlan PlanFim(CompletionRequest request, RoutedModel candidate, ProviderSettings? providerSettings, GpuTier tier)
+    {
+        var multiLine = request.AllowMultiLine;
+        var maxTokens = request.MaxTokens > 0
+            ? request.MaxTokens
+            : request.TaskClass != TaskClass.Autocomplete ? _templates.DefaultFimMaxTokens : multiLine ? _templates.MultiLineMaxTokens : _templates.SingleLineMaxTokens;
+
+        // The budget, never more than the model's context leaves after the completion.
+        var contextWindow = _inventory.Find(candidate.ProviderId, candidate.ModelId)?.Capabilities.ContextWindow
+            ?? _catalog.GetCapabilities(candidate.ModelId, candidate.IsLocal).ContextWindow;
+        var budget = Math.Min(AutocompleteBudget.PromptTokensFor(candidate.IsLocal, tier), Math.Max(256, contextWindow - maxTokens));
+
+        var format = _templates.FindFimFormat(candidate.ModelId);
+        var explicitFormat = UsesExplicitFimTokens(providerSettings) ? format : null;
+        var prompt = AutocompletePromptBuilder.Build(request, budget, _tokens.ForModel(candidate.ModelId), explicitFormat);
+
+        // Stops: a single-line request ends at the first newline; then the request's own, the family's and the defaults.
+        var stops = new List<string>();
+        if (!multiLine && request.TaskClass == TaskClass.Autocomplete)
+        {
+            stops.Add("\n");
+        }
+
+        stops.AddRange((request.StopSequences ?? []).Where(s => !string.IsNullOrEmpty(s)));
+        if (format is not null)
+        {
+            stops.AddRange(format.StopSequences);
+        }
+
+        stops.AddRange(_templates.DefaultFimStopSequences);
+
+        var fim = new FimRequest
+        {
+            Prefix = explicitFormat is null ? prompt.PromptPrefix : explicitFormat.Render(prompt.PromptPrefix, prompt.Suffix),
+            Suffix = explicitFormat is null ? prompt.Suffix : string.Empty,
+            MaxTokens = maxTokens,
+            StopSequences = stops.Distinct(StringComparer.Ordinal).ToList(),
+            Temperature = _templates.DefaultFimTemperature,
+            Profile = candidate.Profile,
+        };
+        return new FimPlan(fim, prompt, explicitFormat);
+    }
+
+    /// <summary>
+    /// Determines whether the gateway frames FIM prompts itself for a provider: an OpenAI-compatible server whose entry sets
+    /// <c>"fimTemplate": "explicit"</c> (a raw <c>/v1/completions</c> server that does not apply the model's template).
+    /// Ollama always applies the model's own template.
+    /// </summary>
+    /// <param name="settings">The provider's settings entry.</param>
+    /// <returns><see langword="true"/> when the prompt carries explicit FIM tokens.</returns>
+    internal static bool UsesExplicitFimTokens(ProviderSettings? settings) =>
+        settings is not null &&
+        settings.Kind != ProviderKind.Ollama &&
+        settings.ExtensionData?.TryGetValue("fimTemplate", out var value) == true &&
+        value.ValueKind == System.Text.Json.JsonValueKind.String &&
+        string.Equals(value.GetString(), "explicit", StringComparison.OrdinalIgnoreCase);
 
     /// <inheritdoc/>
     public async Task<IReadOnlyList<ModelDescriptor>> ListModelsAsync(CancellationToken cancellationToken)
@@ -648,6 +814,15 @@ public sealed partial class ModelGateway : IModelGateway
     [LoggerMessage(EventId = 431, Level = LogLevel.Warning, Message = "Request {RequestId} failed on {Model}: {Reason}")]
     private static partial void LogAttemptFailed(ILogger logger, string requestId, string model, string reason);
 
+    [LoggerMessage(EventId = 433, Level = LogLevel.Information, Message = "Autocomplete budget by GPU tier {Gpu}")]
+    private static partial void LogGpuTier(ILogger logger, GpuInfo gpu);
+
     [LoggerMessage(EventId = 432, Level = LogLevel.Warning, Message = "Could not list the models of provider '{ProviderId}': {Reason}")]
     private static partial void LogListFailed(ILogger logger, string providerId, string reason);
 }
+
+/// <summary>The prompt and FIM request for one candidate model.</summary>
+/// <param name="Request">The request handed to the provider's FIM client.</param>
+/// <param name="Prompt">The budgeted prompt.</param>
+/// <param name="ExplicitFormat">The FIM template the gateway rendered, or <see langword="null"/> when the server applies the model's template.</param>
+internal sealed record FimPlan(FimRequest Request, AutocompletePrompt Prompt, FimFormat? ExplicitFormat);

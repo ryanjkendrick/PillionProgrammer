@@ -13,4 +13,9 @@
     <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- The token-counting corpus (Fixtures/Tokens/corpus) is source text to count, not code to compile. -->
+  <ItemGroup>
+    <Compile Remove="Fixtures\**" />
+  </ItemGroup>
+
 </Project>

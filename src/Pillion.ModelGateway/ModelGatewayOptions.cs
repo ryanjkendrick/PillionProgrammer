@@ -18,6 +18,13 @@ public sealed class ModelGatewayOptions
     /// <summary>Gets or sets the prompt size, in tokens, that the local baseline covers; larger prompts scale the budget linearly. Default 4,096.</summary>
     public int LocalBaselinePromptTokens { get; set; } = 4096;
 
+    /// <summary>
+    /// Gets or sets the smallest first-token budget of a local autocomplete request. The budget is three times the prompt
+    /// size divided by the model's measured prompt-evaluation rate, but never less than this; past it the request reports
+    /// that it is slow and keeps waiting (a cold load shows progress rather than failing). Default 10 s.
+    /// </summary>
+    public TimeSpan LocalAutocompleteFirstTokenFloor { get; set; } = TimeSpan.FromSeconds(10);
+
     /// <summary>Gets or sets how long a local request waits for its first token before a "waiting for the local model" progress notice. Default 2 s.</summary>
     public TimeSpan LocalProgressDelay { get; set; } = TimeSpan.FromSeconds(2);
 

@@ -14,6 +14,11 @@
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.ML.Tokenizers" />
+    <PackageReference Include="Microsoft.ML.Tokenizers.Data.O200kBase" />
+    <PackageReference Include="Microsoft.ML.Tokenizers.Data.Cl100kBase" />
+    <!-- Lifts the data packages' transitive Microsoft.Bcl.Memory to a patched version (see Directory.Packages.props). -->
+    <PackageReference Include="Microsoft.Bcl.Memory" />
   </ItemGroup>
 
   <ItemGroup>
@@ -21,10 +26,11 @@
     <ProjectReference Include="..\Pillion.Common\Pillion.Common.csproj" />
   </ItemGroup>
 
-  <!-- Data, not code: the model catalog and the prompt templates ship inside the assembly. -->
+  <!-- Data, not code: the model catalog, the prompt templates and the token-counting families ship inside the assembly. -->
   <ItemGroup>
     <EmbeddedResource Include="Catalog\catalog.json" LogicalName="Pillion.ModelGateway.catalog.json" />
     <EmbeddedResource Include="Templates\*.json" LogicalName="Pillion.ModelGateway.Templates.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Tokens\*.json" LogicalName="Pillion.ModelGateway.Tokens.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>
