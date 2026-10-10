@@ -303,7 +303,7 @@
         </Grid>
 
         <!-- Transcript: a virtualising list (pixel scrolling, recycled containers). -->
-        <ItemsControl x:Name="Transcript"
+        <local:TranscriptItemsControl x:Name="Transcript"
                       ItemsSource="{Binding Turns}"
                       ItemTemplate="{StaticResource TurnTemplate}"
                       Focusable="False"
@@ -332,6 +332,6 @@
                     <VirtualizingStackPanel />
                 </ItemsPanelTemplate>
             </ItemsControl.ItemsPanel>
-        </ItemsControl>
+        </local:TranscriptItemsControl>
     </DockPanel>
 </UserControl>

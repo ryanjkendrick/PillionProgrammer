@@ -26,6 +26,7 @@ internal sealed class EditorCodeViewFactory : ICodeViewFactory
     private readonly IFileExtensionRegistryService _extensions;
     private readonly ICodeViewFactory _fallback;
     private readonly PillionLog? _log;
+    private readonly Lazy<RoslynCodeWorkspaces?> _roslyn;
     private readonly Dictionary<CodeLanguage, IContentType> _resolved = [];
     private bool _loggedFailure;
 
@@ -35,6 +36,7 @@ internal sealed class EditorCodeViewFactory : ICodeViewFactory
     /// <param name="contentTypes">The content type registry.</param>
     /// <param name="extensions">The file extension registry.</param>
     /// <param name="fallback">The factory used when an editor view cannot be created.</param>
+    /// <param name="roslyn">Roslyn colourisation for C# and Visual Basic, found the first time such a block is shown.</param>
     /// <param name="log">The extension log.</param>
     public EditorCodeViewFactory(
         ITextEditorFactoryService editors,
@@ -42,8 +44,10 @@ internal sealed class EditorCodeViewFactory : ICodeViewFactory
         IContentTypeRegistryService contentTypes,
         IFileExtensionRegistryService extensions,
         ICodeViewFactory fallback,
+        Func<RoslynCodeWorkspaces?> roslyn,
         PillionLog? log)
     {
+        _roslyn = new Lazy<RoslynCodeWorkspaces?>(roslyn ?? (() => null));
         _editors = editors;
         _buffers = buffers;
         _contentTypes = contentTypes;
@@ -116,12 +120,21 @@ internal sealed class EditorCodeViewFactory : ICodeViewFactory
         private readonly ITextBuffer _buffer;
         private readonly IWpfTextView _view;
         private readonly IWpfTextViewHost _host;
+        private readonly IDisposable? _classification;
         private string _code;
 
         public EditorCodeView(EditorCodeViewFactory factory, MarkdownCodeBlock block, IContentType contentType)
         {
             _code = block.Code;
             _buffer = factory._buffers.CreateTextBuffer(block.Code, contentType);
+            var roslynLanguage = contentType.IsOfType("CSharp") ? Microsoft.CodeAnalysis.LanguageNames.CSharp
+                : contentType.IsOfType("Basic") ? Microsoft.CodeAnalysis.LanguageNames.VisualBasic
+                : null;
+            if (roslynLanguage is not null)
+            {
+                _classification = factory._roslyn.Value?.Open(_buffer, roslynLanguage);
+            }
+
             var roles = factory._editors.CreateTextViewRoleSet(PredefinedTextViewRoles.Interactive, TextViewRole);
             _view = factory._editors.CreateTextView(_buffer, roles);
             var options = _view.Options;
@@ -172,6 +185,7 @@ internal sealed class EditorCodeViewFactory : ICodeViewFactory
 
         public void Dispose()
         {
+            _classification?.Dispose();
             if (!_host.IsClosed)
             {
                 _host.Close();

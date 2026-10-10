@@ -880,6 +880,7 @@ function Get-ChatTurns {
     return $turns.ToArray()
 }
 
+
 function Clear-ChatConversation {
     try {
         $clear = Get-ChatControl -Name 'Clear conversation' -ControlType Button
@@ -913,7 +914,10 @@ function Send-ChatMessage {
     while ($sw.Elapsed.TotalSeconds -lt $TimeoutSec) {
         Start-Sleep -Milliseconds 250
         $turns = @(Get-ChatTurns)
-        if ($turns.Count -lt $before + 2) { continue }
+        # The transcript virtualises: once it is longer than the view the number of turns in view stops growing, so the
+        # new reply is also recognised by the message just above it.
+        $promptAbove = $turns.Count -ge 2 -and $turns[-2].IsUser -and ($turns[-2].Segments -join "`n").Trim() -eq $Text.Trim()
+        if ($turns.Count -lt $before + 2 -and -not $promptAbove) { continue }
         $reply = $turns[-1]
         if ($null -eq $firstTextMs -and ($reply.Segments -join '').Length -gt 0) { $firstTextMs = [int]$sw.ElapsedMilliseconds }
         $streaming = $reply.Notes -contains 'Answering...'

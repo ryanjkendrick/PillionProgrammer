@@ -122,7 +122,7 @@ internal sealed class ChatToolWindow : ToolWindowPane
         var extensions = componentModel?.GetService<IFileExtensionRegistryService>();
         if (editors is not null && buffers is not null && contentTypes is not null && extensions is not null)
         {
-            context.CodeViews = new EditorCodeViewFactory(editors, buffers, contentTypes, extensions, new PlainCodeViewFactory(theme), log);
+            context.CodeViews = new EditorCodeViewFactory(editors, buffers, contentTypes, extensions, new PlainCodeViewFactory(theme), () => RoslynCodeWorkspaces.TryCreate(componentModel!, log), log);
         }
         else
         {
