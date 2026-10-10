@@ -123,6 +123,7 @@ public sealed class PillionPackage : AsyncPackage
 
         supervisor.StateChanged += OnHostStateChanged;
         supervisor.ConnectivityChanged += OnConnectivityChanged;
+        autocomplete.StatusChanged += (_, _) => _ = JoinableTaskFactory.RunAsync(RefreshStatusBarAsync);
         SetStatusBarText(StatusBarText(supervisor));
 
         // Returns at once: launching, connecting and the handshake run on the thread pool. Availability follows the
@@ -258,6 +259,7 @@ public sealed class PillionPackage : AsyncPackage
 
     private string StatusBarText(HostSupervisor supervisor) =>
         HostStatusText.Format(supervisor.State, supervisor.RestartAttempt, supervisor.MaxRestartAttempts, supervisor.Connectivity)
+        + (supervisor.State is HostState.Ready or HostState.Degraded ? _autocomplete?.StatusBarSuffix : null)
         + (_intelliCodeReported is IntelliCodeStatus.Missing or IntelliCodeStatus.CompletionsOff ? ". " + IntelliCodeRequirement.Message : string.Empty);
 
     /// <summary>Shows the supervisor's current state and connectivity, read on the UI thread so the latest change always wins.</summary>
@@ -294,29 +296,50 @@ public sealed class PillionPackage : AsyncPackage
     private void OnShowStatus(object sender, EventArgs e)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
+        JoinableTaskFactory.RunAsync(ShowStatusAsync).FileAndForget("pillion/showstatus");
+    }
 
-        var host = _supervisor is { } supervisor
-            ? StatusBarText(supervisor)
-                + (supervisor.HostProcessId is { } pid ? $" (pid {pid})" : string.Empty)
-                + (supervisor.FailureReason is { } reason ? Environment.NewLine + reason : string.Empty)
-            : "Pillion: not started";
-        if (_autocomplete is { } autocomplete)
+    /// <summary>
+    /// Shows the status dialog. The autocomplete section needs the host's counters, so the text is built off the UI
+    /// thread (the host gets two seconds to answer) and the dialog is shown on it.
+    /// </summary>
+    private async Task ShowStatusAsync()
+    {
+        try
         {
-            host += Environment.NewLine + Environment.NewLine + autocomplete.StatusText;
-        }
+            var autocompleteText = _autocomplete is { } autocomplete
+                ? await Task.Run(() => autocomplete.GetStatusTextAsync(DisposalToken), DisposalToken).ConfigureAwait(true)
+                : null;
 
-        if (_signals is { } signals)
+            await JoinableTaskFactory.SwitchToMainThreadAsync(DisposalToken);
+            var host = _supervisor is { } supervisor
+                ? StatusBarText(supervisor)
+                    + (supervisor.HostProcessId is { } pid ? $" (pid {pid})" : string.Empty)
+                    + (supervisor.FailureReason is { } reason ? Environment.NewLine + reason : string.Empty)
+                : "Pillion: not started";
+            if (autocompleteText is not null)
+            {
+                host += Environment.NewLine + Environment.NewLine + autocompleteText;
+                _output?.WriteLine(autocompleteText);
+            }
+
+            if (_signals is { } signals)
+            {
+                host += Environment.NewLine + Environment.NewLine + signals.Hub.StatusText;
+            }
+
+            VsShellUtilities.ShowMessageBox(
+                this,
+                $"{ProductName} {ExtensionVersion}{Environment.NewLine}Contract version {ContractVersion.Text}{Environment.NewLine}{Environment.NewLine}{host}",
+                ProductName,
+                OLEMSGICON.OLEMSGICON_INFO,
+                OLEMSGBUTTON.OLEMSGBUTTON_OK,
+                OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+        }
+        catch (OperationCanceledException)
         {
-            host += Environment.NewLine + Environment.NewLine + signals.Hub.StatusText;
+            // Visual Studio is shutting down.
         }
-
-        VsShellUtilities.ShowMessageBox(
-            this,
-            $"{ProductName} {ExtensionVersion}{Environment.NewLine}Contract version {ContractVersion.Text}{Environment.NewLine}{Environment.NewLine}{host}",
-            ProductName,
-            OLEMSGICON.OLEMSGICON_INFO,
-            OLEMSGBUTTON.OLEMSGBUTTON_OK,
-            OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
     }
 
     private void OnRetryHost(object sender, EventArgs e)

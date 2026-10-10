@@ -27,12 +27,16 @@ internal static class InlineEditServiceCollectionExtensions
         services.TryAddSingleton(sp => new InlineEditPromptBuilder(sp.GetRequiredService<InlineEditTemplates>()));
         services.TryAddSingleton<ISyntaxValidator>(RoslynSyntaxValidator.Instance);
         services.TryAddSingleton<InlineEditConversations>();
+
+        // inlineEdit.wholeScopeMaxLines in settings.json, read for every request.
+        services.TryAddSingleton(sp => new InlineEditOptions(sp.GetService<SettingsStore>() is { } store ? store.GetJson : null));
         services.TryAddSingleton(sp => new InlineEditEngine(
             sp.GetRequiredService<IModelGateway>(),
             sp.GetRequiredService<InlineEditPromptBuilder>(),
             sp.GetRequiredService<ISyntaxValidator>(),
             sp.GetRequiredService<InlineEditConversations>(),
-            sp.GetService<ILogger<InlineEditEngine>>()));
+            sp.GetService<ILogger<InlineEditEngine>>(),
+            sp.GetRequiredService<InlineEditOptions>()));
         services.TryAddSingleton(sp => new InlineEditRpcService(sp.GetRequiredService<InlineEditEngine>(), sp.GetService<IFeatureFlags>()));
         services.AddRpcTarget<IInlineEditService>(sp => sp.GetRequiredService<InlineEditRpcService>());
         return services;

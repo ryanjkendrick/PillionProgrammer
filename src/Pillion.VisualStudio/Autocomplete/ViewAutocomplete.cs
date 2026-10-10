@@ -114,6 +114,7 @@ internal sealed class ViewAutocomplete
             session.CancelPending();
             if (suppression != SuppressionReason.None)
             {
+                feature.Engine.Metrics.Suppressed(LanguageId);
                 feature.Log.Debug("autocomplete.suppressed", "No suggestion requested.", ("reason", suppression.ToString()), ("scenario", scenario.ToString()));
             }
 
@@ -218,6 +219,7 @@ internal sealed class ViewAutocomplete
 
         _displayed = true;
         var feature = _feature;
+        feature?.Engine.Metrics.SuggestionShown(attempt);
         feature?.Log.Debug("autocomplete.shown", "Suggestion shown.", ("proposal", proposal.ProposalId));
         if (feature is null || !feature.Engine.Settings.AnnounceSuggestions || Interlocked.Exchange(ref _announcedAttempt, attempt) == attempt)
         {
@@ -239,6 +241,10 @@ internal sealed class ViewAutocomplete
         if (((int)reason & (int)ReasonForUpdate.Diverged) != 0)
         {
             _displayed = false;
+            if (PillionProposalId.TryParse(original.ProposalId, out var attempt, out _))
+            {
+                _feature?.Engine.Metrics.SuggestionRejected(attempt);
+            }
         }
 
         _feature?.Log.Debug(
@@ -255,6 +261,11 @@ internal sealed class ViewAutocomplete
     public void OnAccepted(ProposalBase original, ReasonForAccept reason)
     {
         _displayed = false;
+        if (PillionProposalId.TryParse(original.ProposalId, out var attempt, out _))
+        {
+            _feature?.Engine.Metrics.SuggestionAccepted(attempt);
+        }
+
         _feature?.Log.Debug("autocomplete.accepted", "Suggestion accepted.", ("proposal", original.ProposalId), ("reason", reason.ToString()));
         Interlocked.Exchange(ref _acceptPending, 1);
         if (_session is { } session && original.Edits is { Count: > 0 } edits)
@@ -272,6 +283,11 @@ internal sealed class ViewAutocomplete
     public void OnDismissed(ProposalBase original, ReasonForDismiss reason)
     {
         _displayed = false;
+        if (reason != ReasonForDismiss.DismissedForRefinement && PillionProposalId.TryParse(original.ProposalId, out var attempt, out _))
+        {
+            _feature?.Engine.Metrics.SuggestionRejected(attempt);
+        }
+
         _feature?.Log.Debug("autocomplete.dismissed", "Suggestion dismissed.", ("proposal", original.ProposalId), ("reason", reason.ToString()));
         if (reason is ReasonForDismiss.DismissedAfterUserEscape or ReasonForDismiss.DismissedAfterViewClosed)
         {
@@ -328,6 +344,7 @@ internal sealed class ViewAutocomplete
         }
 
         _view.Caret.MoveTo(new SnapshotPoint(_view.TextSnapshot, caret.Position.Position + padding.Length + word.Length));
+        _feature?.Engine.Metrics.WordAccepted(attempt);
         _feature?.Log.Debug("autocomplete.word_accepted", "Accepted the next word of a suggestion.", ("proposal", displayed.ProposalId), ("chars", word.Length));
         if (word.Length < remaining.Length)
         {

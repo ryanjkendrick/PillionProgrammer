@@ -31,11 +31,25 @@ namespace Pillion.Host.InlineEdit;
 /// written and the replacement lines so far) are sent early; if the final result does not start with them, it is sent
 /// with <see cref="InlineEditChunk.ResetText"/>.
 /// </para>
+/// <para>
+/// A scope of at most <see cref="InlineEditOptions.WholeScopeMaxLines"/> lines (and any command but <c>/test</c> and
+/// <c>/explain</c>) is edited in whole-scope mode instead: the model rewrites the whole scope as plain code
+/// (<see cref="WholeScopeParser"/>), its complete lines stream out as they arrive, and the same checks apply to the
+/// result (not empty, comments only for <c>/doc</c>, Roslyn syntax, placeholders). A refinement works the same way on
+/// the previous proposal. An unusable whole-scope reply is sent back once; if the retry is no better the request starts
+/// again in the block format above, with one retry, so it degrades rather than fails.
+/// </para>
 /// </remarks>
 internal sealed partial class InlineEditEngine
 {
     /// <summary>How many times a reply that cannot be used is sent back to the model before the request fails.</summary>
     public const int MaxRetries = 2;
+
+    /// <summary>How many times a whole-scope reply that cannot be used is sent back before the request falls back to blocks.</summary>
+    public const int WholeScopeMaxRetries = 1;
+
+    /// <summary>How many times a reply that cannot be used is sent back to the model after the request fell back from whole-scope to blocks.</summary>
+    public const int FallbackMaxRetries = 1;
 
     private const int MaxReportedErrors = 8;
 
@@ -48,6 +62,7 @@ internal sealed partial class InlineEditEngine
     private readonly InlineEditPromptBuilder _prompts;
     private readonly ISyntaxValidator _validator;
     private readonly InlineEditConversations _conversations;
+    private readonly InlineEditOptions _options;
     private readonly ILogger _logger;
 
     /// <summary>Initializes a new instance of the <see cref="InlineEditEngine"/> class.</summary>
@@ -56,12 +71,14 @@ internal sealed partial class InlineEditEngine
     /// <param name="validator">The syntax validator.</param>
     /// <param name="conversations">The instructions of recent inline sessions.</param>
     /// <param name="logger">The logger.</param>
+    /// <param name="options">The inline edit options; the defaults when <see langword="null"/>.</param>
     public InlineEditEngine(
         IModelGateway gateway,
         InlineEditPromptBuilder prompts,
         ISyntaxValidator validator,
         InlineEditConversations conversations,
-        ILogger<InlineEditEngine>? logger = null)
+        ILogger<InlineEditEngine>? logger = null,
+        InlineEditOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(gateway);
         ArgumentNullException.ThrowIfNull(prompts);
@@ -71,6 +88,7 @@ internal sealed partial class InlineEditEngine
         _prompts = prompts;
         _validator = validator;
         _conversations = conversations;
+        _options = options ?? new InlineEditOptions();
         _logger = logger ?? NullLogger<InlineEditEngine>.Instance;
     }
 
@@ -94,20 +112,32 @@ internal sealed partial class InlineEditEngine
         var isEdit = command is InlineEditCommand.None or InlineEditCommand.Doc or InlineEditCommand.Fix;
         var validate = isEdit && _validator.Supports(languageId);
         var baseErrors = validate ? _validator.GetErrors(state.Compose(state.Scope), languageId, cancellationToken).Count : 0;
-        var messages = new List<ChatMessage>(_prompts.Build(new InlineEditPromptInput(
+        var baseCode = state.Previous ?? state.Scope;
+        var history = _conversations.Get(request.ConversationId);
+        List<ChatMessage> BuildMessages(bool wholeScope) => [.. _prompts.Build(new InlineEditPromptInput(
             languageId,
             FileName(request.FilePath),
             command,
             request.Instruction ?? string.Empty,
-            state.Previous ?? state.Scope,
+            baseCode,
             request.ScopeStartLine + 1,
             state.Previous is not null,
             state.Before,
             state.After,
             request.Diagnostics ?? [],
-            _conversations.Get(request.ConversationId))));
+            history,
+            wholeScope))];
 
-        var working = state.Previous ?? state.Scope;
+        // Whole-scope mode for a small scope, blocks for a large one; /test and /explain never edit the scope.
+        var wholeLimit = _options.WholeScopeMaxLines;
+        var lineCount = WholeScopeParser.CountLines(baseCode);
+        var useWhole = isEdit && lineCount <= wholeLimit;
+        var fellBack = false;
+        LogMode(_logger, request.RequestId, useWhole ? "whole-scope" : "blocks", lineCount, wholeLimit);
+        var messages = BuildMessages(useWhole);
+        var maxRetries = useWhole ? WholeScopeMaxRetries : MaxRetries;
+
+        var working = baseCode;
         var retries = 0;
         var syntaxBounced = false;
         (string Text, IReadOnlyList<SyntaxError> Errors, string? Explanation)? best = null;
@@ -163,7 +193,9 @@ internal sealed partial class InlineEditEngine
                     }
 
                     reply.Append(chunk.Text);
-                    if (!state.PreviewStopped && chunk.Text.Contains('\n', StringComparison.Ordinal) && Preview(state, reply.ToString(), working) is { } preview)
+                    if (!state.PreviewStopped &&
+                        chunk.Text.Contains('\n', StringComparison.Ordinal) &&
+                        (useWhole ? PreviewWhole(state, reply.ToString(), baseCode) : Preview(state, reply.ToString(), working)) is { } preview)
                     {
                         yield return preview;
                     }
@@ -181,13 +213,13 @@ internal sealed partial class InlineEditEngine
 
             // 2. Read the reply.
             var text = reply.ToString();
-            var evaluation = Evaluate(state, text, working);
+            var evaluation = useWhole ? EvaluateWhole(state, text, baseCode, attempt) : Evaluate(state, text, working, attempt);
             if (evaluation.Correction is null && evaluation.Text is not null)
             {
                 var introduced = EditText.FindIntroducedPlaceholders(evaluation.Text, state.Scope, state.Previous);
                 if (introduced.Count > 0)
                 {
-                    evaluation = Evaluation.Bounce(_prompts.Placeholders(introduced), 0, PlaceholderError(introduced));
+                    evaluation = Evaluation.Bounce(_prompts.Placeholders(introduced, useWhole), 0, PlaceholderError(introduced));
                 }
             }
 
@@ -200,7 +232,7 @@ internal sealed partial class InlineEditEngine
             if (evaluation.Correction is not null)
             {
                 state.RejectedBlocks += evaluation.Rejected;
-                if (retries < MaxRetries)
+                if (retries < maxRetries)
                 {
                     retries++;
                     LogBounced(_logger, request.RequestId, attempt, evaluation.Reason);
@@ -212,12 +244,23 @@ internal sealed partial class InlineEditEngine
                 if (best is { } fallback && evaluation.Error!.Code != PillionErrorCode.PolicyDenied)
                 {
                     outcome = new Outcome(fallback.Text, fallback.Explanation, SyntaxWarning(fallback.Errors.Count - baseErrors, fallback.Errors, state));
-                }
-                else
-                {
-                    failure = evaluation.Error;
+                    break;
                 }
 
+                if (useWhole)
+                {
+                    // The model cannot rewrite this scope as plain code: start again in the block format.
+                    LogFellBack(_logger, request.RequestId, attempt, evaluation.Reason);
+                    useWhole = false;
+                    fellBack = true;
+                    retries = 0;
+                    maxRetries = FallbackMaxRetries;
+                    working = baseCode;
+                    messages = BuildMessages(wholeScope: false);
+                    continue;
+                }
+
+                failure = evaluation.Error;
                 break;
             }
 
@@ -243,7 +286,7 @@ internal sealed partial class InlineEditEngine
                         messages.Add(new ChatMessage
                         {
                             Role = ChatRole.User,
-                            Content = _prompts.Syntax(DescribeErrors(errors, state), proposal, request.ScopeStartLine + 1, languageId),
+                            Content = _prompts.Syntax(DescribeErrors(errors, state), proposal, request.ScopeStartLine + 1, languageId, useWhole),
                         });
                         continue;
                     }
@@ -284,7 +327,8 @@ internal sealed partial class InlineEditEngine
         }
 
         var elapsedMs = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-        LogFinished(_logger, request.RequestId, state.RejectedBlocks, elapsedMs);
+        var finalMode = fellBack ? "blocks (after whole-scope)" : useWhole ? "whole-scope" : "blocks";
+        LogFinished(_logger, request.RequestId, finalMode, state.RejectedBlocks, elapsedMs);
 
         yield return state.Final(outcome.Explanation, outcome.Warning);
     }
@@ -334,6 +378,25 @@ internal sealed partial class InlineEditEngine
             candidate = string.Join('\n', application.Text.Split('\n').Take(application.LastEditEndLine));
         }
 
+        return Emit(state, candidate);
+    }
+
+    /// <summary>The early preview in whole-scope mode: the complete lines of the code written so far.</summary>
+    private static InlineEditChunk? PreviewWhole(RunState state, string reply, string baseCode)
+    {
+        var candidate = WholeScopeParser.Preview(reply, baseCode, out var stop);
+        if (stop)
+        {
+            state.PreviewStopped = true;
+            return null;
+        }
+
+        return candidate is null ? null : Emit(state, candidate);
+    }
+
+    /// <summary>Sends the part of a preview candidate that was not sent yet, or stops the preview when it contradicts what was.</summary>
+    private static InlineEditChunk? Emit(RunState state, string candidate)
+    {
         if (!candidate.StartsWith(state.Emitted, StringComparison.Ordinal) ||
             EditText.FindIntroducedPlaceholders(candidate, state.Scope, state.Previous).Count > 0)
         {
@@ -352,7 +415,7 @@ internal sealed partial class InlineEditEngine
     }
 
     /// <summary>Reads a complete reply.</summary>
-    private Evaluation Evaluate(RunState state, string reply, string working)
+    private Evaluation Evaluate(RunState state, string reply, string working, int attempt)
     {
         switch (state.Request.Command)
         {
@@ -360,13 +423,13 @@ internal sealed partial class InlineEditEngine
                 var answer = reply.Trim();
                 return answer.Length > 0
                     ? Evaluation.Done(null, answer)
-                    : Evaluation.Fail(UnusableError("the model returned an empty answer"));
+                    : Evaluation.Fail(UnusableError("the model returned an empty answer", attempt));
 
             case InlineEditCommand.Test:
                 var (code, prose) = FencedCodeParser.Parse(reply);
                 if (code.Count == 0 || code.All(c => c.Code.Trim().Length == 0))
                 {
-                    return Evaluation.Bounce(_prompts.NoCode(), 0, UnusableError("the reply has no test code"));
+                    return Evaluation.Bounce(_prompts.NoCode(), 0, UnusableError("the reply has no test code", attempt));
                 }
 
                 var test = code.OrderByDescending(c => c.Code.Length).First();
@@ -379,14 +442,14 @@ internal sealed partial class InlineEditEngine
             return Evaluation.Bounce(
                 _prompts.Malformed(parse.Malformed),
                 parse.Malformed.Count,
-                UnusableError($"{parse.Malformed.Count} edit block(s) were malformed ({parse.Malformed[0].Reason})"));
+                UnusableError($"{parse.Malformed.Count} edit block(s) were malformed ({parse.Malformed[0].Reason})", attempt));
         }
 
         if (parse.Blocks.Count == 0)
         {
             if (parse.HasFenceOutsideBlocks)
             {
-                return Evaluation.Bounce(_prompts.NoBlocks(), 0, UnusableError("the reply had code but no edit blocks"));
+                return Evaluation.Bounce(_prompts.NoBlocks(), 0, UnusableError("the reply had code but no edit blocks", attempt));
             }
 
             // No blocks and no code: the model says no change is needed.
@@ -399,7 +462,7 @@ internal sealed partial class InlineEditEngine
             return Evaluation.Bounce(
                 _prompts.Unmatched(application.Failures),
                 application.Failures.Count,
-                UnusableError(application.Failures[0].Describe()));
+                UnusableError(application.Failures[0].Describe(), attempt));
         }
 
         // /doc adds comments only; checked for languages whose documentation is comments (not Python docstrings).
@@ -410,16 +473,41 @@ internal sealed partial class InlineEditEngine
             return Evaluation.Bounce(
                 _prompts.DocOnly(changes),
                 0,
-                UnusableError($"/doc changed code, not only comments ({changes[0]})"));
+                UnusableError($"/doc changed code, not only comments ({changes[0]})", attempt));
         }
 
         return Evaluation.Done(application.Text, Nullable(parse.Explanation));
     }
 
-    private static PillionError UnusableError(string reason) => new()
+    /// <summary>Reads a complete whole-scope reply: the rewritten code, checked like the result of applied blocks.</summary>
+    private Evaluation EvaluateWhole(RunState state, string reply, string baseCode, int attempt)
+    {
+        var parsed = WholeScopeParser.Parse(reply, baseCode);
+        if (parsed.Code is not { } code)
+        {
+            return Evaluation.Bounce(_prompts.NoWholeCode(), 0, UnusableError($"the reply had no usable code ({parsed.Problem})", attempt));
+        }
+
+        // /doc adds comments only; checked for languages whose documentation is comments (not Python docstrings).
+        if (state.Request.Command == InlineEditCommand.Doc &&
+            CommentDocumented.Contains(state.Request.LanguageId ?? string.Empty) &&
+            EditText.CodeChangesBesidesComments(baseCode, code) is { Count: > 0 } changes)
+        {
+            return Evaluation.Bounce(
+                _prompts.DocOnly(changes, wholeScope: true),
+                0,
+                UnusableError($"/doc changed code, not only comments ({changes[0]})", attempt));
+        }
+
+        return string.Equals(code, baseCode, StringComparison.Ordinal)
+            ? Evaluation.Done(baseCode, Nullable(parsed.Explanation), "The model proposed no change.")
+            : Evaluation.Done(code, Nullable(parsed.Explanation));
+    }
+
+    private static PillionError UnusableError(string reason, int attempts) => new()
     {
         Code = PillionErrorCode.ProviderUnavailable,
-        Message = $"The model's edit could not be used after {MaxRetries + 1} attempts: {reason.TrimEnd('.')}.",
+        Message = $"The model's edit could not be used after {attempts} {(attempts == 1 ? "attempt" : "attempts")}: {reason.TrimEnd('.')}.",
         RetryHint = "Try again, rephrase the instruction, or choose a stronger model.",
         Details = "inline-edit: unusable reply",
     };
@@ -478,8 +566,14 @@ internal sealed partial class InlineEditEngine
     [LoggerMessage(EventId = 600, Level = LogLevel.Information, Message = "Inline edit {RequestId}: reply {Attempt} sent back to the model ({Reason})")]
     private static partial void LogBounced(ILogger logger, string requestId, int attempt, string reason);
 
-    [LoggerMessage(EventId = 601, Level = LogLevel.Information, Message = "Inline edit {RequestId} finished in {ElapsedMs} ms ({Rejected} block(s) rejected)")]
-    private static partial void LogFinished(ILogger logger, string requestId, int rejected, long elapsedMs);
+    [LoggerMessage(EventId = 601, Level = LogLevel.Information, Message = "Inline edit {RequestId} finished in {ElapsedMs} ms (mode {Mode}, {Rejected} block(s) rejected)")]
+    private static partial void LogFinished(ILogger logger, string requestId, string mode, int rejected, long elapsedMs);
+
+    [LoggerMessage(EventId = 603, Level = LogLevel.Information, Message = "Inline edit {RequestId}: {Mode} mode ({Lines} line(s) to edit, whole-scope limit {Limit})")]
+    private static partial void LogMode(ILogger logger, string requestId, string mode, int lines, int limit);
+
+    [LoggerMessage(EventId = 604, Level = LogLevel.Information, Message = "Inline edit {RequestId}: whole-scope reply {Attempt} unusable after a retry ({Reason}); falling back to edit blocks")]
+    private static partial void LogFellBack(ILogger logger, string requestId, int attempt, string reason);
 
     [LoggerMessage(EventId = 602, Level = LogLevel.Warning, Message = "Inline edit {RequestId} failed ({Code}): {Message}")]
     private static partial void LogFailed(ILogger logger, string requestId, PillionErrorCode code, string message);

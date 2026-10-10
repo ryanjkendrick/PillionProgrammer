@@ -140,34 +140,62 @@ sections 5, 8 and 12). `EditAsync` and `CancelEditAsync` need the `modelGateway`
    one when `privacy.redactForLocalProviders` is on), restores placeholders in the reply and writes one Outbound log
    record per call (a request that is sent back to the model makes one record per attempt, all with its request id).
    Inline edits are sampled at `ModelGatewayOptions.InlineEditTemperature` (0.2); other chat keeps the provider default.
-3. **Edit format.** The model answers with search-and-replace blocks:
+3. **Mode and edit format.** Two ways of answering, chosen per request:
 
-   ```
-   <<<<<<< SEARCH
-   lines copied exactly from the code to edit
-   =======
-   the lines that replace them
-   >>>>>>> REPLACE
-   ```
+   - **Whole-scope mode** when the code to edit (the scope, or the proposal being refined) has at most
+     `inlineEdit.wholeScopeMaxLines` lines (default 80) and the command is not `/test` or `/explain`. The model is
+     asked for the complete rewritten code as plain code: no fences, no line numbers, no prose
+     (`WholeScopeParser`, `system.editWhole` in the template). It reads a reply tolerantly: a Markdown fence around the
+     code (prose around the fence becomes the explanation), `N| ` line numbers on every line (stripped), CRLF or LF, and
+     blank lines at the edges; the trailing newline follows the scope. Its complete lines stream out as they arrive, so
+     the first preview text comes after the first line, not after the old scope has been copied. A refinement works the
+     same way: the prompt shows the previous proposal and asks for the revised whole code.
+   - **Block mode** for a larger scope, and as the fallback when a whole-scope reply is still unusable after one retry
+     (empty, in block format, `/doc` changing code, an invented placeholder, or a retry that Roslyn rejects without a
+     better result): the conversation starts again with the block prompt and gets one retry. The model answers with
+     search-and-replace blocks:
 
-   Chosen because it is the format code models are most practised in (Aider, Cline and others use it), it carries code
-   without JSON escaping, its whole-line markers cannot be confused with code or Markdown fences, and an exact copy of
-   the old lines makes every edit checkable before anything is shown. `/test` answers with one fenced code block
-   (new code, placed elsewhere) and `/explain` with prose.
-4. **Apply.** `EditBlockApplier` applies the blocks in order to an in-memory copy of the scope: exact match, then
+     ```
+     <<<<<<< SEARCH
+     lines copied exactly from the code to edit
+     =======
+     the lines that replace them
+     >>>>>>> REPLACE
+     ```
+
+     Chosen for multi-file agent edits (design section 8) and large scopes because it is the format code models are most
+     practised in (Aider, Cline and others use it), it carries code without JSON escaping, its whole-line markers cannot
+     be confused with code or Markdown fences, and an exact copy of the old lines makes every edit checkable before
+     anything is shown. For a small scope the copy is what costs time: with `qwen2.5-coder:7b` the first preview text
+     of "extract the validation into a method" took about 2.8 s in blocks and about 0.2 s as a whole-scope rewrite.
+
+   `/test` answers with one fenced code block (new code, placed elsewhere) and `/explain` with prose in both cases.
+   `inlineEdit.wholeScopeMaxLines` is read from `settings.json` for every request (`InlineEditOptions`); 0 always uses
+   blocks, and a value that is not a whole number of 0 or more is ignored. The mode is logged (event 603, and 604 for a
+   fallback; the finish message, event 601, names the mode that produced the result). The contract has no field for it,
+   so it is not on the final chunk (`RejectedBlocks` is 0 in whole-scope mode) and the Outbound record, which the
+   gateway writes, has no details field to carry it.
+4. **Apply and check.** In block mode `EditBlockApplier` applies the blocks in order to an in-memory copy of the scope:
+   exact match, then
    ignoring trailing whitespace, then ignoring indentation (the replacement is re-indented to the code); blank edge
    lines are dropped if the block does not match with them. Malformed blocks, blocks that match zero or several places,
    code without blocks, and placeholder-shaped tokens (`<redacted:...>`) that are not already in the code are sent back
    with a corrective message, at most twice (`InlineEditEngine.MaxRetries`); then the call fails. So is a `/doc` edit
    that changes anything but comment lines (C#, VB, F#, C, C++, JavaScript, TypeScript). A reply with neither
-   blocks nor code means no change: the scope comes back unchanged with a warning and the model's reason.
-5. **Validate.** For `csharp` and `vb`, Roslyn parses `TextBefore + proposal + TextAfter` (parse only, no compilation).
-   If the proposal has more syntax errors than the original, the errors and the proposal go back once; if the answer
-   is no better, the proposal with the fewest errors is returned with a `Warning`. Other languages are not validated.
+   blocks nor code means no change: the scope comes back unchanged with a warning and the model's reason. In
+   whole-scope mode the same checks apply to the rewritten code: it must not be empty, a `/doc` rewrite may only change
+   comment lines, placeholders are checked as above, and a rewrite identical to the code means no change (with the
+   warning). An unusable whole-scope reply is sent back once (`InlineEditEngine.WholeScopeMaxRetries`) before the
+   fallback to blocks (`FallbackMaxRetries`: one retry there).
+5. **Validate.** For `csharp` and `vb`, Roslyn parses `TextBefore + proposal + TextAfter` (parse only, no compilation),
+   in both modes. If the proposal has more syntax errors than the original, the errors and the proposal go back once;
+   if the answer is no better, the proposal with the fewest errors is returned with a `Warning`. Other languages are
+   not validated.
 6. **Stream.** While the model writes, the engine re-applies the blocks so far and sends the complete lines that can no
    longer change (the code before the block being written, then each finished replacement line), so the preview starts
-   before the model finishes. The final text is the validated proposal; if it does not start with what was sent, it
-   is sent again with `ResetText`. Every failure fails the call with a `PillionRpcException`, even after preview text:
+   before the model finishes. In whole-scope mode it sends each complete line of the code as it arrives (without a
+   fence or line numbers, holding back trailing blank lines). The final text is the validated proposal; if it does not
+   start with what was sent, it is sent again with `ResetText`. Every failure fails the call with a `PillionRpcException`, even after preview text:
    `PolicyDenied` for an unresolvable placeholder, `ProviderUnavailable` (with a retry hint and `Details`
    `inline-edit: unusable reply`) when the model's blocks could not be used, or the gateway's own error.
 
