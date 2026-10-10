@@ -56,4 +56,7 @@ internal static class PackageIds
 
     /// <summary>"Pillion: Previous Suggestion" (Alt+[ in the text editor): the previous variant of the displayed suggestion.</summary>
     public const int PreviousSuggestionCommand = 0x0106;
+
+    /// <summary>"Pillion: Suggest" (Alt+\ in the text editor): asks for one ghost-text suggestion at the caret now.</summary>
+    public const int SuggestCommand = 0x0310;
 }

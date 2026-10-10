@@ -57,6 +57,7 @@ public static class AutocompleteMetricsJson
             ["accepted"] = stats.Accepted,
             ["acceptedWord"] = stats.AcceptedWord,
             ["rejected"] = stats.Rejected,
+            ["displaced"] = stats.Displaced,
             ["cancelled"] = stats.CancelledByKeystroke,
             ["suppressed"] = stats.Suppressed,
             ["errors"] = stats.Errors,

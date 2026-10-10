@@ -107,8 +107,15 @@ public sealed class AutocompleteAvailability : IDisposable
             _log?.Info("autocomplete.features.changed", settings.Enabled ? "Autocomplete is enabled." : "Autocomplete is disabled by settings or policy.");
         }
 
+        if (previous.Ordering != settings.Ordering)
+        {
+            _log?.Info("autocomplete.ordering.changed", "Autocomplete ordering: " + AutocompleteOrderingText.ToSettingValue(settings.Ordering) + ".");
+        }
+
         if (previous.Enabled != settings.Enabled
             || previous.AnnounceSuggestions != settings.AnnounceSuggestions
+            || previous.Ordering != settings.Ordering
+            || previous.CoexistencePromptDone != settings.CoexistencePromptDone
             || !SameLanguages(previous, settings))
         {
             Changed?.Invoke(this, EventArgs.Empty);

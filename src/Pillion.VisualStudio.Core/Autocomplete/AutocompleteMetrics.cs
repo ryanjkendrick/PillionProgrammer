@@ -10,8 +10,9 @@ internal enum Resolution
 {
     None = 0,
     Rejected = 1,
-    AcceptedWord = 2,
-    Accepted = 3,
+    Displaced = 2,
+    AcceptedWord = 3,
+    Accepted = 4,
 }
 
 /// <summary>What the pipeline and the editor adapter know about one request. Guarded by the owner's lock.</summary>
@@ -66,6 +67,7 @@ internal sealed class RequestRecord
                     Resolution.Accepted => AutocompleteOutcome.Accepted,
                     Resolution.AcceptedWord => AutocompleteOutcome.AcceptedWord,
                     Resolution.Rejected => AutocompleteOutcome.Rejected,
+                    Resolution.Displaced => AutocompleteOutcome.Displaced,
                     _ => AutocompleteOutcome.Shown,
                 };
             }
@@ -97,6 +99,8 @@ internal sealed class MetricCounts
     public long AcceptedWord { get; private set; }
 
     public long Rejected { get; private set; }
+
+    public long Displaced { get; private set; }
 
     public long Cancelled { get; private set; }
 
@@ -155,6 +159,9 @@ internal sealed class MetricCounts
             case AutocompleteOutcome.Rejected:
                 Rejected++;
                 break;
+            case AutocompleteOutcome.Displaced:
+                Displaced++;
+                break;
             case AutocompleteOutcome.CancelledByKeystroke:
                 Cancelled++;
                 break;
@@ -172,7 +179,7 @@ internal sealed class MetricCounts
 
     public void Clear()
     {
-        Attempts = Requests = Shown = Accepted = AcceptedWord = Rejected = Cancelled = Suppressed = Errors = Empty = InFlight = MultiLine = DegradedRequests = 0;
+        Attempts = Requests = Shown = Accepted = AcceptedWord = Rejected = Displaced = Cancelled = Suppressed = Errors = Empty = InFlight = MultiLine = DegradedRequests = 0;
         _languages.Clear();
     }
 
@@ -184,6 +191,7 @@ internal sealed class MetricCounts
         Accepted += other.Accepted;
         AcceptedWord += other.AcceptedWord;
         Rejected += other.Rejected;
+        Displaced += other.Displaced;
         Cancelled += other.Cancelled;
         Suppressed += other.Suppressed;
         Errors += other.Errors;
@@ -227,7 +235,7 @@ internal sealed class MetricCounts
 /// <summary>
 /// The autocomplete measurements of one Visual Studio process (work item 1.5), local only: for every request the time
 /// it was made, when the first chunk and the suggestion arrived, how it ended (shown, accepted, accepted by word,
-/// rejected, cancelled by a keystroke, suppressed, error, empty), whether it was multi-line and whether the pipeline
+/// rejected, displaced by another provider, cancelled by a keystroke, suppressed, error, empty), whether it was multi-line and whether the pipeline
 /// was degraded. Requests are kept for five minutes (the rolling window); older ones are folded into the cumulative
 /// counts and dropped. The pipeline (<see cref="AutocompleteSession"/>) records the request side and the editor
 /// adapter the display, accept and reject side. Time to suggestion and the degradation state are not copied: they are
@@ -407,6 +415,13 @@ public sealed class AutocompleteMetrics : IAutocompleteMetrics
     /// <summary>Records that the suggestion was dismissed or typed over.</summary>
     /// <param name="attempt">The attempt number from the proposal id.</param>
     public void SuggestionRejected(long attempt) => Update(attempt, r => Resolve(r, Resolution.Rejected));
+
+    /// <summary>
+    /// Records that another provider's proposal (Copilot's, IntelliCode's) replaced the suggestion: the editor showed a
+    /// competitor's queued proposal while the suggestion was displayed or just after it stopped matching (work item 1.4).
+    /// </summary>
+    /// <param name="attempt">The attempt number from the proposal id.</param>
+    public void SuggestionDisplaced(long attempt) => Update(attempt, r => Resolve(r, Resolution.Displaced));
 
     /// <summary>Records that nothing was requested for a keystroke: a suppression rule, a completion list with a selected item.</summary>
     /// <param name="languageId">The language identifier.</param>

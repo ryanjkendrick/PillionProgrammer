@@ -9,8 +9,17 @@ namespace Pillion.VisualStudio.Core.Autocomplete;
 /// The autocomplete settings the extension reads from Pillion Host: the <c>autocomplete</c> feature flag (from
 /// <c>effective.features</c>) and the <c>autocomplete</c> section of <c>settings.json</c>:
 /// <code>
-/// "autocomplete": { "disabledLanguages": [ "python" ], "announceSuggestions": true }
+/// "autocomplete": {
+///   "disabledLanguages": [ "python" ],
+///   "announceSuggestions": true,
+///   "ordering": "pillionFirst",
+///   "coexistencePromptDone": false
+/// }
 /// </code>
+/// The section is not a typed part of Pillion Host's settings model: the host keeps it as it is (unknown sections are
+/// preserved) and only the extension reads it, as JSON. <c>ordering</c> is <c>pillionFirst</c> (the default),
+/// <c>competitorFirst</c> or <c>onDemand</c> (<see cref="AutocompleteOrdering"/>); <c>coexistencePromptDone</c> records,
+/// once per machine, that the user answered the "inline suggestions are also on" info bar.
 /// Immutable; a refresh replaces the instance.
 /// </summary>
 public sealed class AutocompleteSettings
@@ -27,6 +36,12 @@ public sealed class AutocompleteSettings
     /// <summary>The property that switches the screen-reader announcement of new suggestions.</summary>
     public const string AnnounceSuggestionsProperty = "announceSuggestions";
 
+    /// <summary>The property that sets who gets the ghost-text slot when another provider is on (<see cref="AutocompleteOrdering"/>).</summary>
+    public const string OrderingProperty = "ordering";
+
+    /// <summary>The property that records that the coexistence info bar was answered (once per machine).</summary>
+    public const string CoexistencePromptDoneProperty = "coexistencePromptDone";
+
     /// <summary>Gets the defaults: enabled, no language switched off, announcements on.</summary>
     public static AutocompleteSettings Default { get; } = new(enabled: true, [], announceSuggestions: true);
 
@@ -34,11 +49,20 @@ public sealed class AutocompleteSettings
     /// <param name="enabled">Whether the feature flag is on.</param>
     /// <param name="disabledLanguages">The language identifiers the user switched off.</param>
     /// <param name="announceSuggestions">Whether new suggestions raise a UI Automation notification.</param>
-    public AutocompleteSettings(bool enabled, IReadOnlyCollection<string> disabledLanguages, bool announceSuggestions)
+    /// <param name="ordering">Who gets the ghost-text slot when another provider is on.</param>
+    /// <param name="coexistencePromptDone">Whether the coexistence info bar was answered.</param>
+    public AutocompleteSettings(
+        bool enabled,
+        IReadOnlyCollection<string> disabledLanguages,
+        bool announceSuggestions,
+        AutocompleteOrdering ordering = AutocompleteOrdering.PillionFirst,
+        bool coexistencePromptDone = false)
     {
         Enabled = enabled;
         DisabledLanguages = disabledLanguages ?? throw new ArgumentNullException(nameof(disabledLanguages));
         AnnounceSuggestions = announceSuggestions;
+        Ordering = ordering;
+        CoexistencePromptDone = coexistencePromptDone;
     }
 
     /// <summary>Gets a value indicating whether the <c>autocomplete</c> feature flag is on.</summary>
@@ -49,6 +73,12 @@ public sealed class AutocompleteSettings
 
     /// <summary>Gets a value indicating whether new suggestions are announced to screen readers.</summary>
     public bool AnnounceSuggestions { get; }
+
+    /// <summary>Gets who gets the ghost-text slot when another inline-suggestion provider is on.</summary>
+    public AutocompleteOrdering Ordering { get; }
+
+    /// <summary>Gets a value indicating whether the coexistence info bar was answered on this machine.</summary>
+    public bool CoexistencePromptDone { get; }
 
     /// <summary>Reads the feature flag from the JSON of <c>effective.features</c>.</summary>
     /// <param name="featuresJson">The JSON object, or <see langword="null"/>.</param>
@@ -85,6 +115,13 @@ public sealed class AutocompleteSettings
         var announce = !(section.TryGetValue(AnnounceSuggestionsProperty, StringComparison.Ordinal, out var flag)
             && flag is JValue { Type: JTokenType.Boolean } announceValue
             && !(bool)announceValue);
-        return new AutocompleteSettings(enabled, languages, announce);
+        var ordering = section.TryGetValue(OrderingProperty, StringComparison.Ordinal, out var orderingToken)
+            && orderingToken is JValue { Type: JTokenType.String } orderingValue
+            ? AutocompleteOrderingText.Parse((string?)orderingValue)
+            : AutocompleteOrdering.PillionFirst;
+        var promptDone = section.TryGetValue(CoexistencePromptDoneProperty, StringComparison.Ordinal, out var doneToken)
+            && doneToken is JValue { Type: JTokenType.Boolean } doneValue
+            && (bool)doneValue;
+        return new AutocompleteSettings(enabled, languages, announce, ordering, promptDone);
     }
 }

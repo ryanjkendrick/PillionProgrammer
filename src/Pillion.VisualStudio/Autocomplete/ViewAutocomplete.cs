@@ -3,8 +3,12 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.VisualStudio.ComponentModelHost;
+using Microsoft.VisualStudio.Language.Intellisense;
+using Microsoft.VisualStudio.Language.Intellisense.AsyncCompletion;
 using Microsoft.VisualStudio.Language.Proposals;
 using Microsoft.VisualStudio.Language.Suggestions;
+using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
@@ -15,8 +19,9 @@ namespace Pillion.VisualStudio.Autocomplete;
 
 /// <summary>
 /// Autocomplete for one document view: turns the broker's proposal requests into pipeline attempts and the results
-/// into proposals, follows the suggestion service's events for its proposals, records edits, and implements word
-/// accept and next and previous suggestion for the command filter.
+/// into proposals, follows the suggestion service's events for its proposals and for other providers', records edits,
+/// implements word accept, next and previous suggestion and "Pillion: Suggest" for the command filter, and applies the
+/// ordering setting and the coexistence countermeasure (<see cref="CoexistenceTimeline"/>, work item 1.4).
 /// </summary>
 internal sealed class ViewAutocomplete
 {
@@ -31,6 +36,9 @@ internal sealed class ViewAutocomplete
     private int _acceptPending;
     private (int Version, SuppressionReason Reason, AutocompleteSettings Settings)? _suppression;
     private bool _closed;
+    private Kept? _kept;
+    private long _following;
+    private int _textChangePosted;
 
     /// <summary>Initializes a new instance of the <see cref="ViewAutocomplete"/> class.</summary>
     /// <param name="host">The shared autocomplete host.</param>
@@ -54,6 +62,7 @@ internal sealed class ViewAutocomplete
             ? "buffer:" + RuntimeHelpers.GetHashCode(view.TextBuffer).ToString(System.Globalization.CultureInfo.InvariantCulture)
             : filePath;
 
+        Timeline = new CoexistenceTimeline(() => DateTimeOffset.UtcNow);
         view.TextBuffer.Changed += OnBufferChanged;
         view.Caret.PositionChanged += OnCaretMoved;
         view.GotAggregateFocus += OnFocus;
@@ -69,6 +78,15 @@ internal sealed class ViewAutocomplete
     /// <summary>Gets the key that identifies the document in the pipeline.</summary>
     public string DocumentKey { get; }
 
+    /// <summary>Gets the coexistence state of the view (UI thread only).</summary>
+    public CoexistenceTimeline Timeline { get; }
+
+    /// <summary>
+    /// Gets or sets the editor's command handlers after Pillion's command filter, used to make the editor ask every
+    /// proposal source again (<c>Edit.NextSuggestion</c> with nothing displayed is an explicit invocation).
+    /// </summary>
+    public IOleCommandTarget? EditorCommands { get; set; }
+
     /// <summary>
     /// Answers the proposal manager on the UI thread, so it must be trivial: whether Pillion wants to propose here at
     /// all (feature on, document not suppressed). The completion-list rule is applied per request.
@@ -78,10 +96,15 @@ internal sealed class ViewAutocomplete
     public bool WantsProposals(VirtualSnapshotPoint caret)
     {
         var feature = _host.Feature;
-        return feature is not null
-            && !_closed
-            && caret.Position.Snapshot.TextBuffer == _view.TextBuffer
-            && DocumentSuppression(caret.Position.Snapshot, feature.Engine.Settings) == SuppressionReason.None;
+        if (feature is null
+            || _closed
+            || caret.Position.Snapshot.TextBuffer != _view.TextBuffer
+            || DocumentSuppression(caret.Position.Snapshot, feature.Engine.Settings) != SuppressionReason.None)
+        {
+            return false;
+        }
+
+        return CoexistencePolicy.ManagerProposes(feature.Engine.Settings.Ordering, CompetitorPresent(feature), IsKeptFor(KeyOf(caret.Position)));
     }
 
     /// <summary>Handles a proposal request from the broker (on a thread-pool thread).</summary>
@@ -123,9 +146,29 @@ internal sealed class ViewAutocomplete
 
         var text = new SnapshotDocumentText(snapshot);
         var newLine = NewLineAt(caret.Position);
+        var key = KeyOf(caret.Position);
+        var kept = TakeKept(key);
+        var answer = CoexistencePolicy.Source(feature.Engine.Settings.Ordering, CompetitorPresent(feature), kept is not null);
+        if (answer == SourceAnswer.FromKept && kept is not null && ProposalFactory.CreateInsertion(caret, kept.Text, PillionProposalId.Create(kept.Attempt, 0)) is { } keptProposal)
+        {
+            session.CancelPending();
+            lock (_gate)
+            {
+                _shown = new Shown(kept.Attempt, caret, kept.Text, isMultiLine: kept.Text.IndexOf('\n') >= 0);
+            }
+
+            CoexistenceTrace.Write("source.kept", "attempt=" + kept.Attempt + " at=" + key + " scenario=" + scenario);
+            return ProposalFactory.Collection(keptProposal);
+        }
+
+        if (answer is SourceAnswer.Nothing or SourceAnswer.FromKept)
+        {
+            session.CancelPending();
+            return null;
+        }
 
         // Typing through, or after a word accept: offer the rest of the remembered suggestion at once.
-        if (!caret.IsInVirtualSpace && session.Continuations.TryGetRemainder(DocumentKey, text, caret.Position, out var rest, out var restAttempt))
+        if (answer == SourceAnswer.Request && !caret.IsInVirtualSpace && session.Continuations.TryGetRemainder(DocumentKey, text, caret.Position, out var rest, out var restAttempt))
         {
             session.CancelPending();
             var continued = ProposalFactory.CreateInsertion(caret, rest, PillionProposalId.Create(restAttempt, 0));
@@ -155,7 +198,15 @@ internal sealed class ViewAutocomplete
                 Immediate = immediate,
                 DeclarationProvider = RoslynDeclarationProvider.TryCreate(snapshot, caret.Position.Position, LanguageId),
             },
-            cancellationToken);
+            answer == SourceAnswer.RequestInBackground ? CancellationToken.None : cancellationToken);
+
+        if (answer == SourceAnswer.RequestInBackground)
+        {
+            // Competitor first: answer with nothing so the broker shows the competitor's proposal, and fill in later
+            // only if nothing is displayed once the competitor had its chance.
+            _ = FollowAsync(feature, attempt, key, newLine, DateTimeOffset.UtcNow + CoexistencePolicy.CompetitorGrace);
+            return null;
+        }
 
         #pragma warning disable VSTHRD003 // The attempt's tasks are completed by thread-pool work and never need the UI thread.
         var result = await attempt.Ready.ConfigureAwait(false);
@@ -178,6 +229,18 @@ internal sealed class ViewAutocomplete
         {
             _shown = shown;
         }
+
+        // Answered after the broker stopped waiting (about 0.8 s) and showed a competitor's proposal: ours is only
+        // queued behind it, so take the slot back (Pillion first).
+        _ = _host.JoinableTaskFactory.RunAsync(async () =>
+        {
+            await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
+            if (Timeline.CompetitorDisplayed)
+            {
+                CoexistenceTrace.Write("pillion.late", "attempt=" + attempt.Id + " at=" + key);
+                HandleReady(feature, key, documentText, attempt.Id);
+            }
+        });
 
         if (result.IsComplete)
         {
@@ -218,6 +281,8 @@ internal sealed class ViewAutocomplete
         }
 
         _displayed = true;
+        OnUiThread(() => Timeline.PillionShown(attempt));
+        CoexistenceTrace.Write("pillion.shown", "attempt=" + attempt);
         var feature = _feature;
         feature?.Engine.Metrics.SuggestionShown(attempt);
         feature?.Log.Debug("autocomplete.shown", "Suggestion shown.", ("proposal", proposal.ProposalId));
@@ -244,6 +309,9 @@ internal sealed class ViewAutocomplete
             if (PillionProposalId.TryParse(original.ProposalId, out var attempt, out _))
             {
                 _feature?.Engine.Metrics.SuggestionRejected(attempt);
+                var byUser = reason == ReasonForUpdate.DivergedDueToChangeProposal;
+                OnUiThread(() => Timeline.PillionRejected(attempt, byUser));
+                CoexistenceTrace.Write("pillion.rejected", "attempt=" + attempt + " reason=" + reason);
             }
         }
 
@@ -264,6 +332,8 @@ internal sealed class ViewAutocomplete
         if (PillionProposalId.TryParse(original.ProposalId, out var attempt, out _))
         {
             _feature?.Engine.Metrics.SuggestionAccepted(attempt);
+            OnUiThread(() => Timeline.PillionGone(attempt));
+            CoexistenceTrace.Write("pillion.accepted", "attempt=" + attempt + " reason=" + reason);
         }
 
         _feature?.Log.Debug("autocomplete.accepted", "Suggestion accepted.", ("proposal", original.ProposalId), ("reason", reason.ToString()));
@@ -286,6 +356,8 @@ internal sealed class ViewAutocomplete
         if (reason != ReasonForDismiss.DismissedForRefinement && PillionProposalId.TryParse(original.ProposalId, out var attempt, out _))
         {
             _feature?.Engine.Metrics.SuggestionRejected(attempt);
+            OnUiThread(() => Timeline.PillionGone(attempt));
+            CoexistenceTrace.Write("pillion.dismissed", "attempt=" + attempt + " reason=" + reason);
         }
 
         _feature?.Log.Debug("autocomplete.dismissed", "Suggestion dismissed.", ("proposal", original.ProposalId), ("reason", reason.ToString()));
@@ -297,6 +369,49 @@ internal sealed class ViewAutocomplete
                 _shown = null;
             }
         }
+    }
+
+    /// <summary>Called when another provider's proposal (Copilot's, IntelliCode's) is displayed in this view.</summary>
+    /// <param name="proposal">The proposal.</param>
+    public void OnCompetitorDisplayed(ProposalBase proposal) =>
+        _host.JoinableTaskFactory.RunAsync(() => OnCompetitorDisplayedAsync(proposal)).FileAndForget("pillion/autocomplete/competitorshown");
+
+    /// <summary>Called when another provider's displayed proposal was accepted, dismissed or diverged from.</summary>
+    /// <param name="proposal">The proposal.</param>
+    /// <param name="what">What happened, for the trace.</param>
+    public void OnCompetitorGone(ProposalBase? proposal, string what)
+    {
+        OnUiThread(() => Timeline.CompetitorGone());
+        CoexistenceTrace.Write("competitor.gone", what + " id=" + proposal?.ProposalId);
+    }
+
+    /// <summary>
+    /// "Pillion: Suggest": asks for one suggestion at the caret now and shows it when it is ready, whatever the ordering
+    /// and whatever else is displayed (the only way to get one under <see cref="AutocompleteOrdering.OnDemand"/>).
+    /// </summary>
+    /// <returns><see langword="true"/> when a request was started.</returns>
+    public bool SuggestNow()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (_closed || _host.Feature is not { } feature)
+        {
+            return false;
+        }
+
+        var caret = _view.Caret.Position.VirtualBufferPosition;
+        var suppression = DocumentSuppression(caret.Position.Snapshot, feature.Engine.Settings);
+        if (suppression != SuppressionReason.None)
+        {
+            feature.Log.Info("autocomplete.suggest.suppressed", "Pillion: Suggest is not available here.", ("reason", suppression.ToString()));
+            return false;
+        }
+
+        SyncTimeline(feature);
+        var key = CurrentKey();
+        var decision = Timeline.SuggestRequested(key);
+        CoexistenceTrace.Write("suggest.requested", "at=" + key);
+        Execute(feature, decision, key, immediate: true);
+        return true;
     }
 
     /// <summary>
@@ -371,6 +486,290 @@ internal sealed class ViewAutocomplete
         }
 
         return displayed;
+    }
+
+    private async Task OnCompetitorDisplayedAsync(ProposalBase proposal)
+    {
+        await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
+        if (_closed || _host.Feature is not { } feature)
+        {
+            return;
+        }
+
+        var kind = CompetitorProposals.Classify(proposal.ProposalId);
+        feature.Coexistence.CompetitorSeen(kind == CompetitorKind.None ? CompetitorKind.Other : kind, _host.JoinableTaskFactory);
+        SyncTimeline(feature);
+        var key = CurrentKey();
+        var decision = Timeline.CompetitorShown(kind, key);
+        CoexistenceTrace.Write("competitor.shown", "kind=" + kind + " id=" + proposal.ProposalId + " at=" + key + " displaced=" + decision.DisplacedAttempt + " actions=" + decision.Actions);
+        Execute(feature, decision, key);
+    }
+
+    private async Task TextChangedAsync(AutocompleteFeature feature)
+    {
+        await Task.Yield();
+        await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
+        Interlocked.Exchange(ref _textChangePosted, 0);
+        if (!_closed)
+        {
+            SyncTimeline(feature);
+            var key = CurrentKey();
+            Execute(feature, Timeline.TextChanged(key), key);
+        }
+    }
+
+    private static CaretKey KeyOf(SnapshotPoint point) => new(point.Snapshot.Version.VersionNumber, point.Position);
+
+    private static bool CompetitorPresent(AutocompleteFeature feature) => feature.Coexistence.CompetitorPresent;
+
+    /// <summary>Runs a timeline update on the UI thread (the suggestion service raises its events there; this is a safety net).</summary>
+    private void OnUiThread(Action action)
+    {
+        if (ThreadHelper.CheckAccess())
+        {
+            action();
+            return;
+        }
+
+        _host.JoinableTaskFactory.RunAsync(async () =>
+        {
+            await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
+            action();
+        }).FileAndForget("pillion/autocomplete/coexistence");
+    }
+
+    private CaretKey CurrentKey() => KeyOf(_view.Caret.Position.BufferPosition);
+
+    private void SyncTimeline(AutocompleteFeature feature)
+    {
+        Timeline.Ordering = feature.Engine.Settings.Ordering;
+        Timeline.Mode = feature.Coexistence.Mode;
+    }
+
+    private bool IsKeptFor(CaretKey key) => _kept is { } kept && kept.Key == key && DateTimeOffset.UtcNow <= kept.Until;
+
+    private Kept? TakeKept(CaretKey key)
+    {
+        lock (_gate)
+        {
+            var kept = _kept;
+            if (kept is null || kept.Key != key || DateTimeOffset.UtcNow > kept.Until)
+            {
+                return null;
+            }
+
+            _kept = null;
+            return kept;
+        }
+    }
+
+    /// <summary>Whether a completion list is open: Pillion never shows a proposal then (stricter than "an item is selected", which only the broker's requests can see).</summary>
+    private bool IsCompletionActive()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (Package.GetGlobalService(typeof(SComponentModel)) is not IComponentModel componentModel)
+        {
+            return false;
+        }
+
+        return componentModel.GetService<IAsyncCompletionBroker>()?.IsCompletionActive(_view) == true
+            || componentModel.GetService<ICompletionBroker>()?.IsCompletionActive(_view) == true;
+    }
+
+    /// <summary>Carries out a coexistence decision on the UI thread.</summary>
+    private void Execute(AutocompleteFeature feature, CoexistenceDecision decision, CaretKey key, bool immediate = false)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (decision.DisplacedAttempt != 0)
+        {
+            feature.Engine.Metrics.SuggestionDisplaced(decision.DisplacedAttempt);
+            feature.Log.Debug("autocomplete.displaced", "Another provider's proposal replaced a Pillion suggestion.", ("attempt", decision.DisplacedAttempt));
+        }
+
+        if (decision.Has(CoexistenceActions.DismissCompetitor))
+        {
+            DismissDisplayed("decline");
+        }
+
+        if (decision.Has(CoexistenceActions.RequestPillion))
+        {
+            RequestOutsideBroker(feature, key, immediate);
+        }
+
+        if (decision.Has(CoexistenceActions.RequestAll))
+        {
+            InvokeExplicitRequest(feature);
+        }
+    }
+
+    /// <summary>
+    /// Asks for a Pillion suggestion at the caret without the broker: the type-through cache, the attempt already in
+    /// flight for this caret, or a new attempt (with the normal debounce unless <paramref name="immediate"/>).
+    /// </summary>
+    private void RequestOutsideBroker(AutocompleteFeature feature, CaretKey key, bool immediate)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var caret = _view.Caret.Position.VirtualBufferPosition;
+        var snapshot = caret.Position.Snapshot;
+        if (KeyOf(caret.Position) != key || (!immediate && IsCompletionActive()))
+        {
+            return;
+        }
+
+        var session = EnsureSession(feature);
+        var text = new SnapshotDocumentText(snapshot);
+        if (!caret.IsInVirtualSpace && session.Continuations.TryGetRemainder(DocumentKey, text, caret.Position, out var rest, out var restAttempt))
+        {
+            CoexistenceTrace.Write("pillion.cached", "attempt=" + restAttempt + " at=" + key);
+            HandleReady(feature, key, rest, restAttempt);
+            return;
+        }
+
+        var attempt = session.CurrentFor(snapshot.Version.VersionNumber, caret.Position.Position) ?? session.Start(
+            new CompletionInput
+            {
+                DocumentKey = DocumentKey,
+                FilePath = FilePath,
+                LanguageId = LanguageId,
+                Text = text,
+                TextVersion = snapshot.Version.VersionNumber,
+                Caret = caret.Position.Position,
+                VirtualSpaces = caret.VirtualSpaces,
+                Immediate = immediate,
+                DeclarationProvider = RoslynDeclarationProvider.TryCreate(snapshot, caret.Position.Position, LanguageId),
+            },
+            CancellationToken.None);
+        if (Interlocked.Exchange(ref _following, attempt.Id) == attempt.Id)
+        {
+            return;
+        }
+
+        CoexistenceTrace.Write("pillion.request", "attempt=" + attempt.Id + " at=" + key + " immediate=" + immediate);
+        _ = FollowAsync(feature, attempt, key, NewLineAt(caret.Position), notBefore: null);
+    }
+
+    /// <summary>Waits for an attempt started outside the broker's wait and hands its suggestion to the timeline.</summary>
+    private async Task FollowAsync(AutocompleteFeature feature, CompletionAttempt attempt, CaretKey key, string newLine, DateTimeOffset? notBefore)
+    {
+        try
+        {
+            #pragma warning disable VSTHRD003 // The attempt's tasks are completed by thread-pool work and never need the UI thread.
+            var result = await attempt.Ready.ConfigureAwait(false);
+            #pragma warning restore VSTHRD003
+            if (notBefore is { } due && due > DateTimeOffset.UtcNow)
+            {
+                await Task.Delay(due - DateTimeOffset.UtcNow).ConfigureAwait(false);
+            }
+
+            var documentText = result is null ? null : ProposalFactory.ToDocumentLineBreaks(result.Text, newLine);
+            var current = _view.TextBuffer.CurrentSnapshot;
+            if (result is { IsComplete: true } && _session is { } session && documentText is not null && current.Version.VersionNumber == key.Version)
+            {
+                session.Continuations.Remember(DocumentKey, new SnapshotDocumentText(current), key.Position, documentText, attempt.Id);
+            }
+
+            await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
+            CoexistenceTrace.Write("pillion.ready", "attempt=" + attempt.Id + " at=" + key + " chars=" + (documentText?.Length ?? 0));
+            HandleReady(feature, key, documentText, attempt.Id);
+        }
+#pragma warning disable CA1031 // A failed follow-up only means the competitor's proposal stays.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            feature.Log.Debug("autocomplete.coexistence.follow.failed", "Could not follow a suggestion.", ("error", ex.GetType().Name));
+        }
+    }
+
+    /// <summary>A Pillion suggestion is ready for a caret outside the broker's wait: ask the timeline whether to show it.</summary>
+    private void HandleReady(AutocompleteFeature feature, CaretKey requestedAt, string? text, long attempt)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (_closed)
+        {
+            return;
+        }
+
+        SyncTimeline(feature);
+        var current = CurrentKey();
+        var decision = Timeline.PillionReady(requestedAt, current, !string.IsNullOrEmpty(text) && text!.Trim().Length > 0);
+        if (decision.Has(CoexistenceActions.PushPillion))
+        {
+            _ = PushAsync(feature, current, text!, attempt);
+        }
+        else if (decision.Has(CoexistenceActions.RequestAll))
+        {
+            InvokeExplicitRequest(feature);
+        }
+    }
+
+    /// <summary>
+    /// Shows a ready Pillion suggestion: keeps it for exactly this caret, dismisses what is displayed (with the
+    /// user-Escape reason, the only one that clears the broker's queued proposals), and makes the editor ask every source
+    /// again; Pillion's source then answers at once from what it kept, ahead of the others.
+    /// </summary>
+    private async Task PushAsync(AutocompleteFeature feature, CaretKey key, string text, long attempt)
+    {
+        try
+        {
+            await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
+            if (IsCompletionActive() || DisplayedPillionProposal() is not null)
+            {
+                return;
+            }
+
+            lock (_gate)
+            {
+                _kept = new Kept(key, text, attempt, DateTimeOffset.UtcNow + TimeSpan.FromSeconds(2));
+            }
+
+            if (_host.Suggestions is { } suggestions && suggestions.GetDisplayedProposal(_view) is { } displayed)
+            {
+                CoexistenceTrace.Write("push.dismiss", "id=" + displayed.ProposalId);
+                await suggestions.DismissProposalAsync(_view, ReasonForDismiss.DismissedAfterUserEscape, CancellationToken.None).ConfigureAwait(true);
+                await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
+            }
+
+            if (CurrentKey() != key)
+            {
+                return;
+            }
+
+            CoexistenceTrace.Write("push", "attempt=" + attempt + " at=" + key);
+            feature.Log.Debug("autocomplete.coexistence.push", "Showing a Pillion suggestion in place of another provider's.", ("attempt", attempt));
+            InvokeExplicitRequest(feature);
+        }
+#pragma warning disable CA1031 // A failed push leaves the slot as it was.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            feature.Log.Debug("autocomplete.coexistence.push.failed", "Could not show a Pillion suggestion.", ("error", ex.GetType().Name));
+        }
+    }
+
+    private void DismissDisplayed(string why)
+    {
+        if (_host.Suggestions is not { } suggestions)
+        {
+            return;
+        }
+
+        CoexistenceTrace.Write("dismiss", why);
+        _host.JoinableTaskFactory.RunAsync(() => suggestions.DismissProposalAsync(_view, ReasonForDismiss.DismissedAfterUserEscape, CancellationToken.None))
+            .FileAndForget("pillion/autocomplete/coexistencedismiss");
+    }
+
+    /// <summary>Runs the editor's <c>Edit.NextSuggestion</c>: with nothing displayed, the broker asks every source (an explicit invocation).</summary>
+    private void InvokeExplicitRequest(AutocompleteFeature feature)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (EditorCommands is not { } commands)
+        {
+            feature.Log.Debug("autocomplete.coexistence.nocommands", "No editor command target to ask the sources again.");
+            return;
+        }
+
+        var group = AutocompleteCommandFilter.InlineSuggestionCommands;
+        _ = commands.Exec(ref group, AutocompleteCommandFilter.NextSuggestion, 0, IntPtr.Zero, IntPtr.Zero);
     }
 
     private static string LanguageFromContentType(string contentType) => contentType switch
@@ -511,6 +910,16 @@ internal sealed class ViewAutocomplete
         }
 
         session.CancelPendingUnless(e.After.Version.VersionNumber, caret: null);
+        if (Timeline.CompetitorDisplayed && Interlocked.Exchange(ref _textChangePosted, 1) == 0)
+        {
+            // The caret settles after this event; while a competitor's proposal is typed through the broker asks no source.
+            _host.JoinableTaskFactory.RunAsync(() => TextChangedAsync(feature)).FileAndForget("pillion/autocomplete/coexistencetext");
+        }
+        else if (!Timeline.CompetitorDisplayed)
+        {
+            Timeline.TextChanged(KeyOf(_view.Caret.Position.BufferPosition));
+        }
+
         if (e.Changes.Count > 0)
         {
             var line = e.After.GetLineFromPosition(e.Changes[0].NewPosition);
@@ -551,6 +960,18 @@ internal sealed class ViewAutocomplete
         _view.Closed -= OnClosed;
         _feature?.Engine.OpenDocuments.Closed(FilePath);
         _session?.Dispose();
+    }
+
+    /// <summary>A Pillion suggestion kept for the next request at exactly one caret (a push).</summary>
+    private sealed class Kept(CaretKey key, string text, long attempt, DateTimeOffset until)
+    {
+        public CaretKey Key { get; } = key;
+
+        public string Text { get; } = text;
+
+        public long Attempt { get; } = attempt;
+
+        public DateTimeOffset Until { get; } = until;
     }
 
     /// <summary>The suggestion last returned for this view and its variants (next and previous suggestion).</summary>
