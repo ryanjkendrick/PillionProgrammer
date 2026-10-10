@@ -15,6 +15,10 @@ namespace Pillion.ModelGateway.Editing;
 /// <param name="After">The document text after the scope.</param>
 /// <param name="Diagnostics">The diagnostics on the scope.</param>
 /// <param name="History">Earlier instructions in the same inline session, oldest first.</param>
+/// <param name="WholeScope">
+/// Whether the model is asked to reply with the whole code rewritten as plain code instead of edit blocks (ignored for
+/// <c>/test</c> and <c>/explain</c>).
+/// </param>
 public sealed record InlineEditPromptInput(
     string LanguageId,
     string FileName,
@@ -26,7 +30,8 @@ public sealed record InlineEditPromptInput(
     string Before,
     string After,
     IReadOnlyList<InlineEditDiagnostic> Diagnostics,
-    IReadOnlyList<string> History);
+    IReadOnlyList<string> History,
+    bool WholeScope = false);
 
 /// <summary>
 /// Builds the messages of an inline edit request from <see cref="InlineEditTemplates"/>: a system prompt for the
@@ -105,9 +110,15 @@ public sealed class InlineEditPromptBuilder
             sections.Add(_templates.Section("instruction", ("instruction", input.Instruction.Trim())));
         }
 
+        var whole = input.WholeScope && input.Command is not (InlineEditCommand.Test or InlineEditCommand.Explain);
+        if (whole)
+        {
+            sections.Add(_templates.Section(input.IsRefinement ? "wholeRevised" : "wholeReply"));
+        }
+
         return
         [
-            new ChatMessage { Role = ChatRole.System, Content = _templates.SystemPrompt(input.Command, language) },
+            new ChatMessage { Role = ChatRole.System, Content = _templates.SystemPrompt(input.Command, language, whole) },
             new ChatMessage { Role = ChatRole.User, Content = string.Join("\n\n", sections) },
         ];
     }
@@ -130,8 +141,14 @@ public sealed class InlineEditPromptBuilder
 
     /// <summary>The corrective message for a <c>/doc</c> edit that changed code.</summary>
     /// <param name="changes">The first changed code lines, quoted.</param>
+    /// <param name="wholeScope">Whether the reply was a whole-scope rewrite rather than edit blocks.</param>
     /// <returns>The message.</returns>
-    public string DocOnly(IEnumerable<string> changes) => _templates.Correction("docOnly", ("items", string.Join("; ", changes)));
+    public string DocOnly(IEnumerable<string> changes, bool wholeScope = false) =>
+        _templates.Correction(wholeScope ? "docOnlyWhole" : "docOnly", ("items", string.Join("; ", changes)));
+
+    /// <summary>The corrective message for a whole-scope reply without code.</summary>
+    /// <returns>The message.</returns>
+    public string NoWholeCode() => _templates.Correction("noWholeCode");
 
     /// <summary>The corrective message for a <c>/test</c> reply without a code block.</summary>
     /// <returns>The message.</returns>
@@ -142,13 +159,14 @@ public sealed class InlineEditPromptBuilder
     /// <param name="proposal">The code with the edit applied (LF).</param>
     /// <param name="firstLine">The one-based document line the code starts on.</param>
     /// <param name="languageId">The language id.</param>
+    /// <param name="wholeScope">Whether the reply was a whole-scope rewrite rather than edit blocks.</param>
     /// <returns>The message.</returns>
-    public string Syntax(IEnumerable<string> errors, string proposal, int firstLine, string languageId)
+    public string Syntax(IEnumerable<string> errors, string proposal, int firstLine, string languageId, bool wholeScope = false)
     {
         var numbered = EditText.NumberLines(proposal, firstLine);
         var fence = EditText.Fence(numbered);
         return _templates.Correction(
-            "syntax",
+            wholeScope ? "syntaxWhole" : "syntax",
             ("items", Bullets(errors)),
             ("fence", fence),
             ("tag", FenceTag(languageId)),
@@ -157,9 +175,10 @@ public sealed class InlineEditPromptBuilder
 
     /// <summary>The corrective message for an edit that introduced placeholders no secret stands behind.</summary>
     /// <param name="placeholders">The unresolvable placeholders.</param>
+    /// <param name="wholeScope">Whether the reply was a whole-scope rewrite rather than edit blocks.</param>
     /// <returns>The message.</returns>
-    public string Placeholders(IEnumerable<string> placeholders) =>
-        _templates.Correction("placeholders", ("items", string.Join(", ", placeholders)));
+    public string Placeholders(IEnumerable<string> placeholders, bool wholeScope = false) =>
+        _templates.Correction(wholeScope ? "placeholdersWhole" : "placeholders", ("items", string.Join(", ", placeholders)));
 
     /// <summary>Keeps at most <paramref name="max"/> characters from the end of the text, starting at a line boundary.</summary>
     /// <param name="text">The text.</param>

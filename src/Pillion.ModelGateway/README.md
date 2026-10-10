@@ -220,6 +220,13 @@ Provider-independent pieces of inline edits (work item 1.8); Pillion Host's `Inl
   block when a fence, the next block or the end of the reply follows it (qwen2.5-coder:7b sometimes ends blocks that
   way), and when SEARCH was numbered, numbered REPLACE lines are stripped one by one. `FencedCodeParser` extracts
   fenced code (for `/test`).
+- `WholeScopeParser` reads the other answer format, used for scopes of at most `inlineEdit.wholeScopeMaxLines` lines
+  (default 80): the whole scope rewritten as plain code. It unwraps a Markdown fence (prose around it becomes the
+  explanation; a scope that has fences of its own is not unwrapped), strips `N| ` line numbers when every line has
+  one, reads CRLF and LF alike, drops blank lines at the edges, gives the result the trailing newline of the code it
+  replaces, and rejects a reply in block format. `Preview` gives the complete lines of a reply still streaming.
+  `InlineEditPromptInput.WholeScope` switches the builder to `system.editWhole` and the closing `wholeReply` /
+  `wholeRevised` section, and `DocOnly`, `Syntax` and `Placeholders` take `wholeScope` for their whole-scope wording.
 - `EditBlockApplier` applies blocks in order to LF text: exact, then trailing-whitespace-insensitive, then
   indentation-insensitive (re-indenting the replacement); a level with several matches is `Ambiguous`.
 - `InlineEditTemplates` loads `Templates/inline-edit.json` (system prompts per command, sections, corrective messages;
