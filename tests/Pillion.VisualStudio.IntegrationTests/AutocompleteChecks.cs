@@ -191,6 +191,70 @@ public static class AutocompleteChecks
     }
 
     /// <summary>
+    /// Asks every other proposal source provider's source for a proposal at the caret directly, for a failure message: which
+    /// of Copilot's and IntelliCode's sources answer, and after how long, and which never do within the timeout. (A source
+    /// that does not answer holds up the proposal broker's request for the view, and with it Pillion's.)
+    /// </summary>
+    /// <param name="view">The view.</param>
+    /// <param name="timeout">How long to wait for each source (they are asked at the same time).</param>
+    /// <param name="cancellationToken">Cancels the probe.</param>
+    /// <returns>One line.</returns>
+    public static async Task<string> ProbeSourcesAsync(IWpfTextView view, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        var componentModel = (IComponentModel)Package.GetGlobalService(typeof(SComponentModel));
+        var caret = view.Caret.Position.VirtualBufferPosition;
+        var probes = new List<Task<string>>();
+        foreach (var export in componentModel.DefaultExportProvider.GetExports<Microsoft.VisualStudio.Language.Proposals.ProposalSourceProviderBase, IDictionary<string, object>>())
+        {
+            var name = export.Metadata.TryGetValue("Name", out var value) ? value as string ?? "<unnamed>" : "<unnamed>";
+            if (PillionProposalId.IsPillion(name) || name.StartsWith("PillionProgrammer", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var provider = export.Value;
+            probes.Add(ProbeSourceAsync(name, provider, view, caret, timeout, cancellationToken));
+        }
+
+        return "sources: " + (probes.Count == 0 ? "no other source" : string.Join("; ", await Task.WhenAll(probes).ConfigureAwait(true)));
+    }
+
+    private static async Task<string> ProbeSourceAsync(
+        string name,
+        Microsoft.VisualStudio.Language.Proposals.ProposalSourceProviderBase provider,
+        IWpfTextView view,
+        Microsoft.VisualStudio.Text.VirtualSnapshotPoint caret,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        limit.CancelAfter(timeout);
+        try
+        {
+            var source = await provider.GetProposalSourceAsync(view, limit.Token).ConfigureAwait(true);
+            if (source is null)
+            {
+                return $"{name}: no source for the view after {clock.ElapsedMilliseconds} ms";
+            }
+
+            var collection = await source.RequestProposalsAsync(caret, null!, Microsoft.VisualStudio.Language.Proposals.ProposalScenario.ExplicitInvocation, '\0', limit.Token).ConfigureAwait(true);
+            return $"{name}: answered after {clock.ElapsedMilliseconds} ms with {collection?.Proposals.Count ?? 0} proposal(s)";
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return $"{name}: no answer within {timeout.TotalSeconds:0} s ({clock.ElapsedMilliseconds} ms)";
+        }
+#pragma warning disable CA1031 // A diagnostic: whatever a source throws is the answer.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            return $"{name}: {ex.GetType().Name} after {clock.ElapsedMilliseconds} ms";
+        }
+    }
+
+    /// <summary>
     /// Gets a value indicating whether Pillion's adapter has created its state for a view, which it does the first time the
     /// proposal broker asks Pillion's proposal source or manager provider about the view.
     /// </summary>

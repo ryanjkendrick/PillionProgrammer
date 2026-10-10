@@ -38,7 +38,7 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
             var original = view.TextBuffer.CurrentSnapshot.GetText();
 
             // The last key goes through the view's command chain, as from the keyboard: the broker asks Pillion's source on TypeChar.
-            await WaitForPillionProposalAsync(view, watch!, "Pillion's proposal after typing", () => TypeStatementPrefix(view, line: 6));
+            await WaitForPillionProposalAsync(view, watch!, "Pillion's proposal after typing", () => TypeStatementPrefix(view, line: 6), () => TypeTheLastKeyAgain(view));
 
             await AcceptSuggestionAsync(view);
             var accepted = view.TextBuffer.CurrentSnapshot.GetLineFromLineNumber(6).GetText();
@@ -47,7 +47,7 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
             Assert.NotEqual(original, view.TextBuffer.CurrentSnapshot.GetText());
 
             // Esc dismisses and leaves the buffer as it was.
-            await WaitForPillionProposalAsync(view, watch!, "Pillion's proposal on the next line", () => TypeStatementPrefix(view, line: 7));
+            await WaitForPillionProposalAsync(view, watch!, "Pillion's proposal on the next line", () => TypeStatementPrefix(view, line: 7), () => TypeTheLastKeyAgain(view));
             await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
             var beforeEsc = view.TextBuffer.CurrentSnapshot.GetText();
             AutocompleteChecks.Exec(view, VSConstants.VSStd2KCmdID.CANCEL);
@@ -62,7 +62,7 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
             Assert.Equal(beforeEsc, view.TextBuffer.CurrentSnapshot.GetText());
 
             // "Pillion: Suggest" (work item 1.4) asks for one suggestion at the caret, whatever else is displayed.
-            await WaitForPillionProposalAsync(view, watch!, "Pillion: Suggest to show a proposal", () => AutocompleteChecks.Suggest(view));
+            await WaitForPillionProposalAsync(view, watch!, "Pillion: Suggest to show a proposal", () => AutocompleteChecks.Suggest(view), () => AutocompleteChecks.Suggest(view));
             Output.WriteLine("Typed, accepted with Tab, dismissed with Esc and asked again with Pillion: Suggest.");
         }
         finally
@@ -197,9 +197,8 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
 
     /// <summary>
     /// Puts "        var total = " at the end of a line, as typing would leave it, with the last key typed: the text before the
-    /// final space goes in as an edit and the space through the view's command chain. Typing the letters opens Roslyn's
-    /// completion list, and Pillion shows nothing while a list is open (see the next test), so how long the list lingered
-    /// on a loaded runner decided whether this test passed. A space opens no list; the proposal broker still sees a TypeChar.
+    /// final space goes in as an edit and the space through the view's command chain, so the proposal broker sees a
+    /// TypeChar. (Typing the letters would open Roslyn's completion list, and Pillion shows nothing while a list is open.)
     /// </summary>
     private static void TypeStatementPrefix(IWpfTextView view, int line)
     {
@@ -216,19 +215,37 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
         AutocompleteChecks.Type(view, " ");
     }
 
+    /// <summary>Deletes the last typed character and types it again: the same text, and the broker sees a new keystroke.</summary>
+    private static void TypeTheLastKeyAgain(IWpfTextView view)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        _ = AutocompleteChecks.Exec(view, VSConstants.VSStd2KCmdID.BACKSPACE);
+        AutocompleteChecks.Type(view, " ");
+    }
+
     /// <summary>
     /// Runs <paramref name="keys"/> on the UI thread and waits for Pillion's proposal to be displayed in the view: for the
     /// suggestion service's <c>ProposalDisplayed</c> event (or a Pillion proposal that is already displayed and still
-    /// matches). A timeout says what the editor and Pillion's adapter did instead: whether Pillion's source reached the
-    /// model, what is displayed, the completion list.
+    /// matches). Pillion's source has to reach the model first, which the test sees as a request to the canned service.
     /// </summary>
-    private async Task WaitForPillionProposalAsync(IWpfTextView view, ProposalWatch watch, string what, Action keys)
+    /// <remarks>
+    /// The proposal broker answers a keystroke with a request only when none is outstanding for the view: keys typed while
+    /// the request that came with the view's keyboard focus is still in flight (the Pillion log shows its attempt cancelled
+    /// by the first edit, 12 ms after it started) produce no request of their own, and a user types on. So when no request
+    /// has reached the model three seconds after the keys, <paramref name="again"/> sends them again,
+    /// as a user who sees nothing would; the number of repeats is in the output.
+    /// </remarks>
+    private async Task WaitForPillionProposalAsync(IWpfTextView view, ProposalWatch watch, string what, Action keys, Action again)
     {
         var timeout = TimeSpan.FromSeconds(20);
+        var retryAfter = TimeSpan.FromSeconds(3);
         await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
         var shown = watch.WhenNextPillionShownAsync();
+        var requestsBefore = AutocompleteChecks.CannedRequestCount;
         var clock = System.Diagnostics.Stopwatch.StartNew();
         keys();
+        var repeats = 0;
+        var lastKeys = clock.Elapsed;
         while (!shown.IsCompleted)
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
@@ -241,15 +258,24 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
             {
                 var state = AutocompleteChecks.DescribeState(view);
                 var broker = await AutocompleteChecks.ProbeBrokerAsync(view, TimeSpan.FromSeconds(8), HangMitigatingCancellationToken);
+                var sources = await AutocompleteChecks.ProbeSourcesAsync(view, TimeSpan.FromSeconds(8), HangMitigatingCancellationToken);
                 throw new TimeoutException(
-                    $"Timed out after {timeout.TotalSeconds:0} s waiting for {what}. {state}; {watch.Describe()}; {broker}.");
+                    $"Timed out after {timeout.TotalSeconds:0} s waiting for {what} (keys repeated {repeats} time(s)). {state}; {watch.Describe()}; {broker}; {sources}.");
             }
 
-            _ = await Task.WhenAny(shown, Task.Delay(250, HangMitigatingCancellationToken)).ConfigureAwait(true);
+            if (AutocompleteChecks.CannedRequestCount == requestsBefore && clock.Elapsed - lastKeys > retryAfter)
+            {
+                repeats++;
+                lastKeys = clock.Elapsed;
+                Output.WriteLine($"{what}: no request reached the model {clock.ElapsedMilliseconds} ms after the keys; sending them again ({repeats}).");
+                again();
+            }
+
+            _ = await Task.WhenAny(shown, Task.Delay(100, HangMitigatingCancellationToken)).ConfigureAwait(true);
         }
 
         await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
-        Output.WriteLine($"{what}: displayed after {clock.ElapsedMilliseconds} ms ({AutocompleteChecks.CannedRequestCount} canned request(s) so far; {watch.Describe()}).");
+        Output.WriteLine($"{what}: displayed after {clock.ElapsedMilliseconds} ms, keys repeated {repeats} time(s) ({AutocompleteChecks.CannedRequestCount - requestsBefore} canned request(s); {watch.Describe()}).");
     }
 
     private async Task<IWpfTextView> OpenGhostDocumentAsync()
