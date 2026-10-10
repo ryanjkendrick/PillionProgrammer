@@ -25,11 +25,7 @@ internal sealed class IdeSignalsFeature : IDisposable
 
     private readonly JoinableTaskFactory _joinableTaskFactory;
     private readonly PillionLog _log;
-    private IVsSolutionBuildManager2? _buildManager;
-    private uint _buildCookie = NoCookie;
-    private IVsRunningDocumentTable? _runningDocumentTable;
-    private uint _documentCookie = NoCookie;
-    private IErrorList? _errorList;
+    private readonly DisconnectSteps _disconnect = new();
     private int _stopped;
 
     /// <summary>Initializes a new instance of the <see cref="IdeSignalsFeature"/> class.</summary>
@@ -69,29 +65,15 @@ internal sealed class IdeSignalsFeature : IDisposable
             return;
         }
 
-        Hub.Dispose();
+        // Order: stop the sources of events first (on the UI thread, where the COM advises were made), then the hub that
+        // receives them, so no sink calls into a disposed hub. Each disconnect is isolated (see DisconnectSteps); the hub
+        // is disposed even when the switch to the UI thread itself fails.
         try
         {
             _joinableTaskFactory.Run(async () =>
             {
                 await _joinableTaskFactory.SwitchToMainThreadAsync();
-                if (_buildManager is not null && _buildCookie != NoCookie)
-                {
-                    _ = _buildManager.UnadviseUpdateSolutionEvents(_buildCookie);
-                    _buildCookie = NoCookie;
-                }
-
-                if (_runningDocumentTable is not null && _documentCookie != NoCookie)
-                {
-                    _ = _runningDocumentTable.UnadviseRunningDocTableEvents(_documentCookie);
-                    _documentCookie = NoCookie;
-                }
-
-                if (_errorList is not null)
-                {
-                    _errorList.TableControl.EntriesChanged -= OnErrorListChanged;
-                    _errorList = null;
-                }
+                _ = _disconnect.RunAll(_log);
             });
         }
 #pragma warning disable CA1031 // Shutting down: nothing here may throw out of Dispose.
@@ -99,6 +81,10 @@ internal sealed class IdeSignalsFeature : IDisposable
 #pragma warning restore CA1031
         {
             _log.Warning("signals.dispose.failed", "Disconnecting the IDE signals failed.", ("error", ex.GetType().Name), ("detail", ex.Message));
+        }
+        finally
+        {
+            Hub.Dispose();
         }
     }
 
@@ -130,10 +116,13 @@ internal sealed class IdeSignalsFeature : IDisposable
             return;
         }
 
-        if (Volatile.Read(ref _stopped) == 0 && ErrorHandler.Succeeded(buildManager.AdviseUpdateSolutionEvents(new SolutionBuildSink(Hub), out var cookie)))
+        if (Volatile.Read(ref _stopped) == 0 && ErrorHandler.Succeeded(buildManager.AdviseUpdateSolutionEvents(new SolutionBuildSink(Hub), out var cookie)) && cookie != NoCookie)
         {
-            _buildManager = buildManager;
-            _buildCookie = cookie;
+            _disconnect.Add("build events", () =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                _ = buildManager.UnadviseUpdateSolutionEvents(cookie);
+            });
         }
     }
 
@@ -147,10 +136,13 @@ internal sealed class IdeSignalsFeature : IDisposable
             return;
         }
 
-        if (Volatile.Read(ref _stopped) == 0 && ErrorHandler.Succeeded(table.AdviseRunningDocTableEvents(new RunningDocumentSink(Hub, table4), out var cookie)))
+        if (Volatile.Read(ref _stopped) == 0 && ErrorHandler.Succeeded(table.AdviseRunningDocTableEvents(new RunningDocumentSink(Hub, table4), out var cookie)) && cookie != NoCookie)
         {
-            _runningDocumentTable = table;
-            _documentCookie = cookie;
+            _disconnect.Add("document events", () =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                _ = table.UnadviseRunningDocTableEvents(cookie);
+            });
         }
     }
 
@@ -183,9 +175,19 @@ internal sealed class IdeSignalsFeature : IDisposable
             return;
         }
 
+        // Keep the table control itself: at shutdown Visual Studio has already closed the Error List and
+        // errorList.TableControl is null by then, which made Dispose throw a NullReferenceException every time
+        // (logged as signals.dispose.failed). Unsubscribing from the captured control is harmless either way.
+        var tableControl = errorList.TableControl;
+        if (tableControl is null)
+        {
+            _log.Warning("signals.errorlist.unavailable", "The Error List has no table control yet; diagnostics come from Roslyn only.");
+            return;
+        }
+
         CheckTableKeys();
-        errorList.TableControl.EntriesChanged += OnErrorListChanged;
-        _errorList = errorList;
+        tableControl.EntriesChanged += OnErrorListChanged;
+        _disconnect.Add("the Error List", () => tableControl.EntriesChanged -= OnErrorListChanged);
         Hub.ErrorList = new ErrorListSource(errorList, _joinableTaskFactory);
     }
 

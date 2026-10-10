@@ -49,14 +49,6 @@ public class ContextContractTests
     }
 
     [Fact]
-    public void ContractVersion_IsUnchangedByTheAdditions()
-    {
-        // The minor bump is batched at the wave boundary (phase 1 plan, planning decisions).
-        Assert.Equal(1, ContractVersion.Major);
-        Assert.Equal(1, ContractVersion.Minor);
-    }
-
-    [Fact]
     public void Summarise_IsTheLastTaskClass_AndKeepsTheOlderWireValues()
     {
         Assert.Equal(TaskClass.Summarise, Enum.GetValues<TaskClass>()[^1]);

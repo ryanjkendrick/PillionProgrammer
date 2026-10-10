@@ -2,7 +2,7 @@ namespace Pillion.Contracts.Tests;
 
 public class ContractVersionTests
 {
-    // The current version (1.1) is asserted in ContractV11Tests.
+    // The current version (1.2) is asserted in ContractV12Tests.
     [Theory]
     [InlineData(1, 0)]
     [InlineData(1, 1)]

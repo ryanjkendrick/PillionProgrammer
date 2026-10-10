@@ -208,17 +208,16 @@ public sealed class InlineEditLiveTests(ITestOutputHelper output)
         public LiveEngine(string model, int wholeScopeMaxLines)
         {
             var settings = new PillionSettings();
-            // On the 8 GB machine the 7B coder is resident for autocomplete at num_ctx 4096 with keep_alive -1, and Ollama
-            // waits indefinitely for room to load a second instance at Local-strong's default 8192. Chat shares the
-            // resident model on that tier (design section 6), so the test sends the same context size.
-            using var numCtx = JsonDocument.Parse("""{ "localStrong": 4096 }""");
+            // No num_ctx override: the request goes through the residency manager (OllamaResidency; "Residency and
+            // OLLAMA_MAX_LOADED_MODELS" in src/Pillion.ModelGateway/README.md, design section 6). It reuses the context the
+            // resident model already has when that is enough, and otherwise reloads the model once at the larger size, so a
+            // resident autocomplete model on a small GPU no longer makes chat wait for a second instance.
             settings.Providers.Add(new ProviderSettings
             {
                 Id = "ollama",
                 Kind = ProviderKind.Ollama,
                 Endpoint = Endpoint,
                 Models = [model],
-                ExtensionData = new Dictionary<string, JsonElement> { ["numCtx"] = numCtx.RootElement.Clone() },
             });
             settings.Routing.Profiles[Profile.LocalStrong] = "ollama/" + model;
             var options = new ModelGatewayOptions();

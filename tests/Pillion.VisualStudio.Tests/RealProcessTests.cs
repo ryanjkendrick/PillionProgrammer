@@ -298,20 +298,22 @@ public sealed class RealProcessTests : IDisposable
         await providers.LoadAsync();
         Assert.Equal(OptionsLoadState.Loaded, providers.LoadState);
         Assert.Equal(["ollama", "fake-cloud"], providers.Providers.Select(p => p.Id));
+        var providersStatus = new StatusRecorder(providers);
         providers.Add();
         providers.SelectedProvider!.Id = "work-gateway";
         providers.SelectedProvider.ApiKey = "sk-test-not-a-real-key";
         await providers.SaveAsync();
-        Assert.Equal("Saved.", providers.StatusMessage);
+        providersStatus.AssertSaved();
         Assert.Equal("sk-test-not-a-real-key", credentials.Keys["work-gateway"]);
         await providers.TestSelectedAsync();
         Assert.Equal("Connection succeeded. The fake host reached provider 'work-gateway'.", providers.SelectedProvider.TestResult);
 
         using var privacy = new PrivacyOptionsViewModel(supervisor, uiContext.Factory, _log);
         await privacy.LoadAsync();
+        var privacyStatus = new StatusRecorder(privacy);
         privacy.LocalOnly = true;
         await privacy.SaveAsync();
-        Assert.Equal("Saved.", privacy.StatusMessage);
+        privacyStatus.AssertSaved();
         await Wait.UntilAsync(() => changedSections.Contains("privacy"), "the host's settingsChanged reached the supervisor");
 
         // The Models and routing page over the same wire: Chat to Local-strong, the autocomplete cloud switch on.
@@ -321,8 +323,9 @@ public sealed class RealProcessTests : IDisposable
         Assert.False(routing.TaskRoutes.Single(r => r.TaskClass == TaskClass.Autocomplete).CloudSwitchOn);
         routing.TaskRoutes.Single(r => r.TaskClass == TaskClass.Chat).SelectedProfile = RoutingChoices.Profiles.Single(p => p.Value == "localStrong");
         routing.TaskRoutes.Single(r => r.TaskClass == TaskClass.Autocomplete).CloudSwitchOn = true;
+        var routingStatus = new StatusRecorder(routing);
         await routing.SaveAsync();
-        Assert.Equal("Saved.", routing.StatusMessage);
+        routingStatus.AssertSaved();
         await Wait.UntilAsync(() => changedSections.Contains("routing") && changedSections.Contains("cloudSwitches"), "settingsChanged named routing and cloudSwitches");
 
         using var routingAgain = new RoutingOptionsViewModel(supervisor, uiContext.Factory, _log);
@@ -336,6 +339,29 @@ public sealed class RealProcessTests : IDisposable
         Assert.DoesNotContain("sk-test-not-a-real-key", LogText);
 
         await supervisor.ShutdownAsync(TimeSpan.FromSeconds(2));
+    }
+
+    /// <summary>
+    /// Records every status message a page shows. The host answers a save with settingsChanged, which makes the page reload
+    /// itself (status "Loading...", then empty) and can do so before the test looks at the page again, so asserting on the
+    /// current text right after the save races; what matters is that the page said "Saved.".
+    /// </summary>
+    private sealed class StatusRecorder
+    {
+        private readonly ConcurrentQueue<string> _seen = new();
+
+        public StatusRecorder(OptionsPageViewModel page)
+        {
+            page.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(OptionsPageViewModel.StatusMessage))
+                {
+                    _seen.Enqueue(page.StatusMessage);
+                }
+            };
+        }
+
+        public void AssertSaved() => Assert.Contains("Saved.", _seen);
     }
 
     /// <summary>Reads the log while the logger may be appending to it (File.ReadAllText would deny it write access).</summary>

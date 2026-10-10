@@ -23,7 +23,7 @@ namespace Pillion.FakeHost;
 /// (Auto) is answered by the local model. The delay between chunks is <c>PILLION_FAKEHOST_CHUNK_DELAY_MS</c> (120 ms by
 /// default). Only ids and counts are written to stderr, never text.
 /// </remarks>
-internal sealed class FakeModelService : IModelService
+internal sealed class FakeModelService(FakeRecorder? recorder = null) : IModelService
 {
     public const string LocalModelId = "ollama/fake-local-coder";
     public const string CloudModelId = "fake-cloud/fake-cloud-chat";
@@ -59,6 +59,11 @@ internal sealed class FakeModelService : IModelService
     private readonly TimeSpan _chunkDelay = TimeSpan.FromMilliseconds(
         int.TryParse(Environment.GetEnvironmentVariable("PILLION_FAKEHOST_CHUNK_DELAY_MS"), NumberStyles.None, CultureInfo.InvariantCulture, out var ms) ? ms : 120);
 
+    /// <summary>Finds the model a request names; Auto (no id) and unknown ids get the local model.</summary>
+    /// <param name="modelId">The request's model id.</param>
+    /// <returns>The model.</returns>
+    public static ModelDescriptor Find(string? modelId) => Models.FirstOrDefault(m => m.Id == modelId) ?? Models[0];
+
     public Task<ModelDescriptor[]> ListModelsAsync(CancellationToken cancellationToken)
     {
         Console.Error.WriteLine("fakehost: list models");
@@ -68,9 +73,11 @@ internal sealed class FakeModelService : IModelService
     public async IAsyncEnumerable<ChatChunk> ChatAsync(ChatRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var model = Models.FirstOrDefault(m => m.Id == request.ModelId) ?? Models[0];
+        var model = Find(request.ModelId);
         Console.Error.WriteLine(
             "fakehost: chat " + request.RequestId + " model " + model.Id + ", " + request.Messages.Count + " messages");
+        recorder?.Chat(request, model);
+        var started = System.Diagnostics.Stopwatch.StartNew();
 
         var lastUser = request.Messages.LastOrDefault(m => m.Role == ChatRole.User)?.Content ?? string.Empty;
         if (lastUser.Contains("/error", StringComparison.OrdinalIgnoreCase))
@@ -123,6 +130,7 @@ internal sealed class FakeModelService : IModelService
                 };
             }
 
+            recorder?.Finished(request, model, final.PromptTokens, final.CompletionTokens, started.ElapsedMilliseconds, partial ? "Failed" : "Succeeded");
             yield return final;
             Console.Error.WriteLine("fakehost: chat " + request.RequestId + (partial ? " failed part way" : " complete"));
         }

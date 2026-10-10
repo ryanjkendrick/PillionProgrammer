@@ -6,12 +6,14 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using Pillion.VisualStudio.Core;
+using Pillion.VisualStudio.Core.Mentions;
 
 namespace Pillion.VisualStudio.ToolWindows;
 
 /// <summary>
 /// The Pillion Chat tool window's content. Behaviour is in <see cref="ChatViewModel"/>; this class keeps the transcript
-/// scrolled to the newest text, owns the cache of rendered replies and handles the rename box's keys.
+/// scrolled to the newest text, owns the cache of rendered replies, handles the rename box's keys, and connects the input
+/// to the mention picker (its text and caret, its keys, the popup at the caret and the caret after a pick).
 /// </summary>
 internal sealed partial class ChatToolWindowControl : UserControl, IDisposable
 {
@@ -34,6 +36,8 @@ internal sealed partial class ChatToolWindowControl : UserControl, IDisposable
         _renders = new MessageRenderCache(renderContext);
         MarkdownMessageView.SetCache(Transcript, _renders);
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        _viewModel.InputCaretRequested += OnInputCaretRequested;
+        _viewModel.Mentions.Picker.PropertyChanged += OnPickerPropertyChanged;
         WatchTurns();
         Transcript.Loaded += (_, _) => _scroller ??= Transcript.Template?.FindName("PART_Scroller", Transcript) as ScrollViewer;
     }
@@ -45,6 +49,8 @@ internal sealed partial class ChatToolWindowControl : UserControl, IDisposable
     public void Dispose()
     {
         _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        _viewModel.InputCaretRequested -= OnInputCaretRequested;
+        _viewModel.Mentions.Picker.PropertyChanged -= OnPickerPropertyChanged;
         if (_turns is not null)
         {
             _turns.CollectionChanged -= OnTurnsChanged;
@@ -53,10 +59,29 @@ internal sealed partial class ChatToolWindowControl : UserControl, IDisposable
         _renders.Dispose();
     }
 
-    /// <summary>Enter sends; Shift+Enter falls through to the text box, which inserts a new line.</summary>
+    /// <summary>
+    /// While the mention picker is open, Up, Down, Enter, Tab and Esc drive it. Otherwise Enter sends; Shift+Enter falls
+    /// through to the text box, which inserts a new line.
+    /// </summary>
     private void OnInputPreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter || (Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+        var modifiers = Keyboard.Modifiers;
+        MentionKey? key = e.Key switch
+        {
+            Key.Down when modifiers == ModifierKeys.None => MentionKey.Down,
+            Key.Up when modifiers == ModifierKeys.None => MentionKey.Up,
+            Key.Enter when modifiers == ModifierKeys.None => MentionKey.Enter,
+            Key.Tab when modifiers == ModifierKeys.None => MentionKey.Tab,
+            Key.Escape => MentionKey.Escape,
+            _ => null,
+        };
+        if (key is { } mentionKey && _viewModel.Mentions.HandleKey(mentionKey))
+        {
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key != Key.Enter || (modifiers & ModifierKeys.Shift) != 0)
         {
             return;
         }
@@ -85,6 +110,72 @@ internal sealed partial class ChatToolWindowControl : UserControl, IDisposable
         else if (_followTail)
         {
             _scroller.ScrollToEnd();
+        }
+    }
+
+    /// <summary>Follows the text for the mention picker.</summary>
+    private void OnInputTextChanged(object sender, TextChangedEventArgs e) => UpdateMentions();
+
+    /// <summary>Follows the caret for the mention picker.</summary>
+    private void OnInputSelectionChanged(object sender, RoutedEventArgs e) => UpdateMentions();
+
+    /// <summary>The picker belongs to the input: it closes when the keyboard leaves the window's input.</summary>
+    private void OnInputLostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (e.NewFocus is not System.Windows.Media.Visual target || !IsAncestorOf(target))
+        {
+            _viewModel.Mentions.Picker.Close();
+        }
+    }
+
+    /// <summary>A click on a picker entry picks it; the keyboard stays in the input.</summary>
+    private void OnMentionItemClicked(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: MentionPickerItem item })
+        {
+            e.Handled = true;
+            _viewModel.Mentions.Picker.Select(item);
+            _viewModel.Mentions.HandleKey(MentionKey.Enter);
+            Input.Focus();
+        }
+    }
+
+    private void UpdateMentions()
+    {
+        _viewModel.Mentions.UpdateInput(Input.Text, Input.CaretIndex);
+        PlacePopup();
+    }
+
+    /// <summary>Puts the picker above the mention's <c>@</c> (it flips below when there is no room above).</summary>
+    private void PlacePopup()
+    {
+        if (!_viewModel.Mentions.Picker.IsOpen)
+        {
+            return;
+        }
+
+        var index = _viewModel.Mentions.Picker.Token?.Start ?? Input.CaretIndex;
+        var rect = Input.GetRectFromCharacterIndex(Math.Max(0, Math.Min(index, Input.Text.Length)));
+        MentionPopup.PlacementRectangle = rect.IsEmpty ? new Rect(0, 0, 0, 0) : rect;
+        MentionPopup.HorizontalOffset = MentionPopup.HorizontalOffset == 0 ? 0.0001 : 0; // Nudges an open popup to the new place.
+    }
+
+    private void OnInputCaretRequested(object? sender, int caret)
+    {
+        Input.CaretIndex = Math.Max(0, Math.Min(caret, Input.Text.Length));
+        Input.Focus();
+        UpdateMentions();
+    }
+
+    private void OnPickerPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MentionPickerViewModel.SelectedIndex) && _viewModel.Mentions.Picker.SelectedItem is { } item)
+        {
+            MentionList.ScrollIntoView(item);
+        }
+        else if (e.PropertyName == nameof(MentionPickerViewModel.IsOpen))
+        {
+            PlacePopup();
         }
     }
 
