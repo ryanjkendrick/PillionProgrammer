@@ -44,6 +44,7 @@ internal sealed partial class OllamaResidency : ILocalResidencySource, IDisposab
     internal const int DefaultOutputReserve = 512;
 
     private const int MinimumContext = 2048;
+    private static readonly TimeSpan PsTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(200);
 
     private readonly OllamaProvider _provider;
@@ -366,9 +367,18 @@ internal sealed partial class OllamaResidency : ILocalResidencySource, IDisposab
             }
 
             JsonDocument document;
+            using var timeout = new CancellationTokenSource(PsTimeout, _runtime.Time);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
             try
             {
-                document = await _provider.Http.GetJsonAsync("api/ps", modelId: null, cancellationToken).ConfigureAwait(false);
+                document = await _provider.Http.GetJsonAsync("api/ps", modelId: null, linked.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                throw new ProviderException(
+                    PillionErrorCode.ProviderUnavailable,
+                    string.Create(CultureInfo.InvariantCulture, $"Ollama did not answer /api/ps within {PsTimeout.TotalSeconds:0} s; it may be stuck loading another model. Check what is resident with 'ollama ps'."),
+                    isProviderFault: false);
             }
             catch (ProviderException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
             {

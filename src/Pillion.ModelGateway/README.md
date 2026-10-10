@@ -188,7 +188,9 @@ more than the override still grows the model as in 2. (`numCtx` in a provider en
 **What is resident.** `ModelGateway.Residency` (`LocalResidencyMap`, a singleton) lists the loaded models with their
 context size, GPU memory, keep-alive and whether they are pinned: `GetSnapshot()` reports what was observed last without any
 I/O, for the status bar, and `RefreshAsync(force)` asks Ollama (at most once per 30 s unless `force`, which an explicit
-Refresh in the UI would use). The host has no RPC for it yet.
+Refresh in the UI would use). The host reports it in `AutocompleteHostCounters.ResidentModels` (`IDiagnosticsService`, the
+same call the status bar already makes), from the cached answer, so it adds at most one `/api/ps` per 30 s. `/api/ps` has a 10 s
+limit: a server that does not answer it fails the request with a message instead of hanging.
 
 **`OLLAMA_MAX_LOADED_MODELS`.** Ollama also unloads a model when another request needs its memory and the server already holds
 `OLLAMA_MAX_LOADED_MODELS` models. Set it (a system environment variable for the Ollama service, then restart Ollama) to the

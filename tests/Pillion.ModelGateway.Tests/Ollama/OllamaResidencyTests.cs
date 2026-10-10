@@ -411,6 +411,23 @@ public class OllamaResidencyTests
     }
 
     [Fact]
+    public async Task AServerThatDoesNotAnswerPs_FailsTheRequestInsteadOfWaiting()
+    {
+        using var rig = new Rig(GpuTier.Gpu8GB);
+        rig.Server.Handler.OnAsync("GET api/ps", async (_, _, ct) =>
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+            return new HttpResponseMessage();
+        });
+        // The 10 s limit on /api/ps is a constant, so this test waits for it.
+        var ex = await Assert.ThrowsAsync<ProviderException>(() => ChatAsync(rig.Provider, "hello"));
+
+        Assert.Equal(PillionErrorCode.ProviderUnavailable, ex.Code);
+        Assert.Contains("did not answer /api/ps within 10 s", ex.Message, StringComparison.Ordinal);
+        Assert.Empty(rig.Server.Transcript());
+    }
+
+    [Fact]
     public async Task ACancelledRequest_StopsWaitingForTheLoad()
     {
         using var rig = new Rig(GpuTier.Gpu16GB);
