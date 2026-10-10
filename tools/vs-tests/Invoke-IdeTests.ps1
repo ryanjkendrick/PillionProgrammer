@@ -85,6 +85,24 @@ try {
     & $vstest @arguments
     $exitCode = $LASTEXITCODE
     Write-Host ("vstest.console exit {0} after {1:0.0} s" -f $exitCode, $clock.Elapsed.TotalSeconds)
+
+    # The console logger shows a test's output only when it fails; the host kill test's measurements (UI thread and
+    # background thread gaps) are worth seeing on every run, so print them from the TRX file.
+    try {
+        $trxPath = Join-Path $ResultsDirectory $trxName
+        if (Test-Path -LiteralPath $trxPath) {
+            [xml]$trx = Get-Content -LiteralPath $trxPath -Raw
+            foreach ($result in @($trx.TestRun.Results.UnitTestResult | Where-Object { $_.testName -like '*KillingTheHost*' })) {
+                Write-Host "Output of $($result.testName) ($($result.outcome)):"
+                $lines = @($result.Output.StdOut -split "`r?`n" | Where-Object { $_ -match '^(Killed|\s+\d+ ms: |UI thread|Background thread|WARNING)' })
+                $lines | ForEach-Object { Write-Host "  $_" }
+                if ($env:GITHUB_ACTIONS -eq 'true') {
+                    foreach ($line in @($lines | Where-Object { $_ -like 'WARNING*' })) { Write-Host "::warning title=Host kill test::$line" }
+                }
+            }
+        }
+    }
+    catch { Write-Warning "Could not read the test output from ${trxName}: $($_.Exception.Message)" }
 }
 finally {
     foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
