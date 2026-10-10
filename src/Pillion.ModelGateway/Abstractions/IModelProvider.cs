@@ -74,11 +74,13 @@ public interface IModelProviderFactory
 /// <param name="Catalog">The model catalog.</param>
 /// <param name="LoggerFactory">Creates loggers.</param>
 /// <param name="AutocompleteModelId">The model routed to autocomplete for this provider, if known; local runtimes keep it resident.</param>
+/// <param name="Runtime">Gateway services for local providers (progress, GPU tier, resident-context overrides); <see langword="null"/> uses <see cref="ProviderRuntime.Default"/>.</param>
 public sealed record ProviderCreationContext(
     string? ApiKey,
     ModelCatalog Catalog,
     ILoggerFactory LoggerFactory,
-    string? AutocompleteModelId);
+    string? AutocompleteModelId,
+    ProviderRuntime? Runtime = null);
 
 /// <summary>A model a provider can serve.</summary>
 /// <param name="ProviderId">The provider id.</param>

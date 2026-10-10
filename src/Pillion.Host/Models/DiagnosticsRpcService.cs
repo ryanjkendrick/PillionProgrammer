@@ -16,12 +16,14 @@ internal sealed class DiagnosticsRpcService : IDiagnosticsService
     private readonly AutocompleteCounters _counters;
     private readonly IOutboundLog _outbound;
     private readonly TimeProvider _time;
+    private readonly LocalResidencyMap? _residency;
 
     /// <summary>Initializes a new instance of the <see cref="DiagnosticsRpcService"/> class.</summary>
     /// <param name="counters">The gateway's autocomplete counters.</param>
     /// <param name="outbound">The Outbound log.</param>
     /// <param name="time">The clock.</param>
-    public DiagnosticsRpcService(AutocompleteCounters counters, IOutboundLog outbound, TimeProvider time)
+    /// <param name="residency">The map of resident local models; the report lists none without it.</param>
+    public DiagnosticsRpcService(AutocompleteCounters counters, IOutboundLog outbound, TimeProvider time, LocalResidencyMap? residency = null)
     {
         ArgumentNullException.ThrowIfNull(counters);
         ArgumentNullException.ThrowIfNull(outbound);
@@ -29,11 +31,33 @@ internal sealed class DiagnosticsRpcService : IDiagnosticsService
         _counters = counters;
         _outbound = outbound;
         _time = time;
+        _residency = residency;
     }
 
     /// <inheritdoc/>
-    public Task<AutocompleteHostCounters> GetAutocompleteCountersAsync(CancellationToken cancellationToken) =>
-        Task.FromResult(Build(_counters.Snapshot(), _outbound.GetRecent(), _time.GetUtcNow()));
+    public async Task<AutocompleteHostCounters> GetAutocompleteCountersAsync(CancellationToken cancellationToken)
+    {
+        var report = Build(_counters.Snapshot(), _outbound.GetRecent(), _time.GetUtcNow());
+        if (_residency is not null)
+        {
+            // Asks Ollama at most once every 30 s; between asks this is the cached answer.
+            var snapshot = await _residency.RefreshAsync(force: false, cancellationToken).ConfigureAwait(false);
+            report.ResidentModels =
+            [
+                .. snapshot.Models.Select(m => new ResidentModelInfo
+                {
+                    ProviderId = m.ProviderId,
+                    ModelId = m.ModelId,
+                    ContextLength = m.ContextLength,
+                    VramBytes = m.VramBytes,
+                    KeepAlive = m.KeepAlive,
+                    IsPinned = m.IsPinned,
+                }),
+            ];
+        }
+
+        return report;
+    }
 
     /// <summary>Builds the report from the counters and the Outbound records.</summary>
     /// <param name="counters">The counters snapshot.</param>

@@ -16,7 +16,7 @@ namespace Pillion.VisualStudio.IntegrationTests;
 /// </summary>
 [IdeSettings(MinVersion = IdeTarget.Version, MaxVersion = IdeTarget.Version)]
 [TestCaseOrderer(TestOrderer.TypeName, TestOrderer.AssemblyName)]
-public sealed class PillionPackageTests(ITestOutputHelper output) : PillionIdeTest(output)
+public sealed partial class PillionPackageTests(ITestOutputHelper output) : PillionIdeTest(output)
 {
     /// <summary>The design's budget for the UI thread while the host is killed (design section 4, Failure modes).</summary>
     private static readonly TimeSpan MaxUiGap = TimeSpan.FromSeconds(2);

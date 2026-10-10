@@ -270,6 +270,28 @@ public sealed class InlineChatRulesTests
         Assert.DoesNotContain("prompt 1", history.Prompts);
     }
 
+    [Fact]
+    public void FromSignals_KeepsThisFilesErrorsAndWarningsWithZeroBasedLines()
+    {
+        const string path = @"C:\src\Orders.cs";
+        Pillion.VisualStudio.Core.Signals.DiagnosticInfo[] signals =
+        [
+            new(path, 7, 9, Pillion.VisualStudio.Core.Signals.IdeSeverity.Error, "CS0103", "Unknown name", "Orders", Pillion.VisualStudio.Core.Signals.DiagnosticSource.ErrorList),
+            new(@"c:\SRC\orders.cs", 7, 9, Pillion.VisualStudio.Core.Signals.IdeSeverity.Error, "CS0103", "Unknown name", "Orders", Pillion.VisualStudio.Core.Signals.DiagnosticSource.Roslyn),
+            new(path, 3, 1, Pillion.VisualStudio.Core.Signals.IdeSeverity.Warning, "CS0168", "Unused", "Orders", Pillion.VisualStudio.Core.Signals.DiagnosticSource.Roslyn),
+            new(path, 5, 1, Pillion.VisualStudio.Core.Signals.IdeSeverity.Info, "IDE0005", "Unnecessary using", "Orders", Pillion.VisualStudio.Core.Signals.DiagnosticSource.Roslyn),
+            new(@"C:\src\Other.cs", 2, 1, Pillion.VisualStudio.Core.Signals.IdeSeverity.Error, "CS1002", "; expected", "Orders", Pillion.VisualStudio.Core.Signals.DiagnosticSource.ErrorList),
+            new(path, 0, 0, Pillion.VisualStudio.Core.Signals.IdeSeverity.Error, "CS5001", "No Main", "Orders", Pillion.VisualStudio.Core.Signals.DiagnosticSource.ErrorList),
+        ];
+
+        var diagnostics = InlineChatDiagnostics.FromSignals(signals, path);
+
+        Assert.Equal([2, 6], diagnostics.Select(d => d.Line));
+        Assert.Equal(["CS0168", "CS0103"], diagnostics.Select(d => d.Code));
+        Assert.Equal(DiagnosticSeverity.Warning, diagnostics[0].Severity);
+        Assert.Equal(DiagnosticSeverity.Error, diagnostics[1].Severity);
+    }
+
     [Theory]
     [InlineData(null, true)]
     [InlineData("{}", true)]

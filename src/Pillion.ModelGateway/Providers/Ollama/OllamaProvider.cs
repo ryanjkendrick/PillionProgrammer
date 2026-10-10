@@ -40,6 +40,19 @@ public sealed class OllamaOptions
     /// <summary>Gets or sets the residency of the autocomplete model (<c>keep_alive</c>). Default -1, kept loaded.</summary>
     public string AutocompleteKeepAlive { get; set; } = "-1";
 
+    /// <summary>
+    /// Gets or sets how long a load of a model may take before the request fails with a message instead of waiting on. Default
+    /// 120 seconds; set <c>"loadTimeoutSeconds"</c> in the provider entry to change it. A cold load of a 7B model from an SSD takes
+    /// about ten seconds, from a hard disk about a minute.
+    /// </summary>
+    public TimeSpan LoadTimeout { get; set; } = TimeSpan.FromSeconds(120);
+
+    /// <summary>Gets or sets how long Ollama may take to unload a model before the request fails. Default 30 seconds (<c>"releaseTimeoutSeconds"</c>).</summary>
+    public TimeSpan ReleaseTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>Gets or sets how often a long load reports that it is still going. Default 5 seconds.</summary>
+    public TimeSpan ProgressInterval { get; set; } = TimeSpan.FromSeconds(5);
+
     /// <summary>Gets the context size for a profile.</summary>
     /// <param name="profile">The profile, or <see langword="null"/>.</param>
     /// <returns>The <c>num_ctx</c> to send.</returns>
@@ -85,8 +98,16 @@ public sealed class OllamaOptions
             }
         }
 
+        options.LoadTimeout = ReadSeconds(settings, "loadTimeoutSeconds", options.LoadTimeout);
+        options.ReleaseTimeout = ReadSeconds(settings, "releaseTimeoutSeconds", options.ReleaseTimeout);
+        options.ProgressInterval = ReadSeconds(settings, "progressIntervalSeconds", options.ProgressInterval);
         return options;
     }
+
+    private static TimeSpan ReadSeconds(ProviderSettings settings, string name, TimeSpan fallback) =>
+        settings.ExtensionData?.TryGetValue(name, out var value) == true && value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var seconds) && seconds > 0
+            ? TimeSpan.FromSeconds(seconds)
+            : fallback;
 }
 
 /// <summary>
@@ -118,7 +139,8 @@ public sealed partial class OllamaProvider : IModelProvider
     /// <param name="catalog">The model catalog, for capabilities Ollama does not report.</param>
     /// <param name="autocompleteModelId">The model routed to autocomplete, kept resident even when used for chat.</param>
     /// <param name="logger">The logger.</param>
-    public OllamaProvider(ProviderSettings settings, HttpClient httpClient, ModelCatalog catalog, string? autocompleteModelId = null, ILogger<OllamaProvider>? logger = null)
+    /// <param name="runtime">Gateway services for residency (progress sink, GPU tier, overrides); <see cref="ProviderRuntime.Default"/> when <see langword="null"/>.</param>
+    public OllamaProvider(ProviderSettings settings, HttpClient httpClient, ModelCatalog catalog, string? autocompleteModelId = null, ILogger<OllamaProvider>? logger = null, ProviderRuntime? runtime = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(httpClient);
@@ -136,6 +158,8 @@ public sealed partial class OllamaProvider : IModelProvider
         {
             _autocompleteModels[autocompleteModelId] = 0;
         }
+
+        Residency = new OllamaResidency(this, runtime ?? ProviderRuntime.Default, _logger);
     }
 
     /// <inheritdoc/>
@@ -152,6 +176,12 @@ public sealed partial class OllamaProvider : IModelProvider
 
     /// <summary>Gets the options.</summary>
     public OllamaOptions Options { get; }
+
+    /// <summary>Gets the residency manager: which models are loaded, with what context, and the rules that keep one resident configuration per model.</summary>
+    internal OllamaResidency Residency { get; }
+
+    /// <summary>Gets the model catalog.</summary>
+    internal ModelCatalog Catalog => _catalog;
 
     /// <summary>Parses an Ollama version string such as <c>0.40.1</c> or <c>0.6.4-rc1</c>.</summary>
     /// <param name="text">The version text.</param>
@@ -289,6 +319,7 @@ public sealed partial class OllamaProvider : IModelProvider
     /// <inheritdoc/>
     public void Dispose()
     {
+        Residency.Dispose();
         _httpClient.Dispose();
         _versionGate.Dispose();
     }
@@ -304,6 +335,14 @@ public sealed partial class OllamaProvider : IModelProvider
 
         return _autocompleteModels.ContainsKey(modelId) ? Options.AutocompleteKeepAlive : Options.ChatKeepAlive;
     }
+
+    /// <summary>Determines whether a model is the one routed to autocomplete (or has served a completion), which stays resident.</summary>
+    internal bool IsCompletionModel(string modelId) =>
+        _autocompleteModels.Keys.Any(id => ModelInventory.ModelIdsEqual(id, modelId));
+
+    /// <summary>Gets the context window of a model: what <c>/api/show</c> reported when the model was listed, else the catalog.</summary>
+    internal int ContextWindowOf(string modelId) =>
+        _shown.TryGetValue(modelId, out var known) ? known.Capabilities.ContextWindow : _catalog.GetCapabilities(modelId, IsLocal).ContextWindow;
 
     internal OllamaHttp Http => _http;
 
@@ -408,7 +447,7 @@ public sealed class OllamaProviderFactory : IModelProviderFactory
         var client = new HttpClient(_handlerFactory(), disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan };
         try
         {
-            return new OllamaProvider(settings, client, context.Catalog, context.AutocompleteModelId, context.LoggerFactory.CreateLogger<OllamaProvider>());
+            return new OllamaProvider(settings, client, context.Catalog, context.AutocompleteModelId, context.LoggerFactory.CreateLogger<OllamaProvider>(), context.Runtime);
         }
         catch
         {

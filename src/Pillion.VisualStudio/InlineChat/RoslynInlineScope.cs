@@ -15,7 +15,7 @@ namespace Pillion.VisualStudio.InlineChat;
 
 /// <summary>
 /// Inline chat's use of the Roslyn workspace, for C# and Visual Basic: the member that encloses the caret (the inline
-/// chat scope when nothing is selected) and the compiler diagnostics on the scope's lines (attached for <c>/fix</c>).
+/// chat scope when nothing is selected) and the compiler diagnostics on the scope's lines (attached for <c>/fix</c> when the IDE signals service is not available).
 /// Roslyn is supplied by Visual Studio at run time; the extension compiles against Microsoft.CodeAnalysis.Workspaces.Common
 /// without shipping it, and finds the one editor entry point, <c>GetOpenDocumentInCurrentContextWithChanges</c>, by
 /// reflection (as the autocomplete pipeline does). When anything is missing the callers fall back: the scope becomes
@@ -115,8 +115,6 @@ internal static class RoslynInlineScope
     /// <returns>The diagnostics, or an empty list when Roslyn has no document for the snapshot.</returns>
     public static async Task<IReadOnlyList<InlineEditDiagnostic>> GetDiagnosticsAsync(ITextSnapshot snapshot, int start, int end, CancellationToken cancellationToken)
     {
-        // TODO(1.11): read the Error List and Roslyn diagnostics through the IDE signals service once it is on develop,
-        // so /fix also sees analyzer and build diagnostics; until then only the compiler's are read, here.
         if (GetDocument is not { } getDocument || getDocument(snapshot) is not { } document)
         {
             return [];

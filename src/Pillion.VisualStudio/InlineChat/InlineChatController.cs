@@ -23,6 +23,7 @@ using Microsoft.VisualStudio.Threading;
 using Pillion.VisualStudio.Autocomplete;
 using Pillion.VisualStudio.Core;
 using Pillion.VisualStudio.Core.InlineChat;
+using Pillion.VisualStudio.Core.Signals;
 
 namespace Pillion.VisualStudio.InlineChat;
 
@@ -293,9 +294,13 @@ internal sealed class InlineChatController : IInlineChatEditor, IDisposable
             History = _feature.History,
             Availability = _feature.Availability,
         };
-        if (RoslynInlineScope.Supports(document.LanguageId))
+        // /fix: the IDE signals service (Error List and Roslyn diagnostics of the active document) when the package has it,
+        // else the compiler's diagnostics read from Roslyn here, for C# and Visual Basic.
+        var signals = Package.GetGlobalService(typeof(IIdeSignals)) as IIdeSignals;
+        var roslyn = RoslynInlineScope.Supports(document.LanguageId);
+        if (signals is not null || roslyn)
         {
-            options.Diagnostics = token => RoslynInlineScope.GetDiagnosticsAsync(snapshot, scope.Start, scope.End, token);
+            options.Diagnostics = token => ReadDiagnosticsAsync(signals, roslyn, snapshot, scope, token);
         }
 
         var session = new InlineChatSession(_feature.Connection, _feature.JoinableTaskFactory, document, this, options);
@@ -326,6 +331,31 @@ internal sealed class InlineChatController : IInlineChatEditor, IDisposable
         EnsureScopeVisible();
         control.FocusPrompt();
         _feature.Log.Info("inlinechat.opened", "Inline chat opened.", ("scope", scope.Kind.ToString()), ("lines", scope.LineCount), ("language", document.LanguageId));
+    }
+
+    private async Task<IReadOnlyList<Contracts.InlineEditDiagnostic>> ReadDiagnosticsAsync(
+        IIdeSignals? signals, bool roslyn, ITextSnapshot snapshot, InlineScope scope, CancellationToken token)
+    {
+        if (signals is not null)
+        {
+            try
+            {
+                var found = await signals.GetDiagnosticsAsync(DiagnosticScope.ActiveDocument, token).ConfigureAwait(false);
+                return InlineChatDiagnostics.FromSignals(found, _filePath);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+#pragma warning disable CA1031 // Fall back to Roslyn below.
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                _feature.Log.Debug("inlinechat.diagnostics.signals_failed", "The IDE signals could not list the diagnostics.", ("error", ex.GetType().Name));
+            }
+        }
+
+        return roslyn ? await RoslynInlineScope.GetDiagnosticsAsync(snapshot, scope.Start, scope.End, token).ConfigureAwait(false) : [];
     }
 
     private void Teardown(bool focusView)

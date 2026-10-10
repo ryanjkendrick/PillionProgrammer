@@ -16,4 +16,7 @@ public static class GatewayOptionKeys
 
     /// <summary>An explicit residency for a local runtime (Ollama's <c>keep_alive</c>, for example <c>30m</c> or <c>-1</c>).</summary>
     public const string KeepAlive = "pillion.keepAlive";
+
+    /// <summary>The id of the gateway request, so a local runtime can attach its load and unload progress to it.</summary>
+    public const string RequestId = "pillion.requestId";
 }
