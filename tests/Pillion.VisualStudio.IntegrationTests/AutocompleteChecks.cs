@@ -135,6 +135,56 @@ public static class AutocompleteChecks
     }
 
     /// <summary>
+    /// Asks the view's proposal broker directly, for a failure message: whether any source is registered, whether the
+    /// proposal managers (Pillion's among them) say a proposal may be generated at the caret, and which source answers an
+    /// explicit invocation, and after how long. It makes every source run again, Pillion's included.
+    /// </summary>
+    /// <param name="view">The view.</param>
+    /// <param name="timeout">How long to wait for the sources.</param>
+    /// <param name="cancellationToken">Cancels the probe.</param>
+    /// <returns>One line.</returns>
+    public static async Task<string> ProbeBrokerAsync(IWpfTextView view, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        var componentModel = (IComponentModel)Package.GetGlobalService(typeof(SComponentModel));
+        var provider = componentModel.DefaultExportProvider.GetExportedValueOrDefault<Microsoft.VisualStudio.Language.Proposals.ProposalBrokerProviderBase>();
+        if (provider is null)
+        {
+            return "broker: no proposal broker provider";
+        }
+
+        var broker = provider.GetProposalBroker(view);
+        var caret = view.Caret.Position.VirtualBufferPosition;
+        var text = new System.Text.StringBuilder("broker: sources registered ")
+            .Append(broker.AnyProposalSources)
+            .Append(", managers allow a proposal at the caret ")
+            .Append(broker.ShouldGenerateProposal(caret, Microsoft.VisualStudio.Language.Proposals.ProposalScenario.TypeChar, ' '));
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        limit.CancelAfter(timeout);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var requestsBefore = CannedRequestCount;
+        try
+        {
+            var queue = broker.RequestProposals(caret, null!, Microsoft.VisualStudio.Language.Proposals.ProposalScenario.ExplicitInvocation, '\0', TimeSpan.Zero, limit.Token);
+            while (true)
+            {
+                var collection = await queue.DequeueAsync(limit.Token).ConfigureAwait(true);
+                _ = text.Append("; ").Append(collection.SourceName).Append(" answered after ").Append(clock.ElapsedMilliseconds).Append(" ms with ").Append(collection.Proposals.Count).Append(" proposal(s)");
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            _ = text.Append("; no further answer within ").Append(timeout.TotalSeconds.ToString("0", System.Globalization.CultureInfo.InvariantCulture)).Append(" s");
+        }
+        catch (InvalidOperationException)
+        {
+            _ = text.Append("; every source has answered");
+        }
+
+        return text.Append("; canned requests caused by the probe: ").Append(CannedRequestCount - requestsBefore).ToString();
+    }
+
+    /// <summary>
     /// Gets a value indicating whether Pillion's adapter has created its state for a view, which it does the first time the
     /// proposal broker asks Pillion's proposal source or manager provider about the view.
     /// </summary>

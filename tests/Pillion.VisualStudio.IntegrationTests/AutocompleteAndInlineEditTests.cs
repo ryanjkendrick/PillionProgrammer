@@ -239,8 +239,10 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
 
             if (clock.Elapsed > timeout)
             {
+                var state = AutocompleteChecks.DescribeState(view);
+                var broker = await AutocompleteChecks.ProbeBrokerAsync(view, TimeSpan.FromSeconds(5), HangMitigatingCancellationToken);
                 throw new TimeoutException(
-                    $"Timed out after {timeout.TotalSeconds:0} s waiting for {what}. {AutocompleteChecks.DescribeState(view)}; {watch.Describe()}.");
+                    $"Timed out after {timeout.TotalSeconds:0} s waiting for {what}. {state}; {watch.Describe()}; {broker}.");
             }
 
             _ = await Task.WhenAny(shown, Task.Delay(250, HangMitigatingCancellationToken)).ConfigureAwait(true);
