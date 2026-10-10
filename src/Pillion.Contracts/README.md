@@ -7,7 +7,8 @@ into both processes.
 ## What lives here
 
 - Service interfaces. VSIX to host: `IModelService`, `IInlineEditService`, `IContextService`, `IAgentService`,
-  `ISettingsService`, `IHostLifecycleService`. Host to VSIX: `IEditorService`, `IApprovalService`, `IWorkspaceQueryService`.
+  `ISettingsService`, `IHostLifecycleService`, `IDiagnosticsService`. Host to VSIX: `IEditorService`, `IApprovalService`,
+  `IWorkspaceQueryService`.
 - The DTOs those interfaces exchange, the shared enums, `PillionError` / `PillionRpcException`, and
   `ContractVersion`.
 
@@ -88,6 +89,10 @@ Additive only, batched with the other phase 1 contract additions into one minor 
   shape tests are unchanged, and a 1.1 client that registers no handler ignores it. See the host README.
 - Setting `routing.thinkHarder` (boolean, default `false`) in `settings.json`; it is read through
   `ISettingsService`, so no DTO changes.
+- **Autocomplete telemetry (work item 1.5).** New service `IDiagnosticsService` (VSIX to host, read-only) with `GetAutocompleteCountersAsync`, returning the new DTO
+  `AutocompleteHostCounters`: the gateway's autocomplete counters since the host started (requests, cache hits,
+  type-through hits, misses, hit rate) and, over the Outbound log's last five minutes, the p50 and p95 time to first
+  token and total duration and the prompt tokens counted versus estimated. Counts and durations only (work item 1.5).
 
 ### 1.1 (phase 0, wave 3)
 
