@@ -184,32 +184,42 @@ public class SignalsTests
     }
 
     [Fact]
-    public async Task Events_AreRaisedInTheOrderTheyWereReported_OffTheCallersThread()
+    public async Task Events_AreRaisedInTheOrderTheyWereReported_AndNeverInsideTheNotifyCall()
     {
         var clock = new SignalsClock();
         using var hub = new IdeSignalsHub(clock, null);
+        using var release = new ManualResetEventSlim();
         var seen = new List<string>();
-        var threads = new List<int>();
         void Note(string text)
         {
             lock (seen)
             {
                 seen.Add(text);
-                threads.Add(Environment.CurrentManagedThreadId);
             }
         }
 
+        // The first listener holds the queue until the test lets it go. If the hub raised events inside the Notify call (on the
+        // caller's stack), that call would sit here and the listener would have finished before the assertion below. Comparing
+        // thread ids instead is not a valid check: a caller that is a thread-pool thread is free to run the queued work as
+        // soon as it yields, so it can legitimately be the thread that raises the events.
+        hub.DocumentOpened += (_, e) =>
+        {
+            _ = release.Wait(TimeSpan.FromSeconds(30));
+            Note("opened " + e.Path);
+        };
         hub.BuildStarted += (_, _) => Note("started");
         hub.BuildStateChanged += (_, e) => Note("state " + e.IsBuilding);
         hub.BuildFinished += (_, e) => Note($"finished {e.Success} {e.ProjectCount} {e.Duration.TotalSeconds:0}");
-        hub.DocumentOpened += (_, e) => Note("opened " + e.Path);
         hub.DocumentSaved += (_, e) => Note("saved " + e.Path);
         hub.DocumentClosed += (_, e) => Note("closed " + e.Path);
         hub.ActiveDocumentChanged += (_, e) => Note("active " + (e.Path ?? "none"));
 
-        // The notifications below are synchronous, so the caller's thread is busy while events are raised.
-        var callerThread = Environment.CurrentManagedThreadId;
         hub.NotifyDocumentOpened(@"C:\a.cs");
+        lock (seen)
+        {
+            Assert.Empty(seen);
+        }
+
         hub.NotifyActiveDocumentChanged(@"C:\a.cs");
         hub.NotifyBuildStarted();
         hub.NotifyProjectBuildStarted();
@@ -218,12 +228,17 @@ public class SignalsTests
         hub.NotifyBuildFinished(success: false);
         hub.NotifyDocumentSaved(@"C:\a.cs");
         hub.NotifyDocumentClosed(@"C:\a.cs");
+        lock (seen)
+        {
+            Assert.Empty(seen);
+        }
+
+        release.Set();
         await hub.WhenIdleAsync();
 
         Assert.Equal(
             ["opened C:\\a.cs", "active C:\\a.cs", "started", "state True", "finished False 2 7", "state False", "saved C:\\a.cs", "closed C:\\a.cs"],
             seen);
-        Assert.DoesNotContain(callerThread, threads);
         Assert.Null(hub.ActiveDocumentPath);
     }
 
@@ -477,5 +492,46 @@ public class SignalsTests
         hub.Output = new FakeOutput(null);
         Assert.Null(await hub.GetOutputPaneTextAsync("Tests", 200, CancellationToken.None));
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => hub.GetOutputPaneTextAsync("Build", 0, CancellationToken.None));
+    }
+
+    [Fact]
+    public void DisconnectSteps_RunNewestFirst_OnlyOnce_AndAFailingStepDoesNotStopTheOthers()
+    {
+        var order = new List<string>();
+        var steps = new DisconnectSteps();
+        steps.Add("first", () => order.Add("first"));
+        steps.Add("broken", DereferenceNull); // What the Error List table control did at shutdown.
+        steps.Add("last", () => order.Add("last"));
+
+        var failed = steps.RunAll(log: null);
+        var again = steps.RunAll(log: null);
+
+        Assert.Equal(1, failed);
+        Assert.Equal(0, again);
+        Assert.Equal(["last", "first"], order);
+        Assert.Equal(0, steps.Count);
+    }
+
+    [Fact]
+    public void DisconnectSteps_LogTheFailedStepByName_WithoutThrowing()
+    {
+        var lines = new List<string>();
+        var log = new PillionLog(directory: null) { Sink = line => { lock (lines) { lines.Add(line); } } };
+        var steps = new DisconnectSteps();
+        steps.Add("the Error List", DereferenceNull);
+
+        Assert.Equal(1, steps.RunAll(log));
+
+        var line = Assert.Single(lines);
+        Assert.Contains("signals.dispose.failed", line, StringComparison.Ordinal);
+        Assert.Contains("the Error List", line, StringComparison.Ordinal);
+        Assert.Contains("NullReferenceException", line, StringComparison.Ordinal);
+    }
+
+    // A real NullReferenceException, as thrown when Visual Studio has already torn the object down.
+    private static void DereferenceNull()
+    {
+        string? text = null;
+        _ = text!.Length;
     }
 }
