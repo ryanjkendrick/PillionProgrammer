@@ -420,12 +420,20 @@ public static class GateScenarioChecks
 
                 if (take == 0)
                 {
+                    // Keystrokes follow a fixed schedule (one every CharacterDelay from the start of the line), as a typist's
+                    // fingers do: a keystroke the UI thread lets start late does not push the later ones back.
+                    var due = Ms(Stopwatch.GetTimestamp());
                     foreach (var c in Snippet[line].Trim())
                     {
-                        var asked = Stopwatch.GetTimestamp();
-                        await Task.Delay(options.CharacterDelay, cancellationToken).ConfigureAwait(true);
+                        due += options.CharacterDelay.TotalMilliseconds;
+                        var wait = due - Ms(Stopwatch.GetTimestamp());
+                        if (wait > 0)
+                        {
+                            await Task.Delay(TimeSpan.FromMilliseconds(wait), cancellationToken).ConfigureAwait(true);
+                        }
+
                         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-                        lateness.Add(Math.Max(0, Ms(Stopwatch.GetTimestamp() - asked) - options.CharacterDelay.TotalMilliseconds));
+                        lateness.Add(Math.Max(0, Ms(Stopwatch.GetTimestamp()) - due));
 
                         if (DismissCompletionBefore(view, broker, c))
                         {
@@ -624,8 +632,9 @@ public static class GateScenarioChecks
                 ["failed"] = host.Failed - hostBefore.Failed,
                 ["cancelled"] = host.Cancelled - hostBefore.Cancelled,
                 ["dropped"] = host.Dropped - hostBefore.Dropped,
-                ["promptCountedRequests"] = host.PromptCountedRequests - hostBefore.PromptCountedRequests,
-                ["promptEstimatedRequests"] = host.PromptEstimatedRequests - hostBefore.PromptEstimatedRequests,
+                // These two are counts over the host's five-minute window, not totals since the host started.
+                ["promptCountedRequestsInWindow"] = host.PromptCountedRequests,
+                ["promptEstimatedRequestsInWindow"] = host.PromptEstimatedRequests,
                 ["promptTokensCounted"] = host.PromptTokensCounted - hostBefore.PromptTokensCounted,
                 ["promptTokensEstimated"] = host.PromptTokensEstimated - hostBefore.PromptTokensEstimated,
                 ["promptTokensMax"] = host.PromptTokensMax,

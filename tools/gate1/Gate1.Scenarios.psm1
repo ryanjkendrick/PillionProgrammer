@@ -81,12 +81,14 @@ function Invoke-DotnetTestRun {
     dotnet test with TRX files into $ResultsDir; returns counts per project, totals, failed and skipped names, and every
     result (for reading the measurement lines tests print).
     #>
-    param([Parameter(Mandatory)][string]$RepoRoot, [Parameter(Mandatory)][string[]]$Targets, [Parameter(Mandatory)][string]$Filter, [Parameter(Mandatory)][string]$ResultsDir, [Parameter(Mandatory)][string]$LogPath, [switch]$NoBuild)
+    param([Parameter(Mandatory)][string]$RepoRoot, [Parameter(Mandatory)][string[]]$Targets, [Parameter(Mandatory)][string]$Filter, [Parameter(Mandatory)][string]$ResultsDir, [Parameter(Mandatory)][string]$LogPath, [switch]$NoBuild, [switch]$Serial)
     New-Item -ItemType Directory -Force -Path $ResultsDir | Out-Null
     $codes = @()
     foreach ($target in $Targets) {
         $testArgs = @('test', $target, '-c', 'Release', '--filter', $Filter, '--logger', 'trx', '--results-directory', $ResultsDir)
         if ($NoBuild) { $testArgs += '--no-build' }
+        # Live tests share one Ollama: classes running side by side would load models over each other's measurements.
+        if ($Serial) { $testArgs += @('--', 'xUnit.ParallelizeTestCollections=false') }
         Push-Location $RepoRoot
         try { & dotnet @testArgs 2>&1 | Out-File -LiteralPath $LogPath -Encoding utf8 -Append; $codes += $LASTEXITCODE }
         finally { Pop-Location }
@@ -543,7 +545,16 @@ function New-Gate1Table {
     $cost = $Data['cost']
     $pkg = Get-Value $Data 'ide.packageLoad'
     if ($cost) {
-        & $add 'VSIX cost in devenv.exe' '0 ms blocking at start-up, under 50 ms total UI-thread CPU, added working set 60 MB or less' "on/off launches: UI thread CPU delta $($cost.uiCpuDeltaMs) ms (medians $($cost.uiCpuMedianOnMs) / $($cost.uiCpuMedianOffMs) ms), working set delta $($cost.workingSetDeltaMB) MB (medians $($cost.workingSetMedianOnMB) / $($cost.workingSetMedianOffMB) MB); in-process: $pkg; the package loads in the background (AsyncPackage, no blocking load)" $(if ($null -ne $cost.uiCpuDeltaMs -and $cost.uiCpuDeltaMs -lt 50 -and $cost.workingSetDeltaMB -le 60) { 'Pass' } else { 'Fail' }) 'Extension on against off launches (devenv initial thread CPU, working set after 60 s); PackageLoad_UsesLittleUiThreadCpu'
+        # The launches resolve the working set well but not 50 ms of UI-thread CPU (launch to launch, devenv's initial thread
+        # varies by a few hundred milliseconds), so the CPU budget is judged on the in-process figure: the UI thread's CPU
+        # from "Begin package load" to Ready, less the idle baseline scaled to the same length. That is an upper bound for
+        # Pillion's share, because Visual Studio's own work on the thread in that window is counted too.
+        $loadCpu = $null
+        if ($pkg -match 'to Ready: (\d+) ms over (\d+) ms;.*idle baseline after Ready: (\d+) ms over (\d+) ms') {
+            $loadCpu = [math]::Round([double]$Matches[1] - [double]$Matches[3] * [double]$Matches[2] / [math]::Max(1, [double]$Matches[4]))
+        }
+        $cpuOk = $null -ne $loadCpu -and $loadCpu -lt 50
+        & $add 'VSIX cost in devenv.exe' '0 ms blocking at start-up, under 50 ms total UI-thread CPU, added working set 60 MB or less' "in-process: $pkg => about $loadCpu ms above idle (an upper bound); on/off launches: working set delta $($cost.workingSetDeltaMB) MB (medians $($cost.workingSetMedianOnMB) / $($cost.workingSetMedianOffMB) MB), UI thread CPU delta $($cost.uiCpuDeltaMs) ms (medians $($cost.uiCpuMedianOnMs) / $($cost.uiCpuMedianOffMs) ms; within launch-to-launch noise); the package loads in the background (AsyncPackage, Begin and End package load after the folder opened)" $(if ($cpuOk -and $null -ne $cost.workingSetDeltaMB -and $cost.workingSetDeltaMB -le 60) { 'Pass' } else { 'Fail' }) 'PackageLoad_UsesLittleUiThreadCpu (UI thread sampled every 10 ms); extension on against off launches (working set after 60 s)'
     }
     else { & $add 'VSIX cost in devenv.exe' '0 ms blocking, under 50 ms UI-thread CPU, 60 MB or less' "in-process: $pkg; launches not run" 'Not measured' '' }
 

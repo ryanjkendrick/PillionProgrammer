@@ -194,7 +194,7 @@ else {
                     # made resident again at the end of the run (step n), and the IDE scenarios warm their models up.
                     $unloaded = @(Clear-OllamaResidentModels -Endpoint $OllamaEndpoint)
                     $targets = @('tests\Pillion.ModelGateway.Tests\Pillion.ModelGateway.Tests.csproj', 'tests\Pillion.Host.Tests\Pillion.Host.Tests.csproj')
-                    $r = Invoke-DotnetTestRun -RepoRoot $repo -Targets $targets -Filter 'Category=Live' -ResultsDir (Join-Path $runDir 'tests-live') -LogPath (Join-Path $runDir 'test-live.log') -NoBuild
+                    $r = Invoke-DotnetTestRun -RepoRoot $repo -Targets $targets -Filter 'Category=Live' -ResultsDir (Join-Path $runDir 'tests-live') -LogPath (Join-Path $runDir 'test-live.log') -NoBuild -Serial
                     $script:live = $r
                     $perProject = ($r.Projects.Keys | ForEach-Object { '{0} {1}/{2}/{3}' -f $_, $r.Projects[$_].passed, $r.Projects[$_].failed, $r.Projects[$_].skipped }) -join '; '
                     [ordered]@{
@@ -342,9 +342,15 @@ finally {
                 if ($vs) { $deployedInCostHive = [bool](Find-DeployedExtension -ExpHive (Join-Path $env:LOCALAPPDATA "Microsoft\VisualStudio\$($vs.Major).0_$($vs.InstanceId)$CostRootSuffix")) }
                 $d['extensionFolderInCostHive'] = $deployedInCostHive
                 # Leave the strong model resident (keep_alive -1), as the developer's machine had it.
+                # Only when it is not resident already: a load request with another context size would make Ollama wait for
+                # a second instance that does not fit beside the first (decision log, 2026-10-10), so the load asks for the
+                # 4,096 tokens Pillion's residency gives the 7B model on this 8 GB tier.
                 try {
-                    $body = @{ model = $StrongModel; keep_alive = -1 } | ConvertTo-Json
-                    Invoke-RestMethod -Uri "$OllamaEndpoint/api/generate" -Method Post -Body $body -ContentType 'application/json' -TimeoutSec 120 | Out-Null
+                    $resident = @((Invoke-RestMethod -Uri "$OllamaEndpoint/api/ps" -TimeoutSec 10).models | ForEach-Object { $_.name })
+                    if ($resident -notcontains $StrongModel) {
+                        $body = @{ model = $StrongModel; keep_alive = -1; options = @{ num_ctx = 4096 } } | ConvertTo-Json
+                        Invoke-RestMethod -Uri "$OllamaEndpoint/api/generate" -Method Post -Body $body -ContentType 'application/json' -TimeoutSec 180 | Out-Null
+                    }
                     $d['residentAtEnd'] = @((Invoke-RestMethod -Uri "$OllamaEndpoint/api/ps" -TimeoutSec 10).models | ForEach-Object { "$($_.name) (expires $($_.expires_at))" })
                 }
                 catch { $d['residentAtEnd'] = "could not ask Ollama: $($_.Exception.Message)" }
