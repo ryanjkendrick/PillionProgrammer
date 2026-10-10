@@ -493,6 +493,10 @@ internal sealed class InlineChatController : IInlineChatEditor, IDisposable
                     try
                     {
                         _diff = new InlineDiffPresenter(_services, _view.TextBuffer.ContentType, original, _view);
+                        if (_diff.FixedHeight)
+                        {
+                            _feature.Log.Debug("inlinechat.diff.fixed_height", "The difference viewer scrolls to the first change when resized; its height is fixed.");
+                        }
                     }
 #pragma warning disable CA1031 // Without a difference view the proposal still streams; the failure is logged.
                     catch (Exception ex)

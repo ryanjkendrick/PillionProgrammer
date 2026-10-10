@@ -19,7 +19,7 @@ internal sealed class InlineChatEditorServices
     /// <summary>The name of the adornment layer that highlights the scope, below the text.</summary>
     public const string ScopeLayer = "PillionInlineChatScope";
 
-    /// <summary>The text view role of the inline difference view, so only Pillion's +/- margin attaches to it.</summary>
+    /// <summary>The text view role of Pillion's inline difference view, so editor parts can tell it apart from document views.</summary>
     public const string DiffViewRole = "PILLIONINLINEDIFF";
 
     // MEF exports the two layer definitions from these fields; the editor reads them, this code never assigns them.
@@ -48,6 +48,7 @@ internal sealed class InlineChatEditorServices
     /// <param name="undoHistories">The undo histories of text buffers.</param>
     /// <param name="documents">Maps buffers to their files.</param>
     /// <param name="formatMaps">The editor's colours.</param>
+    /// <param name="editorOptions">Creates editor options.</param>
     [ImportingConstructor]
     public InlineChatEditorServices(
         IVsEditorAdaptersFactoryService adapters,
@@ -57,7 +58,8 @@ internal sealed class InlineChatEditorServices
         ITextEditorFactoryService editors,
         ITextUndoHistoryRegistry undoHistories,
         ITextDocumentFactoryService documents,
-        IEditorFormatMapService formatMaps)
+        IEditorFormatMapService formatMaps,
+        IEditorOptionsFactoryService editorOptions)
     {
         Adapters = adapters;
         Buffers = buffers;
@@ -67,6 +69,7 @@ internal sealed class InlineChatEditorServices
         UndoHistories = undoHistories;
         Documents = documents;
         FormatMaps = formatMaps;
+        EditorOptions = editorOptions;
     }
 
     /// <summary>Gets the adapter service.</summary>
@@ -92,4 +95,7 @@ internal sealed class InlineChatEditorServices
 
     /// <summary>Gets the format map service.</summary>
     public IEditorFormatMapService FormatMaps { get; }
+
+    /// <summary>Gets the editor options factory.</summary>
+    public IEditorOptionsFactoryService EditorOptions { get; }
 }

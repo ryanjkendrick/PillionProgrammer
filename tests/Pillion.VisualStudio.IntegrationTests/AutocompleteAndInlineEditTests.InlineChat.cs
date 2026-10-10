@@ -97,7 +97,24 @@ public sealed partial class AutocompleteAndInlineEditTests
         var scope = InlineChatChecks.SelectLines(view, 4, 8);
         _openedVersion = view.TextBuffer.CurrentSnapshot.Version.VersionNumber;
 
-        await TestServices.Shell.ExecuteCommandAsync("Tools.PillionInlineChat", HangMitigatingCancellationToken);
+        // The package loads in the background and adds its commands at the end of its initialization, which can still be
+        // running when IsPackageLoaded says it is loaded: try the command until it is there.
+        await WaitUntilAsync(
+            async () =>
+            {
+                try
+                {
+                    await TestServices.Shell.ExecuteCommandAsync("Tools.PillionInlineChat", HangMitigatingCancellationToken);
+                    return true;
+                }
+                catch (System.Runtime.InteropServices.COMException ex)
+                {
+                    Output.WriteLine($"Tools.PillionInlineChat not available yet: {ex.Message}");
+                    return false;
+                }
+            },
+            TimeSpan.FromSeconds(30),
+            "the Tools.PillionInlineChat command").ConfigureAwait(true);
         var prompt = await InlineChatChecks.WaitForPromptAsync(view, TimeSpan.FromSeconds(30), HangMitigatingCancellationToken);
         await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
         InlineChatChecks.Send(prompt, "add a comment");

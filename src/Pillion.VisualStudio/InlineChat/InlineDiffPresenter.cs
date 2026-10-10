@@ -14,8 +14,9 @@ namespace Pillion.VisualStudio.InlineChat;
 /// <summary>
 /// The proposal shown as an inline difference view (design section 5; work item 1.7): a difference buffer over two
 /// private buffers, the scope's text on the left and the proposal on the right, shown by an <see cref="IWpfDifferenceViewer"/>
-/// in <see cref="DifferenceViewMode.Inline"/> mode with the theme's difference colours, and Pillion's +/- margin
-/// (<see cref="InlineDiffMarkerMarginProvider"/>) so changes never depend on colour alone. The document's own buffer is
+/// in <see cref="DifferenceViewMode.Inline"/> mode with the theme's difference colours and the inline view's own + and -
+/// line markers (17.14 and 18.x both draw them), so changes never depend on colour alone; the view's automation name
+/// summarises the change ("3 lines added, 1 line removed") for screen readers. The document's own buffer is
 /// not involved: Roslyn, the file watcher and Live Unit Testing never see the proposal. For <c>/test</c> the left side is
 /// empty, so the new code shows as added lines. Created and used on the UI thread.
 /// </summary>
@@ -29,6 +30,7 @@ internal sealed class InlineDiffPresenter : IDisposable
     private readonly IDifferenceBuffer _difference;
     private readonly IWpfDifferenceViewer _viewer;
     private readonly double _lineHeight;
+    private readonly bool _fixedHeight;
     private string _text = string.Empty;
     private bool _disposed;
 
@@ -53,7 +55,14 @@ internal sealed class InlineDiffPresenter : IDisposable
             PredefinedTextViewRoles.Interactive,
             PredefinedTextViewRoles.Zoomable,
             InlineChatEditorServices.DiffViewRole);
-        _viewer = services.DifferenceViewers.CreateDifferenceView(_difference, roles);
+        // The viewer's own options refuse the Diff/View options ("not valid in this scope"), so they go in parent options
+        // given at creation. ScrollToFirstDiff must be off: with it on, the viewer selects the first change whenever it is
+        // resized, which throws (and takes Visual Studio 17.14 down) while the proposal is still streaming.
+        var parent = services.EditorOptions.CreateOptions();
+        TrySet(parent, DifferenceViewerOptions.ScrollToFirstDiffId, false);
+        TrySet(parent, DifferenceViewerOptions.ShowDiffOverviewMarginId, false);
+        TrySet(parent, DifferenceViewerOptions.HighlightModeId, DifferenceHighlightMode.WholeLine);
+        _viewer = services.DifferenceViewers.CreateDifferenceView(_difference, roles, parent);
         _viewer.ViewMode = DifferenceViewMode.Inline;
         TrySet(_viewer.Options, DifferenceViewerOptions.ShowDiffOverviewMarginId, false);
         TrySet(_viewer.Options, DifferenceViewerOptions.ScrollToFirstDiffId, false);
@@ -76,8 +85,14 @@ internal sealed class InlineDiffPresenter : IDisposable
         AutomationProperties.SetAutomationId(element, "PillionInlineChatDiff");
         AutomationProperties.SetName(element, "Proposed change");
         _difference.SnapshotDifferenceChanged += OnDifferenceChanged;
-        UpdateHeight();
+
+        // Where the option could not be turned off, never resize the viewer after the first layout (see above).
+        _fixedHeight = TryGet(_viewer.Options, DifferenceViewerOptions.ScrollToFirstDiffId, fallback: true);
+        UpdateHeight(Math.Min(MaxVisibleLines, _left.CurrentSnapshot.LineCount + 6));
     }
+
+    /// <summary>Gets a value indicating whether the viewer keeps one height (it scrolls to the first change when resized).</summary>
+    public bool FixedHeight => _fixedHeight;
 
     /// <summary>Gets the element to host in the adornment.</summary>
     public FrameworkElement Element => _viewer.VisualElement;
@@ -172,13 +187,39 @@ internal sealed class InlineDiffPresenter : IDisposable
         }
 
         UpdateHeight();
+
+        // Keep the start of the scope in view: lines added at the top (a doc comment, an extracted call) would otherwise
+        // push the first change above the view's top line.
+        var inline = _viewer.InlineView;
+        if (!inline.IsClosed && !inline.InLayout && inline.TextSnapshot.Length > 0)
+        {
+            inline.DisplayTextLineContainingBufferPosition(new SnapshotPoint(inline.TextSnapshot, 0), 0, ViewRelativePosition.Top);
+        }
+
         Changed?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>Sizes the view to its lines (both sides of every change), up to <see cref="MaxVisibleLines"/>, plus a horizontal scroll bar.</summary>
-    private void UpdateHeight()
+    private static T TryGet<T>(IEditorOptions options, EditorOptionKey<T> key, T fallback)
     {
-        var lines = _difference.CurrentInlineBufferSnapshot?.LineCount ?? Math.Max(1, _left.CurrentSnapshot.LineCount);
+        try
+        {
+            return options.GetOptionValue(key);
+        }
+        catch (ArgumentException)
+        {
+            return fallback;
+        }
+    }
+
+    private void UpdateHeight(int? minimumLines = null)
+    {
+        if (_fixedHeight && !double.IsNaN(_viewer.VisualElement.Height))
+        {
+            return;
+        }
+
+        var lines = Math.Max(_fixedHeight ? minimumLines ?? 0 : 0, _difference.CurrentInlineBufferSnapshot?.LineCount ?? Math.Max(1, _left.CurrentSnapshot.LineCount));
         var shown = Math.Max(1, Math.Min(MaxVisibleLines, lines));
         var height = (shown * _lineHeight) + SystemParameters.HorizontalScrollBarHeight + 6;
         if (Math.Abs(_viewer.VisualElement.Height - height) > 0.5 || double.IsNaN(_viewer.VisualElement.Height))

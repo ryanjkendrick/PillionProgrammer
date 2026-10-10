@@ -216,9 +216,13 @@ public sealed class InlineChatSession : ObservableObject, IDisposable
     public bool HasPromptText => PromptText.Length > 0;
 
     /// <summary>Gets the placeholder shown in the empty prompt.</summary>
-    public string Placeholder => State is InlineChatState.Preview or InlineChatState.Explanation
-        ? "Type to refine; Enter applies, Esc discards"
-        : "Ask Pillion to change this code, or type / for /doc, /test, /fix, /explain";
+    public string Placeholder => State switch
+    {
+        InlineChatState.Preview when Command == InlineEditCommand.Test => "Type to ask again; Esc closes",
+        InlineChatState.Preview => "Type to refine; Enter applies, Esc discards",
+        InlineChatState.Explanation => "Type a new instruction; Enter or Esc closes",
+        _ => "Ask Pillion to change this code, or type / for /doc, /test, /fix, /explain",
+    };
 
     /// <summary>Gets the state.</summary>
     public InlineChatState State
