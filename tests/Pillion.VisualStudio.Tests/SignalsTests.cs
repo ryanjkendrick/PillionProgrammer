@@ -207,6 +207,8 @@ public class SignalsTests
         hub.DocumentClosed += (_, e) => Note("closed " + e.Path);
         hub.ActiveDocumentChanged += (_, e) => Note("active " + (e.Path ?? "none"));
 
+        // The notifications below are synchronous, so the caller's thread is busy while events are raised.
+        var callerThread = Environment.CurrentManagedThreadId;
         hub.NotifyDocumentOpened(@"C:\a.cs");
         hub.NotifyActiveDocumentChanged(@"C:\a.cs");
         hub.NotifyBuildStarted();
@@ -221,7 +223,7 @@ public class SignalsTests
         Assert.Equal(
             ["opened C:\\a.cs", "active C:\\a.cs", "started", "state True", "finished False 2 7", "state False", "saved C:\\a.cs", "closed C:\\a.cs"],
             seen);
-        Assert.DoesNotContain(Environment.CurrentManagedThreadId, threads);
+        Assert.DoesNotContain(callerThread, threads);
         Assert.Null(hub.ActiveDocumentPath);
     }
 
