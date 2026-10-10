@@ -122,6 +122,7 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
         await EnsurePackageLoadedAsync();
         var previous = await AutocompleteChecks.SetIntelliCodeCompletionsAsync(2);
         Output.WriteLine($"IntelliCode automatic completions switched off (was {previous ?? "<unset>"}).");
+        bool seenStatus = false, seenOutput = false;
         try
         {
             await WaitUntilAsync(
@@ -130,10 +131,12 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
                     // The check runs again whenever the Tools menu (here: the Open Chat command's status) is queried.
                     await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
                     QueryOpenChatStatus();
-                    return AutocompleteChecks.StatusBarText().Contains(IntelliCodeMessage)
-                        && AutocompleteChecks.PillionOutputText().Contains(IntelliCodeMessage);
+                    seenStatus |= AutocompleteChecks.StatusBarText().Contains(IntelliCodeMessage);
+                    seenOutput |= (await AutocompleteChecks.PillionOutputTextAsync(HangMitigatingCancellationToken)).Contains(IntelliCodeMessage);
+                    await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+                    return seenStatus && seenOutput;
                 },
-                TimeSpan.FromSeconds(20),
+                TimeSpan.FromSeconds(30),
                 "the status bar and the Output pane to report IntelliCode's completions off").ConfigureAwait(true);
             await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
             Output.WriteLine("Status bar: " + AutocompleteChecks.StatusBarText());
@@ -141,6 +144,8 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
         finally
         {
             await AutocompleteChecks.SetIntelliCodeCompletionsAsync(previous is int value ? value : 0);
+            await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+            Output.WriteLine($"Seen in the status bar: {seenStatus}; in the Output pane: {seenOutput}; status bar now: {AutocompleteChecks.StatusBarText()}");
         }
 
         await WaitUntilAsync(

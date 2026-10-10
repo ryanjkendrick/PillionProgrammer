@@ -14,7 +14,6 @@ using Microsoft.VisualStudio.Settings;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text.Editor;
-using Microsoft.VisualStudio.TextManager.Interop;
 using Pillion.Contracts;
 using Pillion.VisualStudio.Core.Autocomplete;
 
@@ -152,20 +151,17 @@ public static class AutocompleteChecks
         return ErrorHandler.Succeeded(statusBar.GetText(out var text)) ? text ?? string.Empty : string.Empty;
     }
 
-    /// <summary>Gets the text of the Pillion Programmer Output pane.</summary>
+    /// <summary>Gets the end of the Pillion Programmer Output pane, through the extension's IDE signals service.</summary>
+    /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns>The text, or an empty string.</returns>
-    public static string PillionOutputText()
+    public static async Task<string> PillionOutputTextAsync(CancellationToken cancellationToken)
     {
-        ThreadHelper.ThrowIfNotOnUIThread();
-        var outputWindow = (IVsOutputWindow)Package.GetGlobalService(typeof(SVsOutputWindow));
-        var paneGuid = new Guid("4b449750-19f6-4492-a222-d4cfe14749fb");
-        if (ErrorHandler.Failed(outputWindow.GetPane(ref paneGuid, out var pane)) || pane is not IVsTextLines lines)
+        if (await AsyncServiceProvider.GlobalProvider.GetServiceAsync(typeof(Pillion.VisualStudio.Core.Signals.IIdeSignals)).ConfigureAwait(false) is not Pillion.VisualStudio.Core.Signals.IIdeSignals signals)
         {
             return string.Empty;
         }
 
-        lines.GetLastLineIndex(out var lastLine, out var lastIndex);
-        return ErrorHandler.Succeeded(lines.GetLineText(0, 0, lastLine, lastIndex, out var text)) ? text ?? string.Empty : string.Empty;
+        return await signals.GetOutputPaneTextAsync("Pillion Programmer", 20000, cancellationToken).ConfigureAwait(false) ?? string.Empty;
     }
 
     private static SuggestionServiceBase? Suggestions()
