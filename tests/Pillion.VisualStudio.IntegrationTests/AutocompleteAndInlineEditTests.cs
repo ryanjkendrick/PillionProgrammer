@@ -34,8 +34,7 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
             var original = await TypeStatementPrefixAsync(view, line: 6);
             await WaitForPillionProposalAsync(view, "Pillion's proposal after typing");
 
-            await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
-            AutocompleteChecks.Exec(view, VSConstants.VSStd2KCmdID.TAB);
+            await AcceptSuggestionAsync(view);
             var accepted = view.TextBuffer.CurrentSnapshot.GetLineFromLineNumber(6).GetText();
             Output.WriteLine($"After Tab: {accepted.Trim()}");
             Assert.Equal("        var total = " + AutocompleteChecks.CannedCompletion, accepted);
@@ -77,8 +76,8 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
             view.Caret.MoveTo(view.TextSnapshot.GetLineFromLineNumber(6).End);
-            AutocompleteChecks.Type(view, "        Cons");
-            AutocompleteChecks.Exec(view, VSConstants.VSStd2KCmdID.COMPLETEWORD);
+            // Typing a letter opens Roslyn's completion list with the best match selected.
+            AutocompleteChecks.Type(view, "        Con");
             string? selected = null;
             await WaitUntilAsync(
                 async () =>
@@ -91,24 +90,25 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
                 "a completion list with a selected item").ConfigureAwait(true);
             Output.WriteLine($"Completion list open with \"{selected}\" selected.");
 
-            // The canned service answers in about 50 ms; give the editor two seconds to (not) show anything.
+            // The canned service answers in about 50 ms: check every 50 ms for two seconds while the list stays open.
             var checks = 0;
-            for (var i = 0; i < 8; i++)
+            for (var i = 0; i < 40; i++)
             {
-                await Task.Delay(250, HangMitigatingCancellationToken).ConfigureAwait(true);
                 await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
-                if (!AutocompleteChecks.IsCompletionActive(view))
+                if (AutocompleteChecks.SelectedCompletionItem(view) is null)
                 {
                     break;
                 }
 
                 checks++;
                 Assert.False(AutocompleteChecks.IsPillionDisplayed(view), "A Pillion proposal was shown while a completion list had a selected item.");
+                await Task.Delay(50, HangMitigatingCancellationToken).ConfigureAwait(true);
             }
 
+            await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+            Output.WriteLine($"No Pillion proposal in {checks} checks ({checks * 50} ms) while the list had a selected item; displayed now: {AutocompleteChecks.DisplayedProposalId(view) ?? "nothing"}.");
             AutocompleteChecks.Exec(view, VSConstants.VSStd2KCmdID.CANCEL);
-            Output.WriteLine($"No Pillion proposal in {checks} checks while the list had a selected item.");
-            Assert.True(checks > 0, "The completion list closed before it could be checked.");
+            Assert.True(checks >= 4, "The completion list closed before it could be checked for 200 ms.");
         }
         finally
         {
@@ -152,6 +152,27 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
             },
             TimeSpan.FromSeconds(20),
             "the status bar to clear once the completions are on again").ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Accepts the displayed proposal the way Tab does: Visual Studio 18 binds Tab to <c>Edit.AcceptSuggestion</c> in the
+    /// "Inline Suggestions Active" scope; Visual Studio 2022 (IntelliCode) handles the Tab key command itself.
+    /// </summary>
+    private async Task AcceptSuggestionAsync(IWpfTextView view)
+    {
+        try
+        {
+            await TestServices.Shell.ExecuteCommandAsync("Edit.AcceptSuggestion", HangMitigatingCancellationToken);
+            Output.WriteLine("Accepted with Edit.AcceptSuggestion.");
+        }
+        catch (System.Runtime.InteropServices.COMException ex)
+        {
+            Output.WriteLine($"Edit.AcceptSuggestion: {ex.Message}; sending Tab.");
+            await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+            AutocompleteChecks.Exec(view, VSConstants.VSStd2KCmdID.TAB);
+        }
+
+        await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
     }
 
     private static void QueryOpenChatStatus()
