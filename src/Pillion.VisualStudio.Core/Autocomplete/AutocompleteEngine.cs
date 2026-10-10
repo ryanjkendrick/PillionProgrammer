@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.Threading;
+using System.Threading.Tasks;
 using Pillion.Contracts;
 
 namespace Pillion.VisualStudio.Core.Autocomplete;
@@ -41,6 +42,7 @@ public sealed class AutocompleteEngine
         _availability = availability;
         Log = log;
         Latency = new LatencyWindow(() => clock.UtcNow);
+        Metrics = new AutocompleteMetrics(clock, Latency);
         Failures = new ThrottledLog(log, () => clock.UtcNow);
         Latency.DegradedChanged += (_, degraded) => log?.Info(
             degraded ? "autocomplete.degraded" : "autocomplete.recovered",
@@ -61,6 +63,12 @@ public sealed class AutocompleteEngine
     /// <summary>Gets the latency window (p50, p95 and the degradation state).</summary>
     public LatencyWindow Latency { get; }
 
+    /// <summary>
+    /// Gets the measurements (work item 1.5): outcomes, acceptance and show rates, times to first chunk and suggestion.
+    /// The percentiles and the degradation state it reports are read from <see cref="Latency"/>.
+    /// </summary>
+    public AutocompleteMetrics Metrics { get; }
+
     /// <summary>Gets the recent edits.</summary>
     public EditTracker Edits { get; } = new();
 
@@ -75,6 +83,31 @@ public sealed class AutocompleteEngine
 
     /// <summary>Gets a value indicating whether the host can take requests now.</summary>
     public bool HostUsable => Connection.State is HostState.Ready or HostState.Degraded;
+
+    /// <summary>Asks the host for its autocomplete counters (cache hits, host-side latencies). Never throws.</summary>
+    /// <param name="timeout">How long to wait for the host.</param>
+    /// <param name="cancellationToken">A token that cancels the call.</param>
+    /// <returns>The counters, or <see langword="null"/> when the host is not ready, is too old to know the call or does not answer in time.</returns>
+    public async Task<AutocompleteHostCounters?> TryGetHostCountersAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        if (!HostUsable)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            linked.CancelAfter(timeout);
+            return await Connection.GetProxy<IDiagnosticsService>().GetAutocompleteCountersAsync(linked.Token).ConfigureAwait(false);
+        }
+#pragma warning disable CA1031 // Host numbers are a courtesy next to the extension's own; any failure just leaves them out.
+        catch (Exception)
+#pragma warning restore CA1031
+        {
+            return null;
+        }
+    }
 
     /// <summary>Creates the session for one text view.</summary>
     /// <returns>The session.</returns>

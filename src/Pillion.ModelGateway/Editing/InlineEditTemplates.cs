@@ -49,12 +49,12 @@ public sealed partial class InlineEditTemplates
             using var document = JsonDocument.Parse(json);
             var root = document.RootElement;
             var result = new InlineEditTemplates(
-                Read(root, "system", "edit", "test", "explain"),
+                Read(root, "system", "edit", "editWhole", "test", "explain"),
                 Read(root, "commands", "none", "doc", "test", "fix", "explain"),
                 Read(root, "docStyles", "default"),
                 Read(root, "languages"),
-                Read(root, "sections", "header", "before", "scope", "proposal", "after", "diagnostics", "history", "task", "instruction"),
-                Read(root, "corrections", "unmatched", "malformed", "noBlocks", "noCode", "docOnly", "syntax", "placeholders"));
+                Read(root, "sections", "header", "before", "scope", "proposal", "after", "diagnostics", "history", "task", "instruction", "wholeReply", "wholeRevised"),
+                Read(root, "corrections", "unmatched", "malformed", "noBlocks", "noCode", "docOnly", "syntax", "placeholders", "noWholeCode", "docOnlyWhole", "syntaxWhole", "placeholdersWhole"));
             return result;
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
@@ -66,13 +66,17 @@ public sealed partial class InlineEditTemplates
     /// <summary>Gets the system prompt for a command.</summary>
     /// <param name="command">The slash command.</param>
     /// <param name="language">The language's display name.</param>
+    /// <param name="wholeScope">
+    /// <see langword="true"/> for the prompt that asks for the whole scope rewritten as plain code instead of edit blocks;
+    /// ignored for <c>/test</c> and <c>/explain</c>, which never edit the scope.
+    /// </param>
     /// <returns>The system prompt.</returns>
-    public string SystemPrompt(InlineEditCommand command, string language) => Render(
+    public string SystemPrompt(InlineEditCommand command, string language, bool wholeScope = false) => Render(
         _system[command switch
         {
             InlineEditCommand.Test => "test",
             InlineEditCommand.Explain => "explain",
-            _ => "edit",
+            _ => wholeScope ? "editWhole" : "edit",
         }],
         ("language", language));
 

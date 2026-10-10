@@ -54,6 +54,65 @@ public sealed partial class InlineEditRpcTests : IDisposable
     }
 
     [Fact]
+    public async Task EditAsync_InWholeScopeMode_StreamsTheRewrittenScope_FromOneModelCall()
+    {
+        var provider = new FakeChatProvider(isLocal: true, _ => Extracted);
+        await using var host = await StartAsync(provider, wholeScopeMaxLines: 80);
+        await using var client = await host.ConnectAndHandshakeAsync();
+        var service = client.Attach<IInlineEditService>();
+
+        var chunks = await CollectAsync(service.EditAsync(Request(), CancellationToken.None), Wait);
+
+        Assert.Equal(Extracted, Assemble(chunks));
+        Assert.True(chunks[^1].IsFinal);
+        Assert.Equal(0, chunks[^1].RejectedBlocks);
+        Assert.True(chunks.Count(c => c.Text.Length > 0) > 1, "The rewrite should stream line by line.");
+        var record = Assert.Single(host.Services.GetRequiredService<IOutboundLog>().GetRecent());
+        Assert.Equal(TaskClass.InlineEdit, record.TaskClass);
+        var sent = Assert.Single(provider.Received);
+        Assert.Contains("Reply with the complete rewritten code to edit", sent[0].Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("SEARCH", sent[0].Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ACloudModel_InWholeScopeMode_SeesPlaceholders_AndTheProposalGetsTheSecretBack()
+    {
+        var key = AwsKey();
+        var provider = new FakeChatProvider(isLocal: false, messages =>
+        {
+            var placeholder = Placeholder().Match(messages[^1].Text).Value;
+            return $"    private static readonly string Key = \"{placeholder}\";\n    public string GetKey() => Key;\n";
+        });
+        await using var host = await StartAsync(provider, wholeScopeMaxLines: 80);
+        await using var client = await host.ConnectAndHandshakeAsync();
+        var service = client.Attach<IInlineEditService>();
+
+        var chunks = await CollectAsync(service.EditAsync(SecretRequest(key), CancellationToken.None), Wait);
+
+        Assert.Equal($"    private static readonly string Key = \"{key}\";\n    public string GetKey() => Key;\n", Assemble(chunks));
+        var sent = Assert.Single(provider.Received);
+        Assert.DoesNotContain(sent, m => m.Text.Contains(key, StringComparison.Ordinal));
+        Assert.Contains("<redacted:aws-access-key>", sent[^1].Text, StringComparison.Ordinal);
+        Assert.False(Assert.Single(host.Services.GetRequiredService<IOutboundLog>().GetRecent()).IsLocal);
+    }
+
+    [Fact]
+    public async Task AnUnusableWholeScopeReply_FallsBackToBlocks_ThroughTheRealGateway()
+    {
+        var replies = new ConcurrentQueue<string>([string.Empty, string.Empty, ExtractReply]);
+        var provider = new FakeChatProvider(isLocal: true, _ => replies.TryDequeue(out var r) ? r : throw new InvalidOperationException());
+        await using var host = await StartAsync(provider, wholeScopeMaxLines: 80);
+        await using var client = await host.ConnectAndHandshakeAsync();
+        var service = client.Attach<IInlineEditService>();
+
+        var chunks = await CollectAsync(service.EditAsync(Request(), CancellationToken.None), Wait);
+
+        Assert.Equal(Extracted, Assemble(chunks));
+        Assert.Equal(3, provider.Received.Count);
+        Assert.Contains("Reply with edit blocks", provider.Received.Last()[0].Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ACloudModel_SeesPlaceholders_AndTheProposalGetsTheSecretBack()
     {
         var key = AwsKey();
@@ -180,8 +239,10 @@ public sealed partial class InlineEditRpcTests : IDisposable
         Instruction = "make the key static readonly",
     };
 
-    private Task<InProcessHost> StartAsync(FakeChatProvider provider) => InProcessHost.StartAsync(services =>
+    /// <summary>Starts the host with whole-scope mode off (the replies of most tests here are edit blocks) unless a limit is given.</summary>
+    private Task<InProcessHost> StartAsync(FakeChatProvider provider, int wholeScopeMaxLines = 0) => InProcessHost.StartAsync(services =>
     {
+        services.Replace(ServiceDescriptor.Singleton(new InlineEditOptions { WholeScopeMaxLines = wholeScopeMaxLines }));
         var settings = new PillionSettings();
         settings.Providers.Add(new ProviderSettings { Id = "fake", Kind = ProviderKind.Mistral, Models = ["fake-coder"] });
         settings.Routing.Profiles[provider.IsLocal ? Profile.LocalStrong : Profile.Balanced] = "fake/fake-coder";

@@ -132,6 +132,72 @@ public sealed class InlineEditPromptTests
         Assert.Contains("```csharp\n12| int x = 1\n```", syntax, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(InlineEditCommand.None)]
+    [InlineData(InlineEditCommand.Doc)]
+    [InlineData(InlineEditCommand.Fix)]
+    public void WholeScope_AsksForTheCompleteRewrittenCode_NotBlocks(InlineEditCommand command)
+    {
+        var messages = Builder.Build(Input(command, "extract it") with { WholeScope = true });
+
+        Assert.Contains("complete rewritten code", messages[0].Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("<<<<<<< SEARCH", messages[0].Content, StringComparison.Ordinal);
+        var user = messages[1].Content;
+        Assert.Contains("11|     public int Add(int a, int b)\n12|         => a + b;", user, StringComparison.Ordinal);
+        Assert.EndsWith("Reply with only the complete rewritten code to edit: plain code, no Markdown fence, no line numbers, no explanation.", user, StringComparison.Ordinal);
+        Assert.DoesNotContain("SEARCH", user, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(InlineEditCommand.Test)]
+    [InlineData(InlineEditCommand.Explain)]
+    public void WholeScope_IsIgnored_ForTestAndExplain(InlineEditCommand command)
+    {
+        var plain = Builder.Build(Input(command, string.Empty));
+        var whole = Builder.Build(Input(command, string.Empty) with { WholeScope = true });
+
+        Assert.Equal(plain[0].Content, whole[0].Content);
+        Assert.Equal(plain[1].Content, whole[1].Content);
+    }
+
+    [Fact]
+    public void WholeScope_Refinement_ShowsTheProposal_AndAsksForTheRevisedCode()
+    {
+        var input = Input(InlineEditCommand.None, "also rename it to Sum") with
+        {
+            Code = "    public int Add(int a, int b)\n        => checked(a + b);\n",
+            IsRefinement = true,
+            History = ["use checked arithmetic"],
+            WholeScope = true,
+        };
+
+        var user = Builder.Build(input)[1].Content;
+
+        Assert.Contains("your earlier proposal for lines 11 to 12", user, StringComparison.Ordinal);
+        Assert.Contains("12|         => checked(a + b);", user, StringComparison.Ordinal);
+        Assert.Contains("Earlier instructions for this code, oldest first:\n1. use checked arithmetic", user, StringComparison.Ordinal);
+        Assert.EndsWith("Reply with only the complete revised code (your earlier proposal with the change made): plain code, no Markdown fence, no line numbers, no explanation.", user, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WholeScopeCorrections_AskForCompleteCode_NotEditBlocks()
+    {
+        var syntax = Builder.Syntax(["line 12: CS1002: ; expected"], "int x = 1\n", 12, "csharp", wholeScope: true);
+        Assert.Contains("Your rewrite introduced syntax errors", syntax, StringComparison.Ordinal);
+        Assert.Contains("```csharp\n12| int x = 1\n```", syntax, StringComparison.Ordinal);
+        Assert.Contains("complete corrected code", syntax, StringComparison.Ordinal);
+
+        var doc = Builder.DocOnly(["'public Order Place(Order order)'"], wholeScope: true);
+        Assert.Contains("Your rewrite changed code", doc, StringComparison.Ordinal);
+        Assert.Contains("'public Order Place(Order order)'", doc, StringComparison.Ordinal);
+
+        var placeholders = Builder.Placeholders(["<redacted:aws-access-key#9>"], wholeScope: true);
+        Assert.Contains("Your rewrite contains <redacted:aws-access-key#9>", placeholders, StringComparison.Ordinal);
+
+        Assert.Contains("no edit blocks", Builder.NoWholeCode(), StringComparison.Ordinal);
+        Assert.DoesNotContain("SEARCH", syntax + doc + placeholders + Builder.NoWholeCode(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Render_IsSinglePass_AndLeavesUnknownPlaceholders()
     {

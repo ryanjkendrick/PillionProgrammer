@@ -83,27 +83,35 @@ public sealed class InlineEditLiveTests(ITestOutputHelper output)
     }
 
     [LiveInlineEditFact(Coder)]
-    public Task Coder_ExtractsTheValidation_IntoCodeThatParses() => ExtractAsync(Coder);
+    public Task Coder_ExtractsTheValidation_IntoCodeThatParses() => ExtractAsync(Coder, InlineEditOptions.DefaultWholeScopeMaxLines);
 
     [LiveInlineEditFact(Coder)]
-    public Task Coder_Doc_AddsADocComment() => DocAsync(Coder);
+    public Task Coder_Doc_AddsADocComment() => DocAsync(Coder, InlineEditOptions.DefaultWholeScopeMaxLines);
+
+    /// <summary>The block format, for comparison with whole-scope mode (the numbers before the refinement).</summary>
+    [LiveInlineEditFact(Coder)]
+    public Task Coder_ExtractsTheValidation_InBlockMode() => ExtractAsync(Coder, wholeScopeMaxLines: 0);
+
+    /// <summary>The block format, for comparison with whole-scope mode (the numbers before the refinement).</summary>
+    [LiveInlineEditFact(Coder)]
+    public Task Coder_Doc_InBlockMode() => DocAsync(Coder, wholeScopeMaxLines: 0);
 
     [LiveInlineEditFact(Gemma)]
-    public Task Gemma_ExtractsTheValidation_IntoCodeThatParses() => ExtractAsync(Gemma);
+    public Task Gemma_ExtractsTheValidation_IntoCodeThatParses() => ExtractAsync(Gemma, InlineEditOptions.DefaultWholeScopeMaxLines);
 
     [LiveInlineEditFact(Gemma)]
-    public Task Gemma_Doc_AddsADocComment() => DocAsync(Gemma);
+    public Task Gemma_Doc_AddsADocComment() => DocAsync(Gemma, InlineEditOptions.DefaultWholeScopeMaxLines);
 
-    private async Task ExtractAsync(string model)
+    private async Task ExtractAsync(string model, int wholeScopeMaxLines)
     {
-        using var live = new LiveEngine(model);
+        using var live = new LiveEngine(model, wholeScopeMaxLines);
         await WarmUpAsync(live);
         var timings = new List<(double First, double Total)>();
         for (var i = 0; i < Runs; i++)
         {
             var (proposal, final, first, total) = await RunAsync(live, Request());
             timings.Add((first, total));
-            output.WriteLine($"Run {i + 1}: first text {first:F0} ms, total {total:F0} ms, rejected blocks {final.RejectedBlocks}, warning {final.Warning ?? "none"}");
+            output.WriteLine($"Run {i + 1}: first text {first:F0} ms, total {total:F0} ms, model calls {live.Recorder.Replies.Count}, rejected blocks {final.RejectedBlocks}, warning {final.Warning ?? "none"}");
             output.WriteLine(proposal);
 
             Assert.Empty(RoslynSyntaxValidator.Instance.GetErrors(Before + proposal + After, "csharp", CancellationToken.None));
@@ -111,19 +119,19 @@ public sealed class InlineEditLiveTests(ITestOutputHelper output)
             Assert.Matches(@"void \w+\(Order \w+\)[\s\S]*void \w+\(Order \w+\)", proposal);
         }
 
-        Report(model, "extract", timings);
+        Report(model, wholeScopeMaxLines > 0 ? "extract (whole scope)" : "extract (blocks)", timings);
     }
 
-    private async Task DocAsync(string model)
+    private async Task DocAsync(string model, int wholeScopeMaxLines)
     {
-        using var live = new LiveEngine(model);
+        using var live = new LiveEngine(model, wholeScopeMaxLines);
         await WarmUpAsync(live);
         var timings = new List<(double First, double Total)>();
         for (var i = 0; i < Runs; i++)
         {
             var (proposal, final, first, total) = await RunAsync(live, Request(string.Empty, InlineEditCommand.Doc));
             timings.Add((first, total));
-            output.WriteLine($"Run {i + 1}: first text {first:F0} ms, total {total:F0} ms, rejected blocks {final.RejectedBlocks}");
+            output.WriteLine($"Run {i + 1}: first text {first:F0} ms, total {total:F0} ms, model calls {live.Recorder.Replies.Count}, rejected blocks {final.RejectedBlocks}");
             output.WriteLine(proposal);
 
             Assert.Contains("/// <summary>", proposal, StringComparison.Ordinal);
@@ -131,7 +139,7 @@ public sealed class InlineEditLiveTests(ITestOutputHelper output)
             Assert.Contains("_store.Add(order);", proposal, StringComparison.Ordinal);
         }
 
-        Report(model, "/doc", timings);
+        Report(model, wholeScopeMaxLines > 0 ? "/doc (whole scope)" : "/doc (blocks)", timings);
     }
 
     private static async Task WarmUpAsync(LiveEngine live)
@@ -197,7 +205,7 @@ public sealed class InlineEditLiveTests(ITestOutputHelper output)
     {
         private readonly ProviderRegistry _registry;
 
-        public LiveEngine(string model)
+        public LiveEngine(string model, int wholeScopeMaxLines)
         {
             var settings = new PillionSettings();
             // On the 8 GB machine the 7B coder is resident for autocomplete at num_ctx 4096 with keep_alive -1, and Ollama
@@ -221,7 +229,12 @@ public sealed class InlineEditLiveTests(ITestOutputHelper output)
             Gateway = new ModelGateway.ModelGateway(_registry, router, inventory, ModelCatalog.Default, PromptTemplates.Default, new AutocompleteCache(options), breakers, new ConcurrencyLimiter(options), new InMemoryOutboundLog(options), new AlwaysReachable(), new NoCostCaps(), new NoProgressSink(), options);
             Gateway.ListModelsAsync(CancellationToken.None).GetAwaiter().GetResult();
             Recorder = new RecordingGateway(Gateway);
-            Engine = new InlineEditEngine(Recorder, new InlineEditPromptBuilder(), RoslynSyntaxValidator.Instance, new InlineEditConversations());
+            Engine = new InlineEditEngine(
+                Recorder,
+                new InlineEditPromptBuilder(),
+                RoslynSyntaxValidator.Instance,
+                new InlineEditConversations(),
+                options: new InlineEditOptions { WholeScopeMaxLines = wholeScopeMaxLines });
         }
 
         public ModelGateway.ModelGateway Gateway { get; }

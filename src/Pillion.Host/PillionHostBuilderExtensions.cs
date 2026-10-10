@@ -91,6 +91,7 @@ internal static class PillionHostBuilderExtensions
         builder.Services.AddSingleton<ModelRpcService>();
         builder.Services.AddRpcTarget<IModelService>(sp => sp.GetRequiredService<ModelRpcService>());
         builder.Services.AddPillionInlineEdit(); // Inline edits (work item 1.8): IInlineEditService over the gateway.
+        builder.Services.AddRpcTarget<IDiagnosticsService, DiagnosticsRpcService>(); // Work item 1.5: read-only autocomplete counters.
 
         // Mentions and context (work item 1.10): IContextService resolves @-mentions; search and indexing arrive in phase 2.
         builder.Services.AddRpcTarget<IContextService, ContextRpcService>();
