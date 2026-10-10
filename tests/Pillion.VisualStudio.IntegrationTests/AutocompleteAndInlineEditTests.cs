@@ -35,6 +35,7 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
             await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
             watch = ProposalWatch.Start(view);
             Assert.True(watch is not null, "Visual Studio has no suggestion service in this instance.");
+            await SettleViewAsync(view, watch!);
             var original = view.TextBuffer.CurrentSnapshot.GetText();
 
             // The last key goes through the view's command chain, as from the keyboard: the broker asks Pillion's source on TypeChar.
@@ -192,6 +193,49 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
         if (ServiceProvider.GlobalProvider.GetService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte)
         {
             _ = dte.Commands.Item("Tools.PillionOpenChat").IsAvailable;
+        }
+    }
+
+    /// <summary>
+    /// Lets the proposal broker finish the request that comes with the view's keyboard focus before the test edits anything.
+    /// The broker asks Pillion's source (scenario 16 in the Pillion log, text version 1, caret 0) as soon as the view has
+    /// focus, and the test gave it focus a few milliseconds before its first edit: the edit cancelled that attempt (Pillion
+    /// cancels an attempt whose text moved on), the broker's request ended with nothing, and the keys typed in the same
+    /// instant never became a request on either Visual Studio (CI runs 38092587221 and 38093720831, the logs in the PR
+    /// description). Waits for the model to be asked (about 250 ms with the canned service, none at all when focus was
+    /// already there), for the proposal that answer shows at caret 0, and dismisses it with Esc.
+    /// </summary>
+    private async Task SettleViewAsync(IWpfTextView view, ProposalWatch watch)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (AutocompleteChecks.CannedRequestCount == 0 && clock.Elapsed < TimeSpan.FromSeconds(3))
+        {
+            await Task.Delay(50, HangMitigatingCancellationToken).ConfigureAwait(true);
+        }
+
+        var asked = AutocompleteChecks.CannedRequestCount > 0;
+        await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+        while (asked && !AutocompleteChecks.IsPillionDisplayed(view) && clock.Elapsed < TimeSpan.FromSeconds(5))
+        {
+            await Task.Delay(50, HangMitigatingCancellationToken).ConfigureAwait(true);
+            await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+        }
+
+        await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+        Output.WriteLine(asked
+            ? $"The view's own request reached the model; {watch.Describe()} (after {clock.ElapsedMilliseconds} ms)."
+            : $"No request reached the model within {clock.ElapsedMilliseconds} ms of the view getting focus.");
+        if (AutocompleteChecks.IsPillionDisplayed(view))
+        {
+            _ = AutocompleteChecks.Exec(view, VSConstants.VSStd2KCmdID.CANCEL);
+            await WaitUntilAsync(
+                async () =>
+                {
+                    await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+                    return !AutocompleteChecks.IsPillionDisplayed(view);
+                },
+                TimeSpan.FromSeconds(5),
+                "Esc to dismiss the proposal the view's own request showed").ConfigureAwait(true);
         }
     }
 
