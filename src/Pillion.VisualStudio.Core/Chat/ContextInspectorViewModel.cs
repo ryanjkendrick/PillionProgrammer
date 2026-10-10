@@ -47,6 +47,9 @@ public sealed class ContextInspectorItem
         _ => Item.Kind,
     };
 
+    /// <summary>Gets the kind label to show before the name, or empty when the name already says it ("System prompt").</summary>
+    public string KindPrefix => string.Equals(KindLabel, Name, StringComparison.OrdinalIgnoreCase) ? string.Empty : KindLabel;
+
     /// <summary>Gets the token figure: the tokens it takes, of how many when it was cut, or that it was left out.</summary>
     public string TokensText => Item.Dropped
         ? ChatStrings.Format(ChatStrings.InspectorDroppedTokensFormat, Item.OriginalTokens)

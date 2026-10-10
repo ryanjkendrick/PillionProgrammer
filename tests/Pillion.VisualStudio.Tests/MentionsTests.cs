@@ -629,6 +629,8 @@ public sealed class ChatMentionsTests : IDisposable
         Assert.True(pinItem.CanRemove);
         Assert.Equal(ChatStrings.InspectorKindPin, pinItem.KindLabel);
         Assert.False(vm.Inspector.Items[0].CanRemove);
+        Assert.Equal(string.Empty, vm.Inspector.Items[0].KindPrefix); // "System prompt" is not repeated.
+        Assert.Equal(ChatStrings.InspectorKindPin, pinItem.KindPrefix);
         Assert.Contains("qwen2.5-coder:7b", vm.Inspector.Summary, StringComparison.Ordinal);
         Assert.Empty(vm.Turns);
 

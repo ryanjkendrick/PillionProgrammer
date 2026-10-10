@@ -552,7 +552,7 @@
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0">
                                         <TextBlock TextTrimming="CharacterEllipsis">
-                                            <Run Text="{Binding KindLabel, Mode=OneWay}" Foreground="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" /><Run Text="  " /><Run Text="{Binding Name, Mode=OneWay}" />
+                                            <Run Text="{Binding KindPrefix, Mode=OneWay}" Foreground="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" /><Run Text="  " /><Run Text="{Binding Name, Mode=OneWay}" />
                                         </TextBlock>
                                         <TextBlock x:Name="State" Text="{Binding StateText}" Style="{StaticResource SecondaryText}" FontStyle="Italic" Visibility="Collapsed" />
                                         <TextBlock x:Name="Redaction" Text="{Binding RedactionText}" TextWrapping="Wrap" Visibility="Collapsed" />

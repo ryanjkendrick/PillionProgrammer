@@ -162,6 +162,21 @@ internal sealed class WorkspaceFileIndex : IWorkspaceFiles, IVsSolutionEvents, I
     private static bool IsSkipped(string path) =>
         path.Split('\\', '/').Any(SkippedFolders.Contains);
 
+    /// <summary>
+    /// The item's path as the user wrote it: the project's document moniker (classic projects report their canonical names in
+    /// lower case), else the canonical name.
+    /// </summary>
+    private static string? PathOf(IVsHierarchy hierarchy, uint item)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (hierarchy is IVsProject project && ErrorHandler.Succeeded(project.GetMkDocument(item, out var document)) && !string.IsNullOrEmpty(document))
+        {
+            return document;
+        }
+
+        return ErrorHandler.Succeeded(hierarchy.GetCanonicalName(item, out var name)) ? name : null;
+    }
+
     private static uint ToItemId(object? value) => value switch
     {
         int i => unchecked((uint)i),
@@ -328,7 +343,7 @@ internal sealed class WorkspaceFileIndex : IWorkspaceFiles, IVsSolutionEvents, I
         var visited = 0;
         foreach (var hierarchy in hierarchies)
         {
-            if (ErrorHandler.Succeeded(hierarchy.GetCanonicalName(VSConstants.VSITEMID_ROOT, out var projectFile))
+            if (PathOf(hierarchy, VSConstants.VSITEMID_ROOT) is { Length: > 0 } projectFile
                 && Path.IsPathRooted(projectFile)
                 && Path.GetDirectoryName(projectFile) is { Length: > 0 } projectDirectory
                 && !roots.Contains(projectDirectory, StringComparer.OrdinalIgnoreCase))
@@ -350,7 +365,8 @@ internal sealed class WorkspaceFileIndex : IWorkspaceFiles, IVsSolutionEvents, I
 
                 if (item != VSConstants.VSITEMID_ROOT)
                 {
-                    if (ErrorHandler.Failed(hierarchy.GetCanonicalName(item, out var name)) || string.IsNullOrEmpty(name) || !Path.IsPathRooted(name))
+                    var name = PathOf(hierarchy, item);
+                    if (name is null || name.Length == 0 || !Path.IsPathRooted(name))
                     {
                         continue; // References, dependencies and other virtual nodes: not files, and not walked into.
                     }
