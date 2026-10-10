@@ -13,7 +13,9 @@ using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
-using Microsoft.VisualStudio.Text.Operations;
+using Microsoft.VisualStudio.Editor;
+using Microsoft.VisualStudio.OLE.Interop;
+using Microsoft.VisualStudio.TextManager.Interop;
 using Pillion.Contracts;
 using Pillion.VisualStudio.Core.InlineChat;
 
@@ -123,20 +125,46 @@ public static class InlineChatChecks
         }
     }
 
-    /// <summary>Describes the undo history of the view's buffer: the number of units and the newest unit's description.</summary>
+    /// <summary>
+    /// Describes the document's Visual Studio undo stack (the OLE undo manager behind Edit.Undo): the number of undo units
+    /// and the newest unit's description. The editor's own ITextUndoHistory of a document buffer does not list its units.
+    /// </summary>
     /// <param name="view">The view.</param>
-    /// <returns>The count and description, or <see langword="null"/> when the buffer has no editor undo history.</returns>
+    /// <returns>The count and description, or <see langword="null"/> when the buffer has no undo manager.</returns>
     public static (int Count, string? Top)? UndoState(IWpfTextView view)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
-        var registry = (Package.GetGlobalService(typeof(SComponentModel)) as IComponentModel)?.GetService<ITextUndoHistoryRegistry>();
-        if (registry is null || !registry.TryGetHistory(view.TextBuffer, out var history))
+        var adapters = (Package.GetGlobalService(typeof(SComponentModel)) as IComponentModel)?.GetService<IVsEditorAdaptersFactoryService>();
+        if (adapters?.GetBufferAdapter(view.TextBuffer) is not IVsTextLines lines
+            || lines.GetUndoManager(out var manager) != 0
+            || manager is null)
         {
             return null;
         }
 
-        var stack = history.UndoStack.ToList();
-        return (stack.Count, stack.FirstOrDefault()?.Description);
+        manager.EnumUndoable(out var units);
+        var count = 0;
+        var one = new IOleUndoUnit[1];
+        while (units is not null && units.Next(1, one, out var fetched) == 0 && fetched == 1)
+        {
+            count++;
+        }
+
+        string? top = null;
+        if (count > 0)
+        {
+            try
+            {
+                manager.GetLastUndoDescription(out var description);
+                top = description;
+            }
+            catch (System.Runtime.InteropServices.COMException)
+            {
+                // No description.
+            }
+        }
+
+        return (count, top);
     }
 
     private static T? Find<T>(IWpfTextView view, string automationId)

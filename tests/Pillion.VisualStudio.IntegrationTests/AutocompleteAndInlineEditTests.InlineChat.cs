@@ -15,6 +15,12 @@ namespace Pillion.VisualStudio.IntegrationTests;
 /// </summary>
 public sealed partial class AutocompleteAndInlineEditTests
 {
+    /// <summary>The command set of the Pillion commands (PackageGuids.CommandSetString in the extension).</summary>
+    private static readonly Guid InlineChatCommandSet = new("444aebc2-1c36-43a9-ab09-2c2d4e04a11d");
+
+    /// <summary>The "Pillion: Inline Chat" command id (PackageIds.InlineChatCommand).</summary>
+    private const uint InlineChatCommandId = 0x0300;
+
     private int _openedVersion;
     private string? _scratchPath;
 
@@ -98,7 +104,10 @@ public sealed partial class AutocompleteAndInlineEditTests
         _openedVersion = view.TextBuffer.CurrentSnapshot.Version.VersionNumber;
 
         // The package loads in the background and adds its commands at the end of its initialization, which can still be
-        // running when IsPackageLoaded says it is loaded: try the command until it is there.
+        // running when IsPackageLoaded says it is loaded: try the command until it is there. By name first; when the
+        // shell does not know the name (an Experimental Instance whose menu cache came from an older copy of the
+        // extension), by its command id through the shell's command dispatcher, which reaches the loaded package.
+        var attempts = 0;
         await WaitUntilAsync(
             async () =>
             {
@@ -109,12 +118,23 @@ public sealed partial class AutocompleteAndInlineEditTests
                 }
                 catch (System.Runtime.InteropServices.COMException ex)
                 {
-                    Output.WriteLine($"Tools.PillionInlineChat not available yet: {ex.Message}");
+                    Output.WriteLine($"Tools.PillionInlineChat by name: {ex.Message}");
+                }
+
+                if (++attempts < 4)
+                {
                     return false;
                 }
+
+                await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+                var dispatcher = await TestServices.Shell.GetRequiredGlobalServiceAsync<SUIHostCommandDispatcher, Microsoft.VisualStudio.OLE.Interop.IOleCommandTarget>(HangMitigatingCancellationToken);
+                var group = InlineChatCommandSet;
+                var hr = dispatcher.Exec(ref group, InlineChatCommandId, 0, IntPtr.Zero, IntPtr.Zero);
+                Output.WriteLine($"Pillion: Inline Chat by command id: 0x{hr:X8}");
+                return hr == 0;
             },
             TimeSpan.FromSeconds(30),
-            "the Tools.PillionInlineChat command").ConfigureAwait(true);
+            "the Pillion: Inline Chat command").ConfigureAwait(true);
         var prompt = await InlineChatChecks.WaitForPromptAsync(view, TimeSpan.FromSeconds(30), HangMitigatingCancellationToken);
         await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
         InlineChatChecks.Send(prompt, "add a comment");
