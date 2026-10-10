@@ -248,6 +248,22 @@ missing the status bar and the Pillion Output pane say "Inline suggestions need 
 on Visual Studio 2022"; the check runs when the extension loads and again whenever the Tools menu opens. Visual Studio
 2026 needs nothing extra.
 
+## IDE signals
+
+The extension watches what happens in the IDE and offers it to later features (`@errors`, the inline `/fix`, and the phase 2
+indexer) as the `IIdeSignals` service (`src/Pillion.VisualStudio.Core/Signals`; ask the global service provider for
+`typeof(IIdeSignals)`). Events, all raised on thread-pool threads in the order Visual Studio reported them: `BuildStarted`,
+`BuildFinished(success, project count, duration)`, `BuildStateChanged` (with `BuildActivity.IsBuilding`, the hook the indexer
+pauses on), `DocumentOpened`, `DocumentSaved`, `DocumentClosed`, `ActiveDocumentChanged` and `DiagnosticsChanged` (debounced:
+500 ms of quiet, never held back more than 3 s). Queries: `GetDiagnosticsAsync(Solution | ActiveDocument)` and
+`GetOutputPaneTextAsync("Build" | "Debug" | "Tests", maxChars)` (the end of the pane).
+
+Solution diagnostics are read from the Error List, so they are only the entries the developer's Error List filters show
+(its scope, Build + IntelliSense and the severity buttons); `DiagnosticsNote` says so. Active-document diagnostics add
+Roslyn's compiler diagnostics for the open text, unsaved edits included; analyzer diagnostics come through the Error List.
+If Visual Studio's workspace cannot be reached, only the Error List is used and the note says why. **Tools > Pillion: Show
+Status** lists the build state and the last five signals (the service keeps the last 200 with time stamps).
+
 ## Local models and the GPU tier
 
 Pillion Host detects the GPU tier once per run (CPU only, 8 GB, 12 GB, 16 GB, 24 GB or more) from `nvidia-smi`, else
