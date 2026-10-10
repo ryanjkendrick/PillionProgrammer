@@ -42,10 +42,36 @@ public sealed class LatencySnapshot(int count, TimeSpan? p50, TimeSpan? p95, boo
     }
 }
 
+/// <summary>Why and since when autocomplete is degraded.</summary>
+/// <param name="since">When the p95 crossed the threshold.</param>
+/// <param name="p95">The p95 at that moment.</param>
+/// <param name="samples">The number of samples in the window at that moment.</param>
+public sealed class DegradationInfo(DateTimeOffset since, TimeSpan p95, int samples)
+{
+    /// <summary>Gets when the p95 crossed the threshold.</summary>
+    public DateTimeOffset Since { get; } = since;
+
+    /// <summary>Gets the p95 when it crossed the threshold.</summary>
+    public TimeSpan P95 { get; } = p95;
+
+    /// <summary>Gets the number of samples in the window when it crossed the threshold.</summary>
+    public int Samples { get; } = samples;
+
+    /// <summary>Gets the reason in words, for example <c>p95 1820 ms over the 1500 ms limit in 31 suggestions</c>.</summary>
+    public string Reason => string.Format(
+        CultureInfo.InvariantCulture,
+        "p95 {0:0} ms over the {1:0} ms limit in {2} suggestions",
+        P95.TotalMilliseconds,
+        LatencyWindow.DegradeAbove.TotalMilliseconds,
+        Samples);
+}
+
 /// <summary>
 /// Autocomplete latency over a sliding five-minute window, kept in memory, and the degradation rule of design section
 /// 13: when the p95 over the window exceeds 1.5 s, the debounce rises to 350 ms and requests are single-line until the
-/// p95 is back under the threshold. Thread-safe.
+/// p95 is back under the threshold. Thread-safe. This is the one source of truth for time to suggestion and for the
+/// degradation state: <see cref="AutocompleteMetrics"/> reads its percentiles and state from here and never keeps a
+/// second copy.
 /// </summary>
 public sealed class LatencyWindow
 {
@@ -71,6 +97,7 @@ public sealed class LatencyWindow
     private readonly Queue<(DateTimeOffset At, TimeSpan Latency)> _samples = new();
     private readonly Func<DateTimeOffset> _now;
     private bool _degraded;
+    private DegradationInfo? _degradation;
 
     /// <summary>Initializes a new instance of the <see cref="LatencyWindow"/> class.</summary>
     /// <param name="now">The time source.</param>
@@ -97,6 +124,19 @@ public sealed class LatencyWindow
         }
     }
 
+    /// <summary>Gets why and since when autocomplete is degraded, or <see langword="null"/> while it is not.</summary>
+    public DegradationInfo? Degradation
+    {
+        get
+        {
+            _ = IsDegraded;
+            lock (_gate)
+            {
+                return _degraded ? _degradation : null;
+            }
+        }
+    }
+
     /// <summary>Gets the debounce to use now: 200 ms, or 350 ms while degraded.</summary>
     public TimeSpan Debounce => IsDegraded ? DegradedDebounce : NormalDebounce;
 
@@ -110,6 +150,24 @@ public sealed class LatencyWindow
         }
 
         _ = IsDegraded;
+    }
+
+    /// <summary>Forgets every sample and leaves the degraded state (used by <see cref="AutocompleteMetrics.Reset"/>).</summary>
+    public void Clear()
+    {
+        bool changed;
+        lock (_gate)
+        {
+            _samples.Clear();
+            changed = _degraded;
+            _degraded = false;
+            _degradation = null;
+        }
+
+        if (changed)
+        {
+            DegradedChanged?.Invoke(this, false);
+        }
     }
 
     /// <summary>Gets the current p50, p95 and state.</summary>
@@ -150,8 +208,14 @@ public sealed class LatencyWindow
         lock (_gate)
         {
             Prune();
-            var next = _samples.Count >= MinimumSamples && Percentile(Sorted(), 0.95) > DegradeAbove;
+            var p95 = _samples.Count >= MinimumSamples ? Percentile(Sorted(), 0.95) : TimeSpan.Zero;
+            var next = _samples.Count >= MinimumSamples && p95 > DegradeAbove;
             changed = next != _degraded;
+            if (changed)
+            {
+                _degradation = next ? new DegradationInfo(_now(), p95, _samples.Count) : null;
+            }
+
             _degraded = next;
             degraded = next;
         }

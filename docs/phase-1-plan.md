@@ -69,6 +69,7 @@ Nineteen items against the design's indicative eighteen. Work items 1.1 to 1.5 a
 | 2026-10-08 | `@file` resolves against the solution or folder file list in phase 1 and switches to the index in phase 2 | Retrieval is a phase 2 deliverable; the mention grammar and picker do not change |
 | 2026-10-08 | Two contract minor bumps are expected (inline edits, Outbound log read, `Summarise` task class); they are batched into one bump at the wave boundary | Keeps the version rule simple: majors must match, minors only add |
 | 2026-10-08 | The 17.14 CI job installs the VSIX built by the 18.x job rather than building itself | The .NET 10 SDK needs MSBuild 18, so the 2022 runner cannot build the solution |
+| 2026-10-09 | Inline edits of a small scope (at most `inlineEdit.wholeScopeMaxLines`, default 80) ask the model to rewrite the whole scope as plain code and stream it; search-and-replace blocks stay for larger scopes and as the fallback after one unusable retry. `/test` and `/explain` are unchanged | The block format makes the model copy the whole old scope into SEARCH before any new line can be shown: with `qwen2.5-coder:7b` the first preview text arrived at about 2.8 s median for "extract the validation into a method" against the Gate 1 target of 2 s p50. Rewriting the whole scope puts it at about 0.2 s. The design's edit format (section 8) still governs multi-file agent edits, where the old text is not already known to both sides |
 
 ## Decisions needed from the product owner during phase 1
 

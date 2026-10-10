@@ -113,6 +113,7 @@ public sealed class AutocompleteSession : IDisposable
         var id = _engine.NextAttempt();
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var attempt = new CompletionAttempt(id, _engine.RequestIdFor(id), cancellation);
+        _engine.Metrics.RequestStarted(id, input.LanguageId);
         CompletionAttempt? previous;
         lock (_gate)
         {
@@ -173,6 +174,11 @@ public sealed class AutocompleteSession : IDisposable
                 await _engine.Clock.DelayAsync(debounce, token).ConfigureAwait(false);
             }
 
+            if (!_engine.HostUsable && !token.IsCancellationRequested && IsCurrent(attempt.Id))
+            {
+                _engine.Metrics.RequestFailed(attempt.Id, AutocompleteOutcome.Suppressed);
+            }
+
             if (token.IsCancellationRequested || !IsCurrent(attempt.Id) || !_engine.HostUsable)
             {
                 return;
@@ -226,6 +232,7 @@ public sealed class AutocompleteSession : IDisposable
 #pragma warning restore CA1031
         {
             var failure = RpcFailure.Describe(ex);
+            _engine.Metrics.RequestFailed(attempt.Id, AutocompleteOutcome.Error);
             _engine.Failures.Warning(
                 "autocomplete.request.failed",
                 "An autocomplete request failed; no suggestion was shown.",
@@ -237,6 +244,7 @@ public sealed class AutocompleteSession : IDisposable
         }
         finally
         {
+            _engine.Metrics.RequestEnded(attempt.Id);
             attempt.SetCompleted(IsCurrent(attempt.Id) && !token.IsCancellationRequested ? result : null);
             lock (_gate)
             {
@@ -259,8 +267,10 @@ public sealed class AutocompleteSession : IDisposable
         CancellationToken token)
     {
         var multiLine = MultiLineDecision.IsMultiLine(reason);
+        _engine.Metrics.RequestSent(attempt.Id, multiLine, _engine.Latency.IsDegraded);
         var service = _engine.Connection.GetProxy<IModelService>();
         var sent = _engine.Clock.UtcNow;
+        var firstChunkSeen = false;
         string? modelId = null;
         string? providerId = null;
         var stoppedEarly = false;
@@ -286,6 +296,7 @@ public sealed class AutocompleteSession : IDisposable
             if (Interlocked.Exchange(ref recorded, 1) == 0)
             {
                 _engine.Latency.Record(latency);
+                _engine.Metrics.SuggestionReady(attempt.Id, latency);
             }
         }
 
@@ -331,6 +342,12 @@ public sealed class AutocompleteSession : IDisposable
                     return null; // Superseded: everything from here on is stale.
                 }
 
+                if (!firstChunkSeen)
+                {
+                    firstChunkSeen = true;
+                    _engine.Metrics.FirstChunk(attempt.Id);
+                }
+
                 if (!string.IsNullOrEmpty(chunk.ModelId))
                 {
                     modelId = chunk.ModelId;
@@ -339,6 +356,7 @@ public sealed class AutocompleteSession : IDisposable
 
                 if (chunk.Error is { } error)
                 {
+                    _engine.Metrics.RequestFailed(attempt.Id, AutocompleteOutcome.Error);
                     _engine.Failures.Warning(
                         "autocomplete.stream.failed",
                         "An autocomplete stream failed part way; no suggestion was shown.",
@@ -404,7 +422,13 @@ public sealed class AutocompleteSession : IDisposable
             ("chars", final.Length),
             ("ms", (long)result.Latency.TotalMilliseconds),
             ("model", modelId));
-        return final.Trim().Length == 0 ? null : result;
+        if (final.Trim().Length == 0)
+        {
+            _engine.Metrics.RequestFailed(attempt.Id, AutocompleteOutcome.Empty);
+            return null;
+        }
+
+        return result;
     }
 
     /// <summary>Tells the host to stop generating after a stop rule fired (best effort, not awaited).</summary>

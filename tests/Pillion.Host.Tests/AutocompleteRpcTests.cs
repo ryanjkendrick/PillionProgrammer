@@ -75,6 +75,31 @@ public sealed class AutocompleteRpcTests : IDisposable
     }
 
     [Fact]
+    public async Task Diagnostics_ReportsTheGatewayCountersAndTheOutboundWindow_AfterRealRequests()
+    {
+        await using var host = await StartAsync(GpuTier.Gpu8GB);
+        await using var client = await host.ConnectAndHandshakeAsync();
+        var models = client.Attach<IModelService>();
+        await CollectAsync(models.CompleteAsync(Request("c1", "return a ", ";"), CancellationToken.None));
+        await CollectAsync(models.CompleteAsync(Request("c2", "return a +", ";"), CancellationToken.None));
+
+        var counters = await client.Attach<IDiagnosticsService>().GetAutocompleteCountersAsync(CancellationToken.None).WaitAsync(Wait);
+
+        Assert.Equal(2, counters.Requests);
+        Assert.Equal(1, counters.TypeThroughHits);
+        Assert.Equal(1, counters.CacheMisses);
+        Assert.Equal(0.5, counters.HitRate);
+        Assert.Equal(1, counters.ModelRequests);
+        Assert.Equal(300, counters.WindowSeconds);
+        Assert.Equal(2, counters.WindowRequests);
+        Assert.Equal(1, counters.WindowCacheHits);
+        Assert.NotNull(counters.FirstTokenP50Ms);
+        Assert.NotNull(counters.TotalP95Ms);
+        Assert.Equal(1, counters.PromptCountedRequests + counters.PromptEstimatedRequests);
+        Assert.True(counters.PromptTokensMax > 0);
+    }
+
+    [Fact]
     public async Task CompleteAsync_WithAutocompleteOff_FailsWithPolicyDenied()
     {
         _flags.Disabled.Add(FeatureNames.Autocomplete);

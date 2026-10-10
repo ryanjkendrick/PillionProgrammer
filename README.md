@@ -174,7 +174,8 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
     "geminiProvider": true,
     "mistralProvider": true,
     "azureOpenAIProvider": true,
-    "autocomplete": true
+    "autocomplete": true,
+    "inlineChat": true
   }
 }
 ```
@@ -192,6 +193,7 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
 | `mistralProvider` | Providers of kind `mistral` (chat and Codestral fill-in-the-middle) are not built or routed to. |
 | `azureOpenAIProvider` | Providers of kind `azure-openai` are not built or routed to. |
 | `autocomplete` | `IModelService.CompleteAsync` (ghost-text autocomplete) fails with `PolicyDenied` and a message that names the flag; chat and model listing are unaffected. The extension stops asking for suggestions (it reads the flag when Pillion Host becomes ready and when the Tools menu opens; an absent flag means on). |
+| `inlineChat` | `IInlineEditService.EditAsync` (inline chat edits, `/doc`, `/test`, `/fix`, `/explain`) fails with `PolicyDenied` and a message that names the flag. Chat, autocomplete and model listing are unaffected. |
 
 A repository can switch flags off for everyone who opens it with `disabledFeatures` in `.pillion/policy.json`, next to
 `localOnly`, `disabledTools`, `exclude` and `denyCommands`:
@@ -216,8 +218,18 @@ of a line. **Tab** accepts, **Esc** dismisses, **Ctrl+Right** accepts the next w
 Next Suggestion" and "Pillion: Previous Suggestion", rebindable under Tools > Options > Keyboard) switch between the
 suggestion and its first line only (Visual Studio 2026; Visual Studio 2022 does not cycle between proposals). Accepting
 a suggestion asks for the next one at once. Requests wait 200 ms after the last keystroke; when the p95 latency over
-five minutes is above 1.5 s the wait rises to 350 ms and suggestions are single-line until it recovers (**Tools >
-Pillion: Show Status** shows the p50 and p95).
+five minutes is above 1.5 s the wait rises to 350 ms and suggestions are single-line until it recovers.
+
+Autocomplete measures itself, on your machine only; nothing is sent anywhere. **Tools > Pillion: Show Status** has an
+"Autocomplete" section with the last five minutes (requests sent, suggestions shown and the show rate, accepted and the
+acceptance rate, cancelled by typing, errors, p50 and p95 time to the first chunk and to the suggestion, and the
+degradation state with its reason and since when) and the host's numbers beside them (cache hit rate, p50 and p95 time to
+first token, prompts counted versus estimated). The status bar adds ", suggestions slow" while autocomplete is degraded
+and ", waiting for suggestion" while a request has waited more than a second for the model. While autocomplete is in
+use, every five minutes the Output pane gets one summary line and
+`%LOCALAPPDATA%\PillionProgrammer\logs\metrics-YYYYMMDD.jsonl` gets one JSON line: counts, durations, language
+identifiers and the degraded flag, never file names, prompts, code or repository names. Metrics files are kept for seven
+days or 100 MB, whichever is less. The opt-in telemetry upload of the design document is not part of this.
 
 No suggestions are requested in generated and designer files (`.g.cs`, `.g.i.cs`, `.Designer.cs`, `*.min.js` and files
 whose first lines say they are auto-generated), in files over 1 MB, while a completion list has an item selected, or in
