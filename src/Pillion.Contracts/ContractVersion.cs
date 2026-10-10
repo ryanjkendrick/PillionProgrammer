@@ -16,9 +16,13 @@ public static class ContractVersion
     /// <summary>
     /// The contract minor version. Minor versions may differ between the two sides. 1.1 added the model, provider,
     /// token and error fields on <see cref="ChatChunk"/> and <see cref="CompletionChunk"/>, the model id, availability,
-    /// context window and digest on <see cref="ModelDescriptor"/>, and <see cref="ConnectivityState"/> (see the README).
+    /// context window and digest on <see cref="ModelDescriptor"/>, and <see cref="ConnectivityState"/>. 1.2 added the
+    /// caret, declaration, open-document and edit context on <see cref="CompletionRequest"/>, <see cref="IInlineEditService"/>
+    /// and its DTOs, mentions, pins and project rules for context assembly, <see cref="TaskClass.Summarise"/>,
+    /// <see cref="IDiagnosticsService"/> with <see cref="AutocompleteHostCounters"/> and the resident models, and the
+    /// <c>settingsChanged</c> notification (see the README).
     /// </summary>
-    public const int Minor = 1;
+    public const int Minor = 2;
 
     /// <summary>Gets the contract version formatted as <c>major.minor</c>.</summary>
     public static string Text => Major.ToString(System.Globalization.CultureInfo.InvariantCulture)

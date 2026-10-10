@@ -32,10 +32,26 @@ commit.
 
 ## Changelog
 
-### 1.2 (pending)
+### 1.2 (phase 1)
 
-Additive only, batched with the other phase 1 contract additions into one minor bump at the wave boundary
-(`ContractVersion` still says 1.1 until then). Each bullet below is its own work item's entry.
+Additive only, batched from the phase 1 work items into one minor bump (`ContractVersion` says 1.2). A 1.1 peer is still
+accepted by the handshake: it never calls the new services and methods, and ignores the new fields; a 1.2 peer reads their
+defaults from a 1.1 peer (`ContractV12Tests`, `ContextContractTests`, `ContractV12InlineEditTests` and, over the real pipe,
+`HandshakeCompatibilityTests` in the host tests). Each bullet below is its own work item's entry; append later phase 1
+additions (for example the Outbound log and context preview methods on `IDiagnosticsService`) to this list.
+
+- **Autocomplete request context (PR 21, used by work item 1.2).** `CompletionRequest` grows the editor context the request pipeline
+  captures; every member is optional and a 1.1 host ignores them.
+
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `CompletionRequest` | `CaretLine` | 7 | Zero-based line of the caret in the document |
+  | `CompletionRequest` | `CaretColumn` | 8 | Zero-based column of the caret |
+  | `CompletionRequest` | `EnclosingDeclaration` | 9 | `string?`: the signature or header of the declaration that encloses the caret, when known |
+  | `CompletionRequest` | `OpenDocuments` | 10 | `string[]`: full paths of the documents open in the IDE, most recently used first |
+  | `CompletionRequest` | `RecentEdits` | 11 | `string[]`: short descriptions of the latest edits (file, line, changed text), newest first |
+  | `CompletionRequest` | `AllowMultiLine` | 12 | A multi-line completion is wanted at this caret position |
+  | `CompletionRequest` | `StopSequences` | 13 | `string[]`: stop sequences beyond the model family's defaults |
 
 - **Mentions and context assembly (work item 1.10).** `IContextService` is unchanged; its DTOs and `ChatRequest` grow.
 
@@ -93,6 +109,11 @@ Additive only, batched with the other phase 1 contract additions into one minor 
   `AutocompleteHostCounters`: the gateway's autocomplete counters since the host started (requests, cache hits,
   type-through hits, misses, hit rate) and, over the Outbound log's last five minutes, the p50 and p95 time to first
   token and total duration and the prompt tokens counted versus estimated. Counts and durations only (work item 1.5).
+
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `AutocompleteHostCounters` | `ResidentModels` | 21 | `ResidentModelInfo[]`: the local models loaded now (PR 35) |
+  | `ResidentModelInfo` (new) | `ProviderId`, `ModelId`, `ContextLength`, `VramBytes`, `KeepAlive`, `IsPinned` | 0-5 | The provider and model, the loaded context size in tokens (`int?`, null when unknown), the bytes of GPU memory it uses (0 on the CPU), the keep-alive (`-1` for ever, otherwise the time left such as `29m`) and whether it stays loaded for ever (the autocomplete model) |
 
 ### 1.1 (phase 0, wave 3)
 
