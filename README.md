@@ -285,7 +285,8 @@ countermeasure"):
 - When a competitor's proposal is displayed (taking over, or because Pillion answered after the broker's wait), Pillion
   asks for its own at that caret outside the broker: the type-through cache first, then the pipeline (with the normal
   debounce, again on every keystroke while the competitor's proposal is typed through).
-- Only when Pillion has a suggestion for exactly that caret and text does it take the slot: it keeps the suggestion,
+- Only when Pillion has a suggestion for exactly that caret and text does it take the slot, 150 ms after deciding and never
+  inside the suggestion service's own event handling (that stopped IntelliCode's broker on 17.14): it keeps the suggestion,
   dismisses the displayed proposal and makes the editor ask every source again (an explicit invocation), which Pillion's
   source answers at once. The dismissal uses the user-Escape reason because it is the only one that clears the broker's
   queue, so the other product records that proposal as dismissed by Escape.
