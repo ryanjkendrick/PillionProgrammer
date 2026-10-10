@@ -57,6 +57,9 @@ internal static class PackageIds
     /// <summary>"Pillion: Previous Suggestion" (Alt+[ in the text editor): the previous variant of the displayed suggestion.</summary>
     public const int PreviousSuggestionCommand = 0x0106;
 
-    /// <summary>"Pillion: Suggest" (Alt+\ in the text editor): asks for one ghost-text suggestion at the caret now.</summary>
+    /// <summary>"Pillion: Inline Chat" (Tools menu and editor context menu; Ctrl+Alt+Shift+P, I): inline chat on the selection.</summary>
+    public const int InlineChatCommand = 0x0300;
+
+    /// <summary>"Pillion: Suggest" (Ctrl+Alt+Shift+P, S): asks for one ghost-text suggestion at the caret now.</summary>
     public const int SuggestCommand = 0x0310;
 }

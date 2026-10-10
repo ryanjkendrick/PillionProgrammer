@@ -13,6 +13,7 @@ using Pillion.VisualStudio.Autocomplete;
 using Pillion.VisualStudio.Core;
 using Pillion.VisualStudio.Core.Autocomplete;
 using Pillion.VisualStudio.Core.Signals;
+using Pillion.VisualStudio.InlineChat;
 using Pillion.VisualStudio.Options;
 using Pillion.VisualStudio.Signals;
 using Pillion.VisualStudio.ToolWindows;
@@ -54,6 +55,7 @@ public sealed class PillionPackage : AsyncPackage
     private OutputPaneWriter? _output;
     private IVsStatusbar? _statusBar;
     private AutocompleteFeature? _autocomplete;
+    private InlineChatFeature? _inlineChat;
     private IdeSignalsFeature? _signals;
     private IntelliCodeStatus _intelliCodeReported = IntelliCodeStatus.NotRequired;
     private int _intelliCodeCheckRunning;
@@ -76,6 +78,9 @@ public sealed class PillionPackage : AsyncPackage
     /// <summary>Gets ghost-text autocomplete (engine, settings, IntelliCode state), once initialization has created it.</summary>
     internal AutocompleteFeature? Autocomplete => _autocomplete;
 
+    /// <summary>Gets inline chat (feature flag, recent prompts, the command), once initialization has created it.</summary>
+    internal InlineChatFeature? InlineChat => _inlineChat;
+
     /// <inheritdoc/>
     protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
     {
@@ -90,6 +95,8 @@ public sealed class PillionPackage : AsyncPackage
         _chatAvailability = chatAvailability;
         var autocomplete = new AutocompleteFeature(supervisor, log);
         _autocomplete = autocomplete;
+        var inlineChat = new InlineChatFeature(this, supervisor, log, output: null);
+        _inlineChat = inlineChat;
         AddService(typeof(IHostConnection), (container, token, type) => Task.FromResult<object?>(supervisor), promote: true);
         var signals = new IdeSignalsFeature(JoinableTaskFactory, log);
         _signals = signals;
@@ -110,6 +117,7 @@ public sealed class PillionPackage : AsyncPackage
             var output = new OutputPaneWriter(pane, JoinableTaskFactory, DisposalToken);
             _output = output;
             log.Sink = line => output.WriteLine(line);
+            inlineChat.Output = line => output.WriteLine(line);
         }
 
         if (commandService is not null)
@@ -119,6 +127,7 @@ public sealed class PillionPackage : AsyncPackage
             commandService.AddCommand(new MenuCommand(OnOpenLogs, new CommandID(PackageGuids.CommandSet, PackageIds.OpenLogsCommand)));
             commandService.AddCommand(CreateOpenChatCommand(PackageIds.OpenChatCommand));
             commandService.AddCommand(CreateOpenChatCommand(PackageIds.ViewChatCommand));
+            commandService.AddCommand(inlineChat.CreateCommand());
         }
 
         supervisor.StateChanged += OnHostStateChanged;
@@ -130,6 +139,7 @@ public sealed class PillionPackage : AsyncPackage
         // host's effective feature flags: it reads them whenever the host becomes ready.
         chatAvailability.Start();
         autocomplete.Start();
+        inlineChat.Start();
         _ = JoinableTaskFactory.RunAsync(() => signals.StartAsync(this, DisposalToken));
         _ = JoinableTaskFactory.RunAsync(() => CheckIntelliCodeAsync(DisposalToken));
         supervisor.Start();
@@ -174,6 +184,8 @@ public sealed class PillionPackage : AsyncPackage
             _chatAvailability = null;
             _autocomplete?.Dispose();
             _autocomplete = null;
+            _inlineChat?.Dispose();
+            _inlineChat = null;
             _signals?.Dispose();
             _signals = null;
         }

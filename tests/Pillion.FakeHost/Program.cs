@@ -7,7 +7,8 @@ using StreamJsonRpc;
 
 // Usage (the launch protocol): Pillion.FakeHost --pipe <name> --parent-pid <pid> --token-handle <handle> [--log-dir <dir>]
 // Serves IHostLifecycleService, IModelService (FakeModelService: two canned models, a streamed reply naming the model,
-// cancellation) and ISettingsService (FakeSettingsService: in-memory settings JSON; every save is followed by a\n// settingsChanged notification naming the section). After the handshake it sends
+// cancellation), IInlineEditService (FakeInlineEditService: canned streamed replacements, ResetText, /explain, an
+// error and a slow case) and ISettingsService (FakeSettingsService: in-memory settings JSON; every save is followed by a\n// settingsChanged notification naming the section). After the handshake it sends
 // connectivityChanged (PILLION_FAKEHOST_CONNECTIVITY: Online by default, or Degraded, Offline, LocalOnly).
 // PILLION_FAKEHOST_MODE selects the behaviour:
 //   normal (default)  accept the handshake, report Ready, call the VSIX's services and print the results to stderr
@@ -79,6 +80,7 @@ var lifecycle = new FakeLifecycle(expectedToken, mode);
 using var rpc = new FakeHostJsonRpc(new LengthHeaderMessageHandler(server, server, new MessagePackFormatter()));
 rpc.AddLocalRpcTarget<IHostLifecycleService>(lifecycle, null);
 rpc.AddLocalRpcTarget<IModelService>(new FakeModelService(), null);
+rpc.AddLocalRpcTarget<IInlineEditService>(new FakeInlineEditService(), null);
 var settings = new FakeSettingsService();
 rpc.AddLocalRpcTarget<ISettingsService>(settings, null);
 
