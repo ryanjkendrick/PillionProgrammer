@@ -118,7 +118,11 @@ internal sealed class IdeSignalsFeature : IDisposable
 
         if (Volatile.Read(ref _stopped) == 0 && ErrorHandler.Succeeded(buildManager.AdviseUpdateSolutionEvents(new SolutionBuildSink(Hub), out var cookie)) && cookie != NoCookie)
         {
-            _disconnect.Add("build events", () => _ = buildManager.UnadviseUpdateSolutionEvents(cookie));
+            _disconnect.Add("build events", () =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                _ = buildManager.UnadviseUpdateSolutionEvents(cookie);
+            });
         }
     }
 
@@ -134,7 +138,11 @@ internal sealed class IdeSignalsFeature : IDisposable
 
         if (Volatile.Read(ref _stopped) == 0 && ErrorHandler.Succeeded(table.AdviseRunningDocTableEvents(new RunningDocumentSink(Hub, table4), out var cookie)) && cookie != NoCookie)
         {
-            _disconnect.Add("document events", () => _ = table.UnadviseRunningDocTableEvents(cookie));
+            _disconnect.Add("document events", () =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                _ = table.UnadviseRunningDocTableEvents(cookie);
+            });
         }
     }
 
