@@ -101,7 +101,24 @@ status line shows the connectivity state (Online, Degraded, Offline or Local-onl
 emphasis use Visual Studio's theme colours; images are never downloaded (their alt text is shown); a link opens in the
 default browser only after a confirmation that shows its address. Each fenced code block is a read-only editor view
 coloured for the language in its fence tag (`csharp`, `ts`, `json`, `powershell` and so on), with **Copy** and **Insert at
-cursor**, which inserts into the active document at the caret (replacing any selection) as one undo step. The
+cursor**, which inserts into the active document at the caret (replacing any selection) as one undo step. Typing `@` in
+the message box opens a picker at the caret: the kinds first (`@file`, `@folder`, `@selection`, `@errors`, `@clipboard`),
+then up to 20 files of the solution or folder matching what you type, ranked by file name and then by path (`@kind:value`
+picks the kind, as in `@folder:src/Api`; Up and Down move, Enter or Tab pins, Esc closes). The file list comes from the
+loaded projects of the solution, or from the open folder, without `bin`, `obj`, `.git`, `node_modules` and `.vs`; it is
+refreshed when a solution, project or folder opens or closes, and every two minutes at most when the picker opens (the index
+replaces it in phase 2). A pinned item becomes a chip above the message box with its token count and a remove button; pins
+belong to the conversation and go with every message of it (`@errors` sends the Error List's entries as the developer's
+filters show them). An ambiguous name lists its matches to pick from, an excluded or secret-looking file asks "This file
+looks like it holds secrets. Pin it anyway?" (an approved one shows a lock and never goes to a cloud model), and a mention
+that matches nothing says why under the pins. **Include current file** (on by default) sends the active document's path
+and its selection, or the 60 lines around the caret, with each message, except while `@selection` is pinned. **Inspect**,
+beside **Send**, shows the **Context Inspector**: the context the message would be sent with, assembled by Pillion Host for
+the model it would route to without calling it, item by item with token counts, what would be cut or left out and why,
+how many secrets would be replaced by placeholders for a cloud model, and a remove button per pin; **Send** there sends.
+The **Outbound log** expander at the bottom lists the last 200 requests Pillion Host sent to any model from any task class,
+newest first (time, task, provider and model, local or cloud, tokens, redactions, duration, outcome), refreshed after
+each reply and with **Refresh**; **Copy** copies it as tab-separated text. Neither shows any prompt text. The
 **Conversation** list at the top keeps every conversation of the session (**New**, **Rename**, **Delete**, and switching
 in the list); conversations are kept in memory until Visual Studio closes, and persistence arrives in phase 2. **Tools >
 Options > Pillion Programmer** has the **Providers and keys** page (API keys go to the Windows Credential Manager under
@@ -110,7 +127,9 @@ switch per task class) and the **Models and routing** page (a profile and a clou
 model id per profile, the "Think harder by default" placeholder and the GPU tier override). The pages are a view
 over Pillion Host's `settings.json` and say "Host not ready" until the host is running; the host tells the extension
 when settings change (`settingsChanged`), so the chat model picker, open pages and autocomplete follow a save or an edit
-of the file without a Refresh press. `tests/Pillion.FakeHost` serves canned models and in-memory settings, so it can stand in for
+of the file without a Refresh press. `tests/Pillion.FakeHost` serves canned models, in-memory settings, canned mention resolutions (a name with `ambiguous`
+in it lists two files, `secret` or `.env` asks for approval, `missing` does not resolve) and a canned Context Inspector, so
+it can stand in for
 `Host\Pillion.Host.exe` in the experimental instance when you want to try the UI without a model; a message containing
 `/markdown` gets a reply that exercises the Markdown rendering, and `/long` a reply of about 2,000 tokens.
 
@@ -182,7 +201,9 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
     "mistralProvider": true,
     "azureOpenAIProvider": true,
     "autocomplete": true,
-    "inlineChat": true
+    "inlineChat": true,
+    "mentions": true,
+    "outboundLogView": true
   }
 }
 ```
@@ -201,6 +222,8 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
 | `azureOpenAIProvider` | Providers of kind `azure-openai` are not built or routed to. |
 | `autocomplete` | `IModelService.CompleteAsync` (ghost-text autocomplete) fails with `PolicyDenied` and a message that names the flag; chat and model listing are unaffected. The extension stops asking for suggestions (it reads the flag when Pillion Host becomes ready and when the Tools menu opens; an absent flag means on). |
 | `inlineChat` | `IInlineEditService.EditAsync` (inline chat edits, `/doc`, `/test`, `/fix`, `/explain`) fails with `PolicyDenied` and a message that names the flag. Chat, autocomplete and model listing are unaffected. |
+| `mentions` | The Chat window hides the `@` picker, the pins and **Include current file**, and sends no pins and no current file with a message (pins already made stay with their conversation and come back when the flag does). Pillion Host's `ResolveMentionAsync` is not gated; chat itself is unaffected. |
+| `outboundLogView` | The Chat window hides **Inspect** and the **Outbound log**, and `IDiagnosticsService.GetOutboundRecordsAsync` and `PreviewContextAsync` fail with `PolicyDenied` and a message that names the flag. The Outbound log itself is still kept by Pillion Host. |
 
 A repository can switch flags off for everyone who opens it with `disabledFeatures` in `.pillion/policy.json`, next to
 `localOnly`, `disabledTools`, `exclude` and `denyCommands`:
