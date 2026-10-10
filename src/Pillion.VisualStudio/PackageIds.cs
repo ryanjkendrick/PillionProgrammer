@@ -26,6 +26,9 @@ internal static class PackageGuids
     /// <summary>The Models and routing Options page GUID as a string.</summary>
     public const string RoutingOptionPageString = "e9551691-e38a-4f52-804f-40a887db22a9";
 
+    /// <summary>The Autocomplete Options page GUID as a string.</summary>
+    public const string AutocompleteOptionPageString = "5f0b7c1e-3d2a-4c86-9b41-7e2f60a8d913";
+
     /// <summary>The command set GUID.</summary>
     public static readonly Guid CommandSet = new(CommandSetString);
 

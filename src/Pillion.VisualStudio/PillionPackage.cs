@@ -38,6 +38,7 @@ namespace Pillion.VisualStudio;
 [ProvideOptionPage(typeof(ProvidersOptionPage), ProductName, "Providers and keys", 0, 0, supportsAutomation: false)]
 [ProvideOptionPage(typeof(PrivacyOptionPage), ProductName, "Privacy", 0, 0, supportsAutomation: false)]
 [ProvideOptionPage(typeof(RoutingOptionPage), ProductName, "Models and routing", 0, 0, supportsAutomation: false)]
+[ProvideOptionPage(typeof(AutocompleteOptionPage), ProductName, "Autocomplete", 0, 0, supportsAutomation: false)]
 [Guid(PackageGuids.PackageString)]
 public sealed class PillionPackage : AsyncPackage
 {

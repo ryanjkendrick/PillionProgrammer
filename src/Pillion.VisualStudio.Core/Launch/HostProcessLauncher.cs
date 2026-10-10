@@ -97,13 +97,27 @@ public sealed class HostProcessLauncher : IHostLauncher
         return await LaunchCoreAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// The environment variable that points the launcher at another host executable, read at every launch: the
+    /// Visual Studio integration tests set it inside devenv.exe to run against <c>tests/Pillion.FakeHost</c>'s canned
+    /// completions, then use Pillion: Retry. The signature policy still applies, so a signed extension refuses an
+    /// unsigned or differently signed executable.
+    /// </summary>
+    public const string HostPathOverrideVariable = "PILLION_HOST_PATH_OVERRIDE";
+
+    /// <summary>Gets the host executable to launch: the override when it is set, otherwise the configured path.</summary>
+    /// <param name="configured">The configured path.</param>
+    /// <returns>The path.</returns>
+    public static string ResolveHostPath(string configured) =>
+        Environment.GetEnvironmentVariable(HostPathOverrideVariable) is { Length: > 0 } overridePath ? overridePath : configured;
+
     /// <summary>Launches the host and returns the concrete session (used by tests).</summary>
     /// <param name="cancellationToken">A token that cancels the launch.</param>
     /// <returns>The session.</returns>
     internal async Task<HostRpcSession> LaunchCoreAsync(CancellationToken cancellationToken)
     {
         var launch = Interlocked.Increment(ref _launches);
-        var hostPath = _options.HostExecutablePath;
+        var hostPath = ResolveHostPath(_options.HostExecutablePath);
         _log.Info("host.launch.begin", "Launching Pillion Host.", ("launch", launch), ("path", hostPath));
 
         if (!File.Exists(hostPath))
