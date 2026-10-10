@@ -53,11 +53,29 @@ public class HostKillVerdictTests
     }
 
     [Fact]
-    public void StallOverTheHardLimit_FailsWhoeverHeldTheThread()
+    public void StallOverTheHardLimit_HeldByPillionOrNotAttributed_Fails()
+    {
+        Assert.NotNull(ResponsivenessVerdict.Judge(Ms(5100), Ms(250), Budget, Ms(600)).Failure);
+        Assert.NotNull(ResponsivenessVerdict.Judge(Ms(5100), Ms(250), Budget, pillionShare: null).Failure);
+        Assert.NotNull(ResponsivenessVerdict.Judge(Ms(5100), Ms(4000), Budget, pillionShare: null).Failure);
+    }
+
+    [Fact]
+    public void StallOverTheHardLimit_HeldByOtherCode_PassesWithAWarning()
     {
         var verdict = ResponsivenessVerdict.Judge(Ms(5100), Ms(250), Budget, Ms(0));
 
-        Assert.NotNull(verdict.Failure);
+        Assert.Null(verdict.Failure);
+        Assert.StartsWith("WARNING:", verdict.Warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MachineStall_WithoutAttribution_PassesWithTheMachineStallWarning()
+    {
+        var verdict = ResponsivenessVerdict.Judge(Ms(2300), Ms(1900), Budget, pillionShare: null);
+
+        Assert.Null(verdict.Failure);
+        Assert.Contains("the machine stalled", verdict.Warning, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -146,7 +164,42 @@ public class HostKillVerdictTests
         Assert.Equal(TimeSpan.Zero, result.PillionTimeWithin(Ms(1000), Ms(3000)));
     }
 
+    [Fact]
+    public void PillionTime_CountsThePillionHopsTheProductTimed_OnceWhereTheyOverlapOtherEvidence()
+    {
+        var result = new UiThreadMonitorResult(
+            [Operation(1000, 1000, "Microsoft.VisualStudio.Services.TaskSchedulerService.VsUIBackgroundPriorityScheduler.<OnTaskQueued>b__10_0")],
+            [Sample(1500, "Pillion.VisualStudio.OutputPaneWriter+<FlushAsync>d__6.MoveNext")],
+            Interval,
+            [Hop(1300, 300, "output.flush"), Hop(1700, 50, "package.statusbar")]);
+
+        // The hop 1300-1600 already contains the sample's 1400-1500, so 300 + 50 ms.
+        Assert.Equal(Ms(350), result.PillionTimeWithin(Ms(1000), Ms(2000)));
+    }
+
+    [Fact]
+    public void PillionTime_TreatsAStretchInsideOneLongOperationAsWatched()
+    {
+        var result = new UiThreadMonitorResult([Operation(900, 2200, "Microsoft.VisualStudio.Shell.Something")], [], Interval);
+
+        Assert.Equal(TimeSpan.Zero, result.PillionTimeWithin(Ms(1000), Ms(3000)));
+    }
+
+    [Fact]
+    public void PillionTime_IsUnknown_WhenNothingWasSeenForMoreThan400Ms()
+    {
+        var result = new UiThreadMonitorResult(
+            [Operation(1000, 10, "Microsoft.VisualStudio.Shell.Something"), Operation(1500, 10, "Microsoft.VisualStudio.Shell.Something")],
+            [],
+            Interval);
+
+        Assert.Null(result.PillionTimeWithin(Ms(1000), Ms(1600)));
+    }
+
     private static TimeSpan Ms(double milliseconds) => TimeSpan.FromMilliseconds(milliseconds);
+
+    private static UiOperationTiming Hop(double start, double duration, string name) =>
+        new(Ms(start), Ms(duration), DispatcherPriority.Invalid, "Pillion.VisualStudio UI work: " + name);
 
     private static UiOperationTiming Operation(double start, double duration, string description) =>
         new(Ms(start), Ms(duration), DispatcherPriority.Normal, description);

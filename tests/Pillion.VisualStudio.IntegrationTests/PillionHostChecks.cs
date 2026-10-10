@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell;
@@ -106,6 +108,32 @@ public static class PillionHostChecks
         {
             connection.StateChanged -= OnStateChanged;
         }
+    }
+
+    /// <summary>Switches on the product's <see cref="UiThreadTimings"/> debug switch, forgetting earlier timings.</summary>
+    public static void StartUiThreadTimings()
+    {
+        UiThreadTimings.Clear();
+        UiThreadTimings.Enabled = true;
+    }
+
+    /// <summary>
+    /// Switches the product's <see cref="UiThreadTimings"/> off again (unless <c>PILLION_UI_THREAD_TIMINGS</c> keeps it on)
+    /// and returns what it timed, on a test clock.
+    /// </summary>
+    /// <param name="clock">The running clock to place the timings on.</param>
+    /// <returns>Pillion's own stretches of UI-thread work, described as <c>Pillion.VisualStudio UI work: name</c>.</returns>
+    public static IReadOnlyList<UiOperationTiming> StopUiThreadTimings(Stopwatch clock)
+    {
+        UiThreadTimings.Enabled = string.Equals(Environment.GetEnvironmentVariable(UiThreadTimings.Variable), "1", StringComparison.Ordinal);
+        var origin = Stopwatch.GetTimestamp() - clock.ElapsedTicks;
+        return UiThreadTimings.Snapshot()
+            .Select(t => new UiOperationTiming(
+                TimeSpan.FromTicks((long)((t.StartTimestamp - origin) * (10_000_000.0 / Stopwatch.Frequency))),
+                t.Duration,
+                System.Windows.Threading.DispatcherPriority.Invalid,
+                "Pillion.VisualStudio UI work: " + t.Name))
+            .ToList();
     }
 
     private static async Task<IHostConnection> GetConnectionAsync()

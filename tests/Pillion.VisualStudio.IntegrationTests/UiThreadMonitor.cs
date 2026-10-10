@@ -42,14 +42,26 @@ public sealed record UiStackSample(TimeSpan At, IReadOnlyList<string> Frames)
 /// <param name="Operations">The dispatcher operations that ran for at least the monitor's threshold.</param>
 /// <param name="Samples">The stack samples taken while the UI thread was stuck.</param>
 /// <param name="SampleInterval">The time between two samples of one stall.</param>
-public sealed record UiThreadMonitorResult(IReadOnlyList<UiOperationTiming> Operations, IReadOnlyList<UiStackSample> Samples, TimeSpan SampleInterval)
+/// <param name="PillionHops">
+/// Pillion's own timed stretches of UI-thread work (the product's <c>UiThreadTimings</c> debug switch), on the monitor's
+/// clock; they name work that reaches the UI thread through Visual Studio's task scheduler, which the dispatcher
+/// operations cannot.
+/// </param>
+public sealed record UiThreadMonitorResult(
+    IReadOnlyList<UiOperationTiming> Operations,
+    IReadOnlyList<UiStackSample> Samples,
+    TimeSpan SampleInterval,
+    IReadOnlyList<UiOperationTiming>? PillionHops = null)
 {
+    /// <summary>The longest stretch without a dispatcher event or a stack sample that still counts as watched.</summary>
+    public static readonly TimeSpan MaxUnwatched = TimeSpan.FromMilliseconds(400);
+
     /// <summary>
-    /// Estimates how much of an interval Pillion's product code held the UI thread: the overlap of Pillion's dispatcher
-    /// operations with it, plus one sample interval for every stack sample in it that has a Pillion frame and falls
-    /// outside those operations. Returns <see langword="null"/> when the monitor did not see the interval well enough to
-    /// say (a stack sample in it failed, or operations and samples together cover less than half of it once the
-    /// sampler's 200 ms reaction time is taken off), so the caller never takes "not seen" for "not Pillion".
+    /// Estimates how much of an interval Pillion's product code held the UI thread: the union of Pillion's dispatcher
+    /// operations, Pillion's own timed hops, and one sample interval before every stack sample with a Pillion frame,
+    /// clipped to the interval. Returns <see langword="null"/> when the monitor did not watch the whole interval (a stack
+    /// sample in it failed, or it saw neither a dispatcher event nor a sample for more than <see cref="MaxUnwatched"/>),
+    /// so the caller never takes "not seen" for "not Pillion".
     /// </summary>
     /// <param name="from">The start of the interval, on the monitor's clock.</param>
     /// <param name="to">The end of the interval.</param>
@@ -62,42 +74,53 @@ public sealed record UiThreadMonitorResult(IReadOnlyList<UiOperationTiming> Oper
             return null;
         }
 
-        var seen = Overlap(Operations, from, to) + TimeSpan.FromTicks(SampleInterval.Ticks * samples.Count);
-        var expected = to - from - UiThreadMonitor.StuckAfter;
-        if (expected > TimeSpan.Zero && seen.Ticks < expected.Ticks / 2)
+        var hops = PillionHops ?? [];
+        var seen = Operations.SelectMany(o => new[] { o.Start, o.End })
+            .Concat(hops.SelectMany(h => new[] { h.Start, h.End }))
+            .Concat(samples.Select(s => s.At))
+            .Where(t => t > from && t < to)
+            .OrderBy(t => t)
+            .ToList();
+        var previous = from;
+        foreach (var time in seen.Append(to))
         {
-            return null;
-        }
-
-        var pillionOperations = Operations.Where(o => o.IsPillion).ToList();
-        var total = Overlap(pillionOperations, from, to);
-        foreach (var sample in samples.Where(s => s.HasPillionFrame))
-        {
-            if (!pillionOperations.Any(o => sample.At >= o.Start && sample.At <= o.End))
+            if (time - previous > MaxUnwatched && !Covered(time, previous))
             {
-                total += SampleInterval;
+                return null;
             }
+
+            previous = time;
         }
 
-        return total;
+        var pillion = Operations.Where(o => o.IsPillion).Select(o => (o.Start, o.End))
+            .Concat(hops.Select(h => (h.Start, h.End)))
+            .Concat(samples.Where(s => s.HasPillionFrame).Select(s => (Start: s.At - SampleInterval, End: s.At)));
+        return UnionWithin(pillion, from, to);
     }
 
-    private static TimeSpan Overlap(IEnumerable<UiOperationTiming> operations, TimeSpan from, TimeSpan to)
+    private static TimeSpan Overlap(IEnumerable<UiOperationTiming> operations, TimeSpan from, TimeSpan to) =>
+        UnionWithin(operations.Select(o => (o.Start, o.End)), from, to);
+
+    private static TimeSpan UnionWithin(IEnumerable<(TimeSpan Start, TimeSpan End)> intervals, TimeSpan from, TimeSpan to)
     {
         var total = TimeSpan.Zero;
-        foreach (var operation in operations)
+        var reached = from;
+        foreach (var (start, end) in intervals.OrderBy(i => i.Start))
         {
-            var start = operation.Start > from ? operation.Start : from;
-            var end = operation.End < to ? operation.End : to;
-            if (end > start)
+            var clippedStart = start > reached ? start : reached;
+            var clippedEnd = end < to ? end : to;
+            if (clippedEnd > clippedStart)
             {
-                total += end - start;
+                total += clippedEnd - clippedStart;
+                reached = clippedEnd;
             }
         }
 
         return total;
     }
 
+    /// <summary>Returns whether one dispatcher operation spans a stretch (a long operation is watched while it runs).</summary>
+    private bool Covered(TimeSpan end, TimeSpan start) => Operations.Any(o => o.Start <= start && o.End >= end);
     /// <summary>Formats the operations and the stack samples (identical consecutive stacks are folded together).</summary>
     /// <param name="listFrom">Operations at least this long are listed one by one.</param>
     /// <param name="samplesFrom">The first time, on the monitor's clock, whose stack samples are printed.</param>
@@ -125,6 +148,19 @@ public sealed record UiThreadMonitorResult(IReadOnlyList<UiOperationTiming> Oper
                 $"  {group.Count(),3} x, {group.Sum(o => o.Duration.TotalMilliseconds),7:0.0} ms in all, longest {group.Max(o => o.Duration.TotalMilliseconds),6:0.0} ms: {group.Key}");
         }
 
+        if (PillionHops is { } hops)
+        {
+            yield return hops.Count == 0
+                ? "Pillion's own timed UI thread work: none"
+                : FormattableString.Invariant(
+                    $"Pillion's own timed UI thread work: {hops.Count} stretches, {hops.Sum(h => h.Duration.TotalMilliseconds):0.0} ms in all, longest {hops.Max(h => h.Duration.TotalMilliseconds):0.0} ms:");
+            foreach (var group in hops.GroupBy(h => h.Description).OrderByDescending(g => g.Sum(h => h.Duration.Ticks)))
+            {
+                yield return FormattableString.Invariant(
+                    $"  {group.Count(),3} x, {group.Sum(h => h.Duration.TotalMilliseconds),7:0.0} ms in all, longest {group.Max(h => h.Duration.TotalMilliseconds),6:0.0} ms: {group.Key}");
+            }
+        }
+
         var slow = Operations.Where(o => o.Duration >= listFrom).ToList();
         yield return slow.Count == 0
             ? FormattableString.Invariant($"UI thread dispatcher operations of {listFrom.TotalMilliseconds:0} ms or more: none")
@@ -136,10 +172,28 @@ public sealed record UiThreadMonitorResult(IReadOnlyList<UiOperationTiming> Oper
 
         var inGap = Operations.Where(o => o.End > samplesFrom && o.Start < samplesTo).ToList();
         yield return FormattableString.Invariant(
-            $"UI thread dispatcher operations from {samplesFrom.TotalMilliseconds:0} to {samplesTo.TotalMilliseconds:0} ms: {inGap.Count}, {Overlap(inGap, samplesFrom, samplesTo).TotalMilliseconds:0} ms in all{(inGap.Count > 0 ? " (longest first):" : string.Empty)}");
-        foreach (var operation in inGap.OrderByDescending(o => o.Duration).Take(15))
+            $"UI thread dispatcher operations from {samplesFrom.TotalMilliseconds:0} to {samplesTo.TotalMilliseconds:0} ms: {inGap.Count}, {Overlap(inGap, samplesFrom, samplesTo).TotalMilliseconds:0} ms in all{(inGap.Count > 0 ? " (most frequent first):" : string.Empty)}");
+        foreach (var group in inGap.GroupBy(o => (o.Priority, o.Description)).OrderByDescending(g => g.Count()).Take(8))
         {
-            yield return "  " + operation + (operation.IsPillion ? "  <-- Pillion" : string.Empty);
+            yield return FormattableString.Invariant(
+                $"  {group.Count(),4} x {group.Key.Priority,-11} {group.Sum(o => o.Duration.TotalMilliseconds),7:0.0} ms in all, longest {group.Max(o => o.Duration.TotalMilliseconds),6:0.0} ms: {group.Key.Description}")
+                + (group.First().IsPillion ? "  <-- Pillion" : string.Empty);
+        }
+
+        foreach (var operation in inGap.Where(o => o.Duration >= TimeSpan.FromMilliseconds(10)).OrderByDescending(o => o.Duration).Take(10))
+        {
+            yield return "  longest: " + operation + (operation.IsPillion ? "  <-- Pillion" : string.Empty);
+        }
+
+        if (PillionHops is { } allHops)
+        {
+            var hopsInGap = allHops.Where(h => h.End > samplesFrom && h.Start < samplesTo).ToList();
+            yield return FormattableString.Invariant(
+                $"Pillion's own timed UI thread work from {samplesFrom.TotalMilliseconds:0} to {samplesTo.TotalMilliseconds:0} ms: {hopsInGap.Count}, {Overlap(hopsInGap, samplesFrom, samplesTo).TotalMilliseconds:0.0} ms in all");
+            foreach (var hop in hopsInGap.OrderByDescending(h => h.Duration).Take(10))
+            {
+                yield return "  " + hop;
+            }
         }
 
         var shown = Samples.Where(s => s.At >= samplesFrom && s.At <= samplesTo).ToList();
@@ -252,14 +306,15 @@ public sealed class UiThreadMonitor : IDisposable
         && text.IndexOf("Pillion.VisualStudio.IntegrationTests", StringComparison.Ordinal) < 0;
 
     /// <summary>Stops watching and returns what was seen.</summary>
+    /// <param name="pillionHops">Pillion's own timed UI thread work over the same window, on the same clock, if it was recorded.</param>
     /// <returns>The result.</returns>
-    public UiThreadMonitorResult Stop()
+    public UiThreadMonitorResult Stop(IReadOnlyList<UiOperationTiming>? pillionHops = null)
     {
         Dispose();
         lock (_gate)
         {
             var operations = _operations.Select(o => new UiOperationTiming(TicksToTimeSpan(o.Started), TicksToTimeSpan(o.Duration), o.Priority, Describe(o.Payload)));
-            return new UiThreadMonitorResult(operations.OrderBy(o => o.Start).ToList(), _samples.ToList(), _sampleInterval);
+            return new UiThreadMonitorResult(operations.OrderBy(o => o.Start).ToList(), _samples.ToList(), _sampleInterval, pillionHops);
         }
     }
 

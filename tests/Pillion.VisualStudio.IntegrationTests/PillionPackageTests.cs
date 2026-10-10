@@ -87,8 +87,11 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
         // wakes: it has nothing to do with the UI thread, so when both show a long gap together the machine (a shared CI
         // runner starved of CPU, a pause of the whole process) stalled, and when only the UI thread does, the UI thread
         // was kept busy.
+        // Beside them, UiThreadMonitor times every dispatcher operation and samples the UI thread's stack in a stall, and
+        // the product's UiThreadTimings switch times Pillion's own UI-thread work, so a gap can be attributed.
         using var uiCpu = ThreadCpuMeter.ForCurrentThread();
         var uiCpuBefore = uiCpu.Read();
+        PillionHostChecks.StartUiThreadTimings();
         var timeline = Stopwatch.StartNew();
         var interval = TimeSpan.FromMilliseconds(250);
         var window = TimeSpan.FromSeconds(15);
@@ -100,7 +103,7 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
         var background = await heartbeat;
         var report = await restart;
         var uiCpuUsed = uiCpu.Read() - uiCpuBefore;
-        var watched = monitor.Stop();
+        var watched = monitor.Stop(PillionHostChecks.StopUiThreadTimings(timeline));
 
         Output.WriteLine($"Killed Pillion.Host.exe pid {report.KilledProcessId} at {report.KilledAt.TotalMilliseconds:0} ms on the probes' clock; left Ready after {report.LeftReadyAfter.TotalMilliseconds:0} ms; Ready again after {report.ReadyAgainAfter.TotalMilliseconds:0} ms with pid {report.NewProcessId}.");
         foreach (var transition in report.Transitions)

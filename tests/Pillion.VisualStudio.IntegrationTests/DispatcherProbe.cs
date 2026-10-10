@@ -224,7 +224,7 @@ public static class BackgroundHeartbeat
 /// <param name="Warning">What to note in the output when the test passes although the UI gap exceeded the budget, or <see langword="null"/>.</param>
 public sealed record ResponsivenessVerdict(string? Failure, string? Warning)
 {
-    /// <summary>A UI gap over this fails the test whatever the background thread did: no machine stall explains it.</summary>
+    /// <summary>A UI gap over this fails the test whatever the background thread did (no machine stall explains it), unless it is attributed to other code.</summary>
     public static readonly TimeSpan HardLimit = TimeSpan.FromSeconds(5);
 
     /// <summary>A background gap under this means the machine was not stalled, so the UI budget applies in full.</summary>
@@ -249,15 +249,12 @@ public sealed record ResponsivenessVerdict(string? Failure, string? Warning)
     {
         var detail = FormattableString.Invariant($"UI thread longest gap {uiGap.TotalMilliseconds:0} ms, background thread longest gap {backgroundGap.TotalMilliseconds:0} ms");
 
+        string? failure = null;
         if (uiGap > HardLimit)
         {
-            return new ResponsivenessVerdict(
-                FormattableString.Invariant($"The UI thread stalled for more than {HardLimit.TotalSeconds:0} s after the host was killed ({detail}){Share(pillionShare)}."),
-                null);
+            failure = FormattableString.Invariant($"The UI thread stalled for more than {HardLimit.TotalSeconds:0} s after the host was killed ({detail}){Share(pillionShare)}.");
         }
-
-        string? failure = null;
-        if (uiGap - backgroundGap >= budget)
+        else if (uiGap - backgroundGap >= budget)
         {
             failure = FormattableString.Invariant($"The UI thread stalled {(uiGap - backgroundGap).TotalMilliseconds:0} ms longer than a background thread did after the host was killed ({detail}){Share(pillionShare)}; the budget is {budget.TotalSeconds:0.#} s.");
         }
@@ -271,7 +268,7 @@ public sealed record ResponsivenessVerdict(string? Failure, string? Warning)
             return pillionShare is { } share && share <= PillionShareLimit
                 ? new ResponsivenessVerdict(
                     null,
-                    FormattableString.Invariant($"WARNING: the UI thread gap reached the {budget.TotalSeconds:0.#} s budget while a background thread did not stall ({detail}), but Pillion's code held the UI thread for only {share.TotalMilliseconds:0} ms of it (the limit is {PillionShareLimit.TotalMilliseconds:0} ms), so other code stalled it; see the stack samples above."))
+                    FormattableString.Invariant($"WARNING: the UI thread gap reached the {budget.TotalSeconds:0.#} s budget ({detail}), but Pillion's code held the UI thread for only {share.TotalMilliseconds:0} ms of it (the limit is {PillionShareLimit.TotalMilliseconds:0} ms), so other code stalled it; see the dispatcher operations and stack samples of the gap above."))
                 : new ResponsivenessVerdict(failure, null);
         }
 
