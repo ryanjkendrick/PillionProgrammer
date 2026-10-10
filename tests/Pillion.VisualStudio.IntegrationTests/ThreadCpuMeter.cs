@@ -20,11 +20,19 @@ public sealed class ThreadCpuMeter : IDisposable
         _handle = handle;
     }
 
+    /// <summary>Gets the native id of the calling thread (to meter it later from another thread).</summary>
+    public static uint CurrentThreadId => NativeMethods.GetCurrentThreadId();
+
     /// <summary>Opens a meter for the calling thread.</summary>
     /// <returns>The meter; dispose it.</returns>
-    public static ThreadCpuMeter ForCurrentThread()
+    public static ThreadCpuMeter ForCurrentThread() => ForThread(NativeMethods.GetCurrentThreadId());
+
+    /// <summary>Opens a meter for a thread of this process, which another thread can then read.</summary>
+    /// <param name="threadId">The native thread id (<see cref="CurrentThreadId"/> read on that thread).</param>
+    /// <returns>The meter; dispose it.</returns>
+    public static ThreadCpuMeter ForThread(uint threadId)
     {
-        var handle = NativeMethods.OpenThread(ThreadQueryLimitedInformation, bInheritHandle: false, NativeMethods.GetCurrentThreadId());
+        var handle = NativeMethods.OpenThread(ThreadQueryLimitedInformation, bInheritHandle: false, threadId);
         if (handle == IntPtr.Zero)
         {
             throw new Win32Exception(Marshal.GetLastWin32Error(), "OpenThread failed.");
