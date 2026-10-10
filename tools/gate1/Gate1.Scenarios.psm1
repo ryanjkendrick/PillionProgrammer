@@ -532,7 +532,7 @@ function New-Gate1Table {
     if ($null -ne $kOn50 -and $null -ne $kOff50) {
         $d50 = [math]::Round($kOn50 - $kOff50, 2); $d95 = [math]::Round($kOn95 - $kOff95, 2)
         $s50 = [math]::Round($kS50 - $kOff50, 2); $s95 = [math]::Round($kS95 - $kOff95, 2)
-        & $add 'Keystroke latency with autocomplete on' '+0 ms p50, +2 ms p95' ("TypeChar on the UI thread: on ({0}) p50 {1:0.00} ms, p95 {2:0.00} ms; off p50 {3:0.00} ms, p95 {4:0.00} ms; difference p50 {5:+0.00;-0.00} ms, p95 {6:+0.00;-0.00} ms (with {7}: {8:+0.00;-0.00} / {9:+0.00;-0.00} ms)" -f $FastModel, $kOn50, $kOn95, $kOff50, $kOff95, $d50, $d95, $StrongModel, $s50, $s95) $(if ([math]::Abs($d50) -lt 0.5 -and $d95 -le 2) { 'Pass' } else { 'Fail' }) 'Typing scenario: each TypeChar through the view command chain timed until it returns (the character is in the buffer), autocomplete on against off'
+        & $add 'Keystroke latency with autocomplete on' '+0 ms p50, +2 ms p95' ("TypeChar on the UI thread: on ({0}) p50 {1:0.00} ms, p95 {2:0.00} ms; off p50 {3:0.00} ms, p95 {4:0.00} ms; difference p50 {5:+0.00;-0.00} ms, p95 {6:+0.00;-0.00} ms (with {7}: {8:+0.00;-0.00} / {9:+0.00;-0.00} ms)" -f $FastModel, $kOn50, $kOn95, $kOff50, $kOff95, $d50, $d95, $StrongModel, $s50, $s95) $(if ($d50 -lt 0.5 -and $d95 -le 2) { 'Pass' } else { 'Fail' }) 'Typing scenario: each TypeChar through the view command chain timed until it returns (the character is in the buffer), autocomplete on against off'
     }
     else { & $add 'Keystroke latency with autocomplete on' '+0 ms p50, +2 ms p95' 'not measured' 'Not measured' '' }
 
