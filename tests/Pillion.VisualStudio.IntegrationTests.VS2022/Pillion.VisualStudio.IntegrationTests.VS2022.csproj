@@ -23,6 +23,8 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.VisualStudio.SDK" />
+    <!-- Markdig (through Pillion.VisualStudio.Core) needs System.Memory 4.6.3; the SDK graph brings 4.6.0. -->
+    <PackageReference Include="System.Memory" />
     <PackageReference Include="Microsoft.VisualStudio.Extensibility.Testing.Xunit" VersionOverride="$(PillionIdeTestFrameworkVS2022Version)" />
     <PackageReference Include="Microsoft.VisualStudio.Extensibility.Testing.SourceGenerator" VersionOverride="$(PillionIdeTestFrameworkVS2022Version)" PrivateAssets="all" />
   </ItemGroup>

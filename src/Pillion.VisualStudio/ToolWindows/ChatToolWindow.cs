@@ -1,6 +1,13 @@
 using System;
 using System.Runtime.InteropServices;
+using Microsoft.VisualStudio.ComponentModelHost;
+using Microsoft.VisualStudio.Editor;
+using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Editor;
+using Microsoft.VisualStudio.TextManager.Interop;
+using Microsoft.VisualStudio.Utilities;
 using Pillion.VisualStudio.Core;
 
 namespace Pillion.VisualStudio.ToolWindows;
@@ -42,9 +49,13 @@ internal sealed class ChatToolWindow : ToolWindowPane
             throw new ArgumentNullException(nameof(state));
         }
 
+        ThreadHelper.ThrowIfNotOnUIThread();
         Caption = Title;
         _viewModel = state.ViewModel;
-        _control = new ChatToolWindowControl(_viewModel);
+        var log = PillionPackage.Instance?.Log;
+        var actions = CreateActions(log);
+        _viewModel.ConfirmDelete = actions.ConfirmDelete;
+        _control = new ChatToolWindowControl(_viewModel, CreateRenderContext(actions, log));
         Content = _control;
         _viewModel.Start();
     }
@@ -61,9 +72,63 @@ internal sealed class ChatToolWindow : ToolWindowPane
     {
         if (disposing)
         {
+            _control.Dispose();
             _viewModel.Dispose();
         }
 
         base.Dispose(disposing);
+    }
+
+    private static ChatEditorActions CreateActions(PillionLog? log)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var componentModel = ServiceProvider.GlobalProvider.GetService(typeof(SComponentModel)) as IComponentModel;
+        return new ChatEditorActions(
+            ServiceProvider.GlobalProvider,
+            ServiceProvider.GlobalProvider.GetService(typeof(SVsTextManager)) as IVsTextManager,
+            componentModel?.GetService<IVsEditorAdaptersFactoryService>(),
+            componentModel?.GetService<ITextDocumentFactoryService>(),
+            log);
+    }
+
+    /// <summary>
+    /// Themes the Markdown renderer with Visual Studio's colour keys and gives code blocks embedded editor views (falling
+    /// back to a monospace text box when the editor services are missing).
+    /// </summary>
+    private static MarkdownRenderContext CreateRenderContext(ChatEditorActions actions, PillionLog? log)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var theme = new MarkdownTheme
+        {
+            TextBrushKey = VsBrushes.ToolWindowTextKey,
+            SecondaryTextBrushKey = VsBrushes.GrayTextKey,
+            LinkBrushKey = EnvironmentColors.ControlLinkTextBrushKey,
+            BorderBrushKey = VsBrushes.ToolWindowBorderKey,
+            CodeBackgroundBrushKey = VsBrushes.WindowKey,
+            CodeTextBrushKey = VsBrushes.WindowTextKey,
+            QuoteBarBrushKey = VsBrushes.GrayTextKey,
+        };
+        var context = new MarkdownRenderContext
+        {
+            Theme = theme,
+            OpenLink = actions.ConfirmAndOpen,
+            InsertAtCaret = actions.CanInsert ? actions.InsertAtCaret : null,
+        };
+
+        var componentModel = ServiceProvider.GlobalProvider.GetService(typeof(SComponentModel)) as IComponentModel;
+        var editors = componentModel?.GetService<ITextEditorFactoryService>();
+        var buffers = componentModel?.GetService<ITextBufferFactoryService>();
+        var contentTypes = componentModel?.GetService<IContentTypeRegistryService>();
+        var extensions = componentModel?.GetService<IFileExtensionRegistryService>();
+        if (editors is not null && buffers is not null && contentTypes is not null && extensions is not null)
+        {
+            context.CodeViews = new EditorCodeViewFactory(editors, buffers, contentTypes, extensions, new PlainCodeViewFactory(theme), () => RoslynCodeWorkspaces.TryCreate(componentModel!, log), log);
+        }
+        else
+        {
+            log?.Warning("chat.codeview.unavailable", "The editor services are unavailable; chat code blocks use a text box.");
+        }
+
+        return context;
     }
 }

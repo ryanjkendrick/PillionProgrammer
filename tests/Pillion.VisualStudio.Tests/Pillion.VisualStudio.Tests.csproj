@@ -13,12 +13,29 @@
     <PackageReference Include="StreamJsonRpc" />
     <PackageReference Include="MessagePack" />
     <PackageReference Include="Microsoft.VisualStudio.Threading" />
+    <!-- Markdig (through Core) needs System.Memory 4.6.3; the RPC packages bring 4.6.0. -->
+    <PackageReference Include="System.Memory" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Pillion.VisualStudio.Core\Pillion.VisualStudio.Core.csproj" />
     <!-- Build-order only: the real-process tests launch the fake host from its own output folder. -->
     <ProjectReference Include="..\Pillion.FakeHost\Pillion.FakeHost.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" GlobalPropertiesToRemove="TargetFramework" />
+  </ItemGroup>
+
+  <!--
+    The chat window's Markdown renderer lives in the VSIX, which dotnet cannot build, but these files have no Visual Studio
+    dependency: they are compiled into this assembly too so the block-to-element mapping, the incremental updates and the
+    virtualised transcript can be tested on a WPF thread.
+  -->
+  <ItemGroup>
+    <Compile Include="..\..\src\Pillion.VisualStudio\ToolWindows\Markdown\MarkdownRenderContext.cs" Link="Linked\MarkdownRenderContext.cs" />
+    <Compile Include="..\..\src\Pillion.VisualStudio\ToolWindows\Markdown\MarkdownBlockRenderer.cs" Link="Linked\MarkdownBlockRenderer.cs" />
+    <Compile Include="..\..\src\Pillion.VisualStudio\ToolWindows\Markdown\MarkdownMessageView.cs" Link="Linked\MarkdownMessageView.cs" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="System.Xaml" />
   </ItemGroup>
 
   <ItemGroup>

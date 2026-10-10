@@ -244,7 +244,7 @@ public sealed class RealProcessTests : IDisposable
         Assert.Equal(ChatTurnState.Complete, reply.State);
         Assert.Equal("Fake Local Coder via Ollama (fake), local", reply.Header);
         Assert.StartsWith("Hello from Fake Local Coder (model fake-local-coder", reply.Text, StringComparison.Ordinal);
-        Assert.Contains(reply.Segments, s => s.IsCode && s.Language == "csharp" && s.Text.Contains("Console.WriteLine"));
+        Assert.Contains(reply.Markdown.Blocks, b => b is Core.Markdown.MarkdownCodeBlock { Language.Id: "csharp" } code && code.Code.Contains("Console.WriteLine"));
 
         // Auto sends no model id; the header names the model the host says answered.
         chat.ModelPicker.SelectedModel = chat.ModelPicker.Models.Single(m => m.IsAuto);

@@ -3,6 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:ClassModifier="internal"
              xmlns:core="clr-namespace:Pillion.VisualStudio.Core;assembly=Pillion.VisualStudio.Core"
+             xmlns:local="clr-namespace:Pillion.VisualStudio.ToolWindows"
              xmlns:vsshell="clr-namespace:Microsoft.VisualStudio.Shell;assembly=Microsoft.VisualStudio.Shell.15.0"
              xmlns:platformui="clr-namespace:Microsoft.VisualStudio.PlatformUI;assembly=Microsoft.VisualStudio.Shell.15.0"
              platformui:ThemedDialogStyleLoader.UseDefaultThemedDialogStyles="True"
@@ -13,9 +14,11 @@
              AutomationProperties.Name="Pillion Chat">
 
     <!--
-      Phase 0 rendering: plain text, with fenced code blocks in a monospace block. Every colour comes from a Visual Studio
-      theme key (VsBrushes / EnvironmentColors), so the window follows the light, dark, blue and high-contrast themes.
-      State is never shown by colour alone: errors, stops and interruptions all have text.
+      Replies render as Markdown (Markdig, see local:MarkdownMessageView): themed WPF elements for prose, lists, tables and
+      quotes, and read-only editor views for code blocks. Every colour comes from a Visual Studio theme key (VsBrushes /
+      EnvironmentColors), so the window follows the light, dark, blue and high-contrast themes. State is never shown by
+      colour alone: errors, stops and interruptions all have text. The transcript virtualises (pixel scrolling, recycled
+      containers); rendered replies are cached per turn so scrolling never rebuilds them.
     -->
     <UserControl.Resources>
         <CollectionViewSource x:Key="GroupedModels" Source="{Binding ModelPicker.Models}">
@@ -24,39 +27,12 @@
             </CollectionViewSource.GroupDescriptions>
         </CollectionViewSource>
 
+        <BooleanToVisibilityConverter x:Key="VisibleWhenTrue" />
+
         <Style x:Key="SecondaryText" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" />
             <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
-
-        <!-- One segment of a message: selectable prose, or a code block in a bordered monospace box. -->
-        <DataTemplate x:Key="SegmentTemplate" DataType="{x:Type core:ChatSegment}">
-            <TextBox x:Name="Segment"
-                     Text="{Binding Text, Mode=OneWay}"
-                     IsReadOnly="True"
-                     IsTabStop="False"
-                     TextWrapping="Wrap"
-                     BorderThickness="0"
-                     Padding="0"
-                     Margin="0,2,0,2"
-                     Background="Transparent"
-                     Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
-                     AutomationProperties.Name="{Binding AutomationName}" />
-            <DataTemplate.Triggers>
-                <DataTrigger Binding="{Binding IsCode}" Value="True">
-                    <Setter TargetName="Segment" Property="FontFamily" Value="Cascadia Mono, Consolas, Courier New" />
-                    <Setter TargetName="Segment" Property="TextWrapping" Value="NoWrap" />
-                    <Setter TargetName="Segment" Property="HorizontalScrollBarVisibility" Value="Auto" />
-                    <Setter TargetName="Segment" Property="IsTabStop" Value="True" />
-                    <Setter TargetName="Segment" Property="Padding" Value="6,4,6,4" />
-                    <Setter TargetName="Segment" Property="Margin" Value="0,4,0,4" />
-                    <Setter TargetName="Segment" Property="BorderThickness" Value="1" />
-                    <Setter TargetName="Segment" Property="BorderBrush" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBorderKey}}" />
-                    <Setter TargetName="Segment" Property="Background" Value="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}" />
-                    <Setter TargetName="Segment" Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}" />
-                </DataTrigger>
-            </DataTemplate.Triggers>
-        </DataTemplate>
 
         <!-- One turn: header naming the author (or the model and provider that answered), the text, and its state. -->
         <DataTemplate x:Key="TurnTemplate" DataType="{x:Type core:ChatTurnViewModel}">
@@ -70,9 +46,21 @@
                     AutomationProperties.Name="{Binding AutomationName}">
                 <StackPanel>
                     <TextBlock Text="{Binding Header}" FontWeight="SemiBold" Margin="0,0,0,2" />
-                    <ItemsControl ItemsSource="{Binding Segments}"
-                                  ItemTemplate="{StaticResource SegmentTemplate}"
-                                  Focusable="False" />
+                    <!-- The developer's message, as typed (selectable). -->
+                    <TextBox x:Name="UserText"
+                             Text="{Binding Text, Mode=OneWay}"
+                             IsReadOnly="True"
+                             IsTabStop="False"
+                             TextWrapping="Wrap"
+                             BorderThickness="0"
+                             Padding="0"
+                             Margin="0,2,0,2"
+                             Background="Transparent"
+                             Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
+                             Visibility="Collapsed"
+                             AutomationProperties.Name="{Binding Text}" />
+                    <!-- The reply, rendered as Markdown. -->
+                    <local:MarkdownMessageView x:Name="Reply" Turn="{Binding}" />
                     <TextBlock x:Name="StateNote"
                                Text="{Binding StateText}"
                                Style="{StaticResource SecondaryText}"
@@ -98,6 +86,9 @@
             <DataTemplate.Triggers>
                 <DataTrigger Binding="{Binding IsUser}" Value="True">
                     <Setter TargetName="Turn" Property="BorderBrush" Value="{DynamicResource {x:Static platformui:EnvironmentColors.ToolWindowTabSelectedTabBrushKey}}" />
+                    <Setter TargetName="UserText" Property="Visibility" Value="Visible" />
+                    <Setter TargetName="Reply" Property="Visibility" Value="Collapsed" />
+                    <Setter TargetName="Reply" Property="Turn" Value="{x:Null}" />
                 </DataTrigger>
                 <DataTrigger Binding="{Binding HasStateText}" Value="True">
                     <Setter TargetName="StateNote" Property="Visibility" Value="Visible" />
@@ -136,6 +127,59 @@
                 </Style>
             </TextBlock.Style>
         </TextBlock>
+
+        <!-- Conversation list: kept in memory for the session (persistence arrives in phase 2). -->
+        <Grid DockPanel.Dock="Top" Margin="0,0,0,4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Label Grid.Column="0" Content="{x:Static core:ChatStrings.ConversationLabel}" Target="{Binding ElementName=ConversationPicker}" VerticalAlignment="Center" Padding="0,0,6,0"
+                   Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+            <ComboBox x:Name="ConversationPicker"
+                      Grid.Column="1"
+                      ItemsSource="{Binding Conversations}"
+                      SelectedItem="{Binding CurrentConversation, Mode=TwoWay}"
+                      AutomationProperties.Name="{x:Static core:ChatStrings.ConversationListName}">
+                <ComboBox.Style>
+                    <Style TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsRenaming}" Value="True">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ComboBox.Style>
+                <ComboBox.ItemContainerStyle>
+                    <Style TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
+                        <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                    </Style>
+                </ComboBox.ItemContainerStyle>
+                <ComboBox.ItemTemplate>
+                    <DataTemplate DataType="{x:Type core:ChatConversation}">
+                        <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+            <TextBox x:Name="RenameBox"
+                     Grid.Column="1"
+                     Text="{Binding RenameText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                     Visibility="{Binding IsRenaming, Converter={StaticResource VisibleWhenTrue}}"
+                     PreviewKeyDown="OnRenameKeyDown"
+                     LostKeyboardFocus="OnRenameLostFocus"
+                     IsVisibleChanged="OnRenameVisibleChanged"
+                     AutomationProperties.Name="{x:Static core:ChatStrings.RenameBoxName}"
+                     AutomationProperties.HelpText="{x:Static core:ChatStrings.RenameBoxHelp}" />
+            <Button Grid.Column="2" Content="{x:Static core:ChatStrings.NewConversationButton}" Command="{Binding NewConversationCommand}" Margin="4,0,0,0" MinWidth="50"
+                    AutomationProperties.Name="{x:Static core:ChatStrings.NewConversationName}" ToolTip="{x:Static core:ChatStrings.NewConversationToolTip}" />
+            <Button Grid.Column="3" Content="{x:Static core:ChatStrings.RenameConversationButton}" Command="{Binding RenameConversationCommand}" Margin="4,0,0,0" MinWidth="50"
+                    AutomationProperties.Name="{x:Static core:ChatStrings.RenameConversationName}" ToolTip="{x:Static core:ChatStrings.RenameConversationToolTip}" />
+            <Button Grid.Column="4" Content="{x:Static core:ChatStrings.DeleteConversationButton}" Command="{Binding DeleteConversationCommand}" Margin="4,0,0,0" MinWidth="50"
+                    AutomationProperties.Name="{x:Static core:ChatStrings.DeleteConversationName}" ToolTip="{x:Static core:ChatStrings.DeleteConversationToolTip}" />
+        </Grid>
 
         <!-- Model picker and conversation commands. -->
         <Grid DockPanel.Dock="Top" Margin="0,0,0,4">
@@ -258,16 +302,36 @@
             </StackPanel>
         </Grid>
 
-        <!-- Transcript. -->
-        <ScrollViewer x:Name="TranscriptScroller"
-                      VerticalScrollBarVisibility="Auto"
-                      HorizontalScrollBarVisibility="Disabled"
-                      ScrollChanged="OnTranscriptScrollChanged"
-                      Focusable="False">
-            <ItemsControl ItemsSource="{Binding Turns}"
-                          ItemTemplate="{StaticResource TurnTemplate}"
-                          Focusable="False"
-                          AutomationProperties.Name="Conversation" />
-        </ScrollViewer>
+        <!-- Transcript: a virtualising list (pixel scrolling, recycled containers). -->
+        <local:TranscriptItemsControl x:Name="Transcript"
+                      ItemsSource="{Binding Turns}"
+                      ItemTemplate="{StaticResource TurnTemplate}"
+                      Focusable="False"
+                      VirtualizingPanel.IsVirtualizing="True"
+                      VirtualizingPanel.VirtualizationMode="Recycling"
+                      VirtualizingPanel.ScrollUnit="Pixel"
+                      VirtualizingPanel.CacheLengthUnit="Page"
+                      VirtualizingPanel.CacheLength="1,1"
+                      ScrollViewer.CanContentScroll="True"
+                      ScrollViewer.ScrollChanged="OnTranscriptScrollChanged"
+                      AutomationProperties.Name="Conversation"
+                      AutomationProperties.AutomationId="TranscriptScroller">
+            <ItemsControl.Template>
+                <ControlTemplate TargetType="ItemsControl">
+                    <ScrollViewer x:Name="PART_Scroller"
+                                  CanContentScroll="True"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  Focusable="False">
+                        <ItemsPresenter />
+                    </ScrollViewer>
+                </ControlTemplate>
+            </ItemsControl.Template>
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <VirtualizingStackPanel />
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+        </local:TranscriptItemsControl>
     </DockPanel>
 </UserControl>
