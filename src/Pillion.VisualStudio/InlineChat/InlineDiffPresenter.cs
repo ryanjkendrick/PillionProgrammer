@@ -55,18 +55,18 @@ internal sealed class InlineDiffPresenter : IDisposable
             InlineChatEditorServices.DiffViewRole);
         _viewer = services.DifferenceViewers.CreateDifferenceView(_difference, roles);
         _viewer.ViewMode = DifferenceViewMode.Inline;
-        _viewer.Options.SetOptionValue(DifferenceViewerOptions.ShowDiffOverviewMarginId, false);
-        _viewer.Options.SetOptionValue(DifferenceViewerOptions.ScrollToFirstDiffId, false);
-        _viewer.Options.SetOptionValue(DifferenceViewerOptions.HighlightModeId, DifferenceHighlightMode.WholeLine);
+        TrySet(_viewer.Options, DifferenceViewerOptions.ShowDiffOverviewMarginId, false);
+        TrySet(_viewer.Options, DifferenceViewerOptions.ScrollToFirstDiffId, false);
+        TrySet(_viewer.Options, DifferenceViewerOptions.HighlightModeId, DifferenceHighlightMode.WholeLine);
 
         var inline = _viewer.InlineView;
-        inline.Options.SetOptionValue(DefaultTextViewHostOptions.LineNumberMarginId, false);
-        inline.Options.SetOptionValue(DefaultTextViewHostOptions.GlyphMarginId, false);
-        inline.Options.SetOptionValue(DefaultTextViewHostOptions.OutliningMarginId, false);
-        inline.Options.SetOptionValue(DefaultTextViewHostOptions.SelectionMarginId, false);
-        inline.Options.SetOptionValue(DefaultTextViewHostOptions.ChangeTrackingId, false);
-        inline.Options.SetOptionValue(DefaultTextViewOptions.WordWrapStyleId, WordWrapStyles.None);
-        inline.Options.SetOptionValue(DefaultTextViewOptions.UseVisibleWhitespaceId, false);
+        TrySet(inline.Options, DefaultTextViewHostOptions.LineNumberMarginId, false);
+        TrySet(inline.Options, DefaultTextViewHostOptions.GlyphMarginId, false);
+        TrySet(inline.Options, DefaultTextViewHostOptions.OutliningMarginId, false);
+        TrySet(inline.Options, DefaultTextViewHostOptions.SelectionMarginId, false);
+        TrySet(inline.Options, DefaultTextViewHostOptions.ChangeTrackingId, false);
+        TrySet(inline.Options, DefaultTextViewOptions.WordWrapStyleId, WordWrapStyles.None);
+        TrySet(inline.Options, DefaultTextViewOptions.UseVisibleWhitespaceId, false);
 
         // The adornment is inside the document view, which applies its own zoom to everything in it.
         inline.ZoomLevel = 100;
@@ -130,6 +130,25 @@ internal sealed class InlineDiffPresenter : IDisposable
         if (!_viewer.IsClosed)
         {
             _viewer.Close();
+        }
+    }
+
+    /// <summary>
+    /// Sets an editor option where the options object accepts it: some options are defined for a scope that is not the
+    /// one a version of Visual Studio gives the difference viewer ("not valid in this scope"); the default is kept then.
+    /// </summary>
+    private static void TrySet<T>(IEditorOptions options, EditorOptionKey<T> key, T value)
+    {
+        try
+        {
+            if (options.IsOptionDefined(key, localScopeOnly: false))
+            {
+                options.SetOptionValue(key, value);
+            }
+        }
+        catch (ArgumentException)
+        {
+            // Not valid in this scope on this version.
         }
     }
 

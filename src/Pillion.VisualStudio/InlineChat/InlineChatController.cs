@@ -459,7 +459,18 @@ internal sealed class InlineChatController : IInlineChatEditor, IDisposable
                     // A new request: a fresh difference view; /test compares against nothing, so its code shows as added.
                     _diff?.Dispose();
                     var original = session.Command == Contracts.InlineEditCommand.Test ? string.Empty : session.Document.ScopeText;
-                    _diff = new InlineDiffPresenter(_services, _view.TextBuffer.ContentType, original, _view);
+                    _diff = null;
+                    try
+                    {
+                        _diff = new InlineDiffPresenter(_services, _view.TextBuffer.ContentType, original, _view);
+                    }
+#pragma warning disable CA1031 // Without a difference view the proposal still streams; the failure is logged.
+                    catch (Exception ex)
+#pragma warning restore CA1031
+                    {
+                        _feature.Log.Error("inlinechat.diff.failed", "The inline difference view could not be created.", ("error", ex.GetType().Name), ("detail", ex.Message));
+                    }
+
                     _timer?.Start();
                 }
                 else
