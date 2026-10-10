@@ -124,6 +124,30 @@ An approved file comes back with `IsSensitive`, and the gateway never sends such
 `PauseIndexingAsync` does nothing. The chat side of context (pins, current file, rules, history summary) is in the Model
 Gateway README, Context assembly.
 
+## Diagnostics (`Models/DiagnosticsRpcService.cs`)
+
+`DiagnosticsRpcService` serves `IDiagnosticsService`, read-only and never with prompt or completion text:
+
+- `GetAutocompleteCountersAsync` (work item 1.5): the gateway's autocomplete counters and the last five minutes of
+  autocomplete records in the Outbound log.
+- `GetOutboundRecordsAsync(maxCount)` (work item 1.13): the Outbound log's records, newest first, at most `maxCount` (0 or
+  less means 200; the ring buffer keeps `ModelGatewayOptions.OutboundLogCapacity`). Each is time, request id, provider,
+  model, task class, locality, prompt and completion tokens, redactions, context items and how many were trimmed,
+  duration, outcome with its error code, and whether autocomplete served it from the cache. The Chat window's Outbound log
+  view reads it.
+- `PreviewContextAsync(ChatRequest)` (work item 1.13): the Context Inspector. `ContextPreview` routes the request as the
+  gateway would (the router sees only the size of the user's message), builds the same assembly target (the inventory's
+  window, capped at the routed profile's `num_ctx` for Ollama, the chat system prompt, the effective exclusions) and runs a
+  fresh `ContextAssembler`, so no model is called and the summary cache that sending uses is untouched. History that sending
+  would summarise is reported as a summary at its cap. The report lists every item in prompt order with its tokens, whether
+  it was cut or dropped and why, and, for a pin, its index in `Pins`. When the target is a cloud model (or
+  `privacy.redactForLocalProviders` is on) each item that would be sent is run through the secret scanner and its matches
+  are counted (`Redacts`, `RedactionCount`). No model routable, or a message that alone overflows the window, fails the call
+  with the router's or the assembler's `PillionRpcException`.
+
+Both 1.13 methods need the `outboundLogView` feature (the preview also `modelGateway`); otherwise they fail with
+`PolicyDenied` and a message that names the flag.
+
 ## Inline edits (`InlineEdit/`)
 
 `AddPillionInlineEdit()` registers `InlineEditRpcService` as the `IInlineEditService` target (work item 1.8, design

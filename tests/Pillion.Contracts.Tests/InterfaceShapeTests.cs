@@ -15,7 +15,7 @@ public class InterfaceShapeTests
         [typeof(ISettingsService)] = ["GetAsync", "SetAsync", "TestProviderAsync"],
         [typeof(IHostLifecycleService)] = ["HandshakeAsync", "GetStateAsync", "ShutdownAsync"],
         [typeof(IInlineEditService)] = ["EditAsync", "CancelEditAsync"],
-        [typeof(IDiagnosticsService)] = ["GetAutocompleteCountersAsync"],
+        [typeof(IDiagnosticsService)] = ["GetAutocompleteCountersAsync", "GetOutboundRecordsAsync", "PreviewContextAsync"],
 
         // Host to VSIX.
         [typeof(IEditorService)] = ["ApplyChangesetAsync", "ShowPreviewAsync", "GetOpenDocumentsAsync"],

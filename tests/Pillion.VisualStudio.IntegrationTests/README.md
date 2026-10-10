@@ -49,6 +49,7 @@ unless `RunIdeTests` is `true`), so the unit-test run stays fast and never start
 | `AutocompleteAndInlineEditTests.ProposalSource_*`, `IntelliCodeCheck_*` | Skipped placeholders for work item 1.1 (proposal source with IntelliCode or Copilot on, completion-list suppression, the IntelliCode check on 17.x) |
 | `InlineDifferenceView_EnterAppliesOneEditWithOneUndoStep` | Inline chat on a selected method with a canned inline edit service (no model): the proposal is shown in the inline difference view with the buffer untouched; Enter applies it as one undo unit named "Pillion inline edit", and one Edit.Undo restores the text |
 | `InlineDifferenceView_EscDiscards_LeavingNothingToUndo` | The same, then Esc: the adornment closes, the buffer's version and the undo stack are unchanged |
+| `Mentions_TypeAtPickAFileAndSend_TheHostReceivesOnePin` | Work item 1.9, Visual Studio 2026 only: with `tests/Pillion.FakeHost` put behind the package for this test, typing `@` in the Chat window's input lists the kinds, typing `@Prog` lists `Program.cs` of the open scratch folder, Down and Enter pin it (the typed mention leaves the input), Enter sends, the reply completes and the Outbound log shows the request, and the fake host's record file holds one chat request with one `file` pin named `Program.cs`. The shipped host is restored afterwards |
 
 ### Reading the host kill test's output
 
@@ -76,6 +77,16 @@ gap by 2 s or more, or when the UI gap reaches 2 s while the background gap is u
 2 s but the background thread stalled about as long, the machine stalled and the test cannot attribute that to Pillion's
 code: it passes with a `WARNING:` line in the output. Posted and answered operations must still match, and Ready must
 return within 15 s.
+
+### Tests that use the fake host
+
+The package launches the executable named by the environment variable `PILLION_TEST_HOST_PATH` of devenv.exe instead of
+its own `Host\Pillion.Host.exe` when the variable is set at launch time (`HostLauncherSelector`; the launch protocol and
+the signature check are the same, so a signed release build only launches an executable signed with its certificate). A
+test sets the variable inside devenv.exe, together with `PILLION_FAKEHOST_RECORD` (a file the fake host appends each chat
+request's pins to), restarts the host with the supervisor's Retry, and clears the variables and restarts again at the end
+(`MentionChecks`). The fake host comes from the full solution build (`tests/Pillion.FakeHost/bin/Release/net10.0`); the
+Visual Studio 2022 CI job runs a downloaded test build without it, so these tests are compiled for Visual Studio 2026 only.
 
 ## Running locally
 
