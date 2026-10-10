@@ -936,5 +936,9 @@ public sealed class AutocompleteMetricsOutputTests : IDisposable
             Interlocked.Increment(ref _calls);
             return Task.FromResult(counters);
         }
+
+        public Task<OutboundRecordDto[]> GetOutboundRecordsAsync(int maxCount, CancellationToken cancellationToken) => Task.FromResult<OutboundRecordDto[]>([]);
+
+        public Task<ContextReportDto> PreviewContextAsync(ChatRequest request, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 }
