@@ -6,6 +6,14 @@ namespace Pillion.Common.Tests.Connectivity;
 
 public sealed class HttpProviderProberTests
 {
+    /// <summary>
+    /// The probe timeout for tests where the answer arrives at once. A reachable listener (or a refused port) answers in
+    /// milliseconds, so a long timeout costs nothing on success; it is long so that a stalled CI machine, which was seen
+    /// to freeze a whole test host for about twenty seconds, does not turn a slow answer into a spurious Timeout.
+    /// The tests that expect a timeout use short ones.
+    /// </summary>
+    private static readonly TimeSpan StallTolerantTimeout = TimeSpan.FromSeconds(60);
+
     private static int FreePort()
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -72,7 +80,7 @@ public sealed class HttpProviderProberTests
         var (listener, port) = StartListener(status);
         try
         {
-            using var prober = new HttpProviderProber(TimeSpan.FromSeconds(5));
+            using var prober = new HttpProviderProber(StallTolerantTimeout);
 
             var result = await prober.ProbeAsync(Target(port), CancellationToken.None);
 
@@ -89,7 +97,7 @@ public sealed class HttpProviderProberTests
     [Fact]
     public async Task ClosedPort_IsUnreachableWithAConnectFailure()
     {
-        using var prober = new HttpProviderProber(TimeSpan.FromSeconds(10));
+        using var prober = new HttpProviderProber(StallTolerantTimeout);
 
         var result = await prober.ProbeAsync(Target(FreePort()), CancellationToken.None);
 
