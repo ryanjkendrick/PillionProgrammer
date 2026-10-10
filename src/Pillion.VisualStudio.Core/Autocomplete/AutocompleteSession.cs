@@ -280,7 +280,7 @@ public sealed class AutocompleteSession : IDisposable
     {
         var multiLine = MultiLineDecision.IsMultiLine(reason);
         _engine.Metrics.RequestSent(attempt.Id, multiLine, _engine.Latency.IsDegraded);
-        var service = _engine.Connection.GetProxy<IModelService>();
+        var service = AutocompleteOverrides.ModelService ?? _engine.Connection.GetProxy<IModelService>();
         var sent = _engine.Clock.UtcNow;
         var firstChunkSeen = false;
         string? modelId = null;
