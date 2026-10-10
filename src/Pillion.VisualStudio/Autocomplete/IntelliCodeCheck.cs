@@ -9,6 +9,7 @@ using Microsoft.VisualStudio.Language.Suggestions;
 using Microsoft.VisualStudio.Settings;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using Pillion.VisualStudio.Core;
 using Pillion.VisualStudio.Core.Autocomplete;
 
 namespace Pillion.VisualStudio.Autocomplete;
@@ -38,6 +39,7 @@ internal static class IntelliCodeCheck
         }
 
         await package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        using var timing = UiThreadTimings.Measure("intellicode.check");
 
         var packageInstalled = false;
         if (await package.GetServiceAsync(typeof(SVsShell)).ConfigureAwait(true) is IVsShell shell)

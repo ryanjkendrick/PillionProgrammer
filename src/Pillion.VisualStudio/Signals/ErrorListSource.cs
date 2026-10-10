@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.TableControl;
 using Microsoft.VisualStudio.Threading;
+using Pillion.VisualStudio.Core;
 using Pillion.VisualStudio.Core.Signals;
 
 namespace Pillion.VisualStudio.Signals;
@@ -38,18 +39,25 @@ internal sealed class ErrorListSource : IErrorListSource
     public async Task<IReadOnlyList<DiagnosticInfo>> ReadAsync(CancellationToken cancellationToken)
     {
         await _joinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-        var handles = _errorList.TableControl.Entries.Take(MaxEntries).ToList();
+        List<ITableEntryHandle> handles;
+        using (UiThreadTimings.Measure("signals.errorlist.entries"))
+        {
+            handles = _errorList.TableControl.Entries.Take(MaxEntries).ToList();
+        }
 
         var result = new List<DiagnosticInfo>(handles.Count);
         for (var offset = 0; offset < handles.Count; offset += BatchSize)
         {
             cancellationToken.ThrowIfCancellationRequested();
             await _joinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-            foreach (var handle in handles.Skip(offset).Take(BatchSize))
+            using (UiThreadTimings.Measure("signals.errorlist.batch"))
             {
-                if (ErrorListMapper.Map(new HandleEntry(handle)) is { } diagnostic)
+                foreach (var handle in handles.Skip(offset).Take(BatchSize))
                 {
-                    result.Add(diagnostic);
+                    if (ErrorListMapper.Map(new HandleEntry(handle)) is { } diagnostic)
+                    {
+                        result.Add(diagnostic);
+                    }
                 }
             }
 

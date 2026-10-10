@@ -290,6 +290,7 @@ public sealed class PillionPackage : AsyncPackage
         try
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync(DisposalToken);
+            using var timing = UiThreadTimings.Measure("package.statusbar");
             if (_supervisor is { } supervisor)
             {
                 SetStatusBarText(StatusBarText(supervisor));
@@ -397,6 +398,7 @@ public sealed class PillionPackage : AsyncPackage
         command.BeforeQueryStatus += (sender, args) =>
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+            using var timing = UiThreadTimings.Measure("package.querystatus.openchat");
             var availability = _chatAvailability;
             if (sender is OleMenuCommand menuCommand)
             {
@@ -485,6 +487,7 @@ public sealed class PillionPackage : AsyncPackage
             }
 
             await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+            using var timing = UiThreadTimings.Measure("package.intellicode.statusbar");
             if (_supervisor is { } supervisor)
             {
                 SetStatusBarText(StatusBarText(supervisor));
