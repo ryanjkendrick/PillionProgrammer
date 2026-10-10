@@ -15,7 +15,7 @@
     and that no Experimental Instance of that Visual Studio is open, and backs up
     %LOCALAPPDATA%\PillionProgrammer\settings.json. After the run: restores settings.json byte for byte, copies the
     Activity Logs and Pillion's logs into the results folder, and checks that no Experimental Instance or
-    Pillion.Host.exe started by the run is left (any that is left is reported and stopped, and the run fails).
+    Pillion.Host.exe of the run is left (any that is left is reported and stopped, and the run fails). A host counts as the run's own only when its parent process is an Experimental Instance this run started (the parent chain is walked); a host of another run, or one whose parent cannot be determined, is logged and left alone.
 
 .PARAMETER DevEnvPath
     The devenv.exe of the Visual Studio to test. Default: the newest installed Visual Studio.
@@ -66,6 +66,20 @@ $vstest = $vs.VsTestConsole
 if (-not (Test-Path -LiteralPath $vstest)) { throw "vstest.console.exe not found at $vstest (install the testing tools with Visual Studio)." }
 
 $hostsBefore = @(Get-PillionHostProcess | ForEach-Object ProcessId)
+# Pillion.Host.exe processes are told apart by their parent: only a host whose parent is an Experimental Instance this run
+# started is this run's to stop. The instance is gone by the time the tests end, so its process id is noted while it runs.
+$ownInstances = [hashtable]::Synchronized(@{})
+$ownInstanceWatcher = Start-ThreadJob -Name 'ide-own-instances' -ScriptBlock {
+    param($table, $modulePath, $devEnv, $startedAt)
+    Import-Module $modulePath -Force
+    $visualStudio = [pscustomobject]@{ DevEnv = $devEnv }
+    while ($true) {
+        foreach ($p in @(Get-ExpInstanceProcess -VisualStudio $visualStudio)) {
+            if ($p.CreationDate -ge $startedAt) { $table[[int]$p.ProcessId] = $true }
+        }
+        Start-Sleep -Milliseconds 250
+    }
+} -ArgumentList $ownInstances, (Join-Path $PSScriptRoot 'VsTests.psm1'), $vs.DevEnv, (Get-Date)
 $started = Get-Date
 $backup = Backup-PillionSettings
 $filter = "DisplayName~$($vs.TestVersionName)"
@@ -115,19 +129,41 @@ finally {
         $exitCode = $exitCode -ne 0 ? $exitCode : 1
     }
 
-    # Pillion Host exits with its devenv.exe (job object); allow it a moment.
+    Stop-Job $ownInstanceWatcher -ErrorAction SilentlyContinue
+    Remove-Job $ownInstanceWatcher -Force -ErrorAction SilentlyContinue
+    $ownPids = @($ownInstances.Keys | ForEach-Object { [int]$_ })
+
+    # Pillion Host exits with its devenv.exe (job object); allow it a moment. Another run's host (another agent testing at
+    # the same time, or a Visual Studio the developer is using) has a different parent and is never touched; a host whose
+    # parent cannot be determined is only reported.
+    function Get-HostOwnership($hostProcess) {
+        $parent = [int]$hostProcess.ParentProcessId
+        if ($parent -le 0) { return 'unknown' }
+        $chain = @($parent) + @(Get-AncestorProcessId -ProcessId $parent)
+        if (@($chain | Where-Object { $ownPids -contains $_ }).Count -gt 0) { return 'own' }
+        return 'other'
+    }
     $deadline = (Get-Date).AddSeconds(15)
     do {
-        $survivors = @(Get-PillionHostProcess | Where-Object { $hostsBefore -notcontains $_.ProcessId })
+        $candidates = @(Get-PillionHostProcess | Where-Object { $hostsBefore -notcontains $_.ProcessId })
+        $survivors = @($candidates | Where-Object { (Get-HostOwnership $_) -eq 'own' })
         if ($survivors.Count -eq 0) { break }
         Start-Sleep -Milliseconds 500
     } while ((Get-Date) -lt $deadline)
     foreach ($s in $survivors) {
-        Write-Warning "Pillion.Host.exe pid $($s.ProcessId) (parent $($s.ParentProcessId)) outlived the run; stopping it."
+        Write-Warning "Pillion.Host.exe pid $($s.ProcessId) (parent $($s.ParentProcessId), an Experimental Instance of this run) outlived the run; stopping it."
         Stop-Process -Id $s.ProcessId -Force -ErrorAction SilentlyContinue
         $exitCode = $exitCode -ne 0 ? $exitCode : 1
     }
-    if ($survivors.Count -eq 0) { Write-Host 'No Pillion.Host.exe left from this run.' }
+    foreach ($c in @($candidates | Where-Object { $survivors.ProcessId -notcontains $_.ProcessId })) {
+        if ((Get-HostOwnership $c) -eq 'unknown') {
+            Write-Warning "Pillion.Host.exe pid $($c.ProcessId) is new since the run started but its parent cannot be determined; not stopping it."
+        }
+        else {
+            Write-Host "Pillion.Host.exe pid $($c.ProcessId) (parent $($c.ParentProcessId)) is not from this run; left alone."
+        }
+    }
+    if ($survivors.Count -eq 0) { Write-Host 'No Pillion.Host.exe from this run is left.' }
 
     Restore-PillionSettings -Backup $backup
 
