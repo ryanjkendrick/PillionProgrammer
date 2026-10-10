@@ -21,7 +21,8 @@ public sealed record HostReadyReport(TimeSpan Elapsed, string State, string Serv
 /// <param name="LeftReadyAfter">Time from the kill to the first state other than Ready.</param>
 /// <param name="ReadyAgainAfter">Time from the kill to Ready again.</param>
 /// <param name="Transitions">The state changes seen, with times since the kill.</param>
-public sealed record HostRestartReport(int KilledProcessId, int NewProcessId, TimeSpan LeftReadyAfter, TimeSpan ReadyAgainAfter, string[] Transitions);
+/// <param name="KilledAt">When the kill happened on the caller's timeline (see <c>timeline</c> of <see cref="PillionHostChecks.KillHostAndWaitForReadyAsync"/>); zero without one.</param>
+public sealed record HostRestartReport(int KilledProcessId, int NewProcessId, TimeSpan LeftReadyAfter, TimeSpan ReadyAgainAfter, string[] Transitions, TimeSpan KilledAt = default);
 
 /// <summary>
 /// Checks that use the extension's <see cref="IHostConnection"/> service. Kept out of the test classes so that test
@@ -50,8 +51,9 @@ public static class PillionHostChecks
     /// </summary>
     /// <param name="readyTimeout">How long, from the kill, the host gets to be Ready again.</param>
     /// <param name="cancellationToken">Cancels the wait.</param>
+    /// <param name="timeline">A clock shared with other probes; the time of the kill on it is reported as <see cref="HostRestartReport.KilledAt"/>.</param>
     /// <returns>What was seen.</returns>
-    public static async Task<HostRestartReport> KillHostAndWaitForReadyAsync(TimeSpan readyTimeout, CancellationToken cancellationToken)
+    public static async Task<HostRestartReport> KillHostAndWaitForReadyAsync(TimeSpan readyTimeout, CancellationToken cancellationToken, Stopwatch? timeline = null)
     {
         var connection = await GetConnectionAsync().ConfigureAwait(false);
         await WaitForStateAsync(connection, HostState.Ready, TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
@@ -67,6 +69,7 @@ public static class PillionHostChecks
         var leftReady = new TaskCompletionSource<TimeSpan>(TaskCreationOptions.RunContinuationsAsynchronously);
         var readyAgain = new TaskCompletionSource<TimeSpan>(TaskCreationOptions.RunContinuationsAsynchronously);
         var clock = new Stopwatch();
+        var killedAt = TimeSpan.Zero;
 
         void OnStateChanged(object? sender, HostStateChangedEventArgs e)
         {
@@ -87,6 +90,7 @@ public static class PillionHostChecks
         {
             using (var process = Process.GetProcessById(killed))
             {
+                killedAt = timeline?.Elapsed ?? TimeSpan.Zero;
                 clock.Start();
                 process.Kill();
             }
@@ -96,7 +100,7 @@ public static class PillionHostChecks
             var readyAfter = await WithTimeoutAsync(readyAgain.Task, remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, () => $"Ready after the kill (state {connection.State}; transitions: {string.Join("; ", transitions)})", cancellationToken).ConfigureAwait(false);
 
             var now = await HostProcesses.FindChildrenAsync().ConfigureAwait(false);
-            return new HostRestartReport(killed, now.Count > 0 ? now[0] : 0, leftAfter, readyAfter, [.. transitions]);
+            return new HostRestartReport(killed, now.Count > 0 ? now[0] : 0, leftAfter, readyAfter, [.. transitions], killedAt);
         }
         finally
         {

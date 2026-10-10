@@ -16,7 +16,10 @@ namespace Pillion.FakeHost;
 /// be tested over the real pipe.
 /// A last user message containing <c>/error</c> fails the request with a <see cref="PillionErrorCode.ProviderUnavailable"/>
 /// error before any chunk, so the client's inline error path can be exercised; one containing <c>/partial</c> streams
-/// two chunks and then ends with a final chunk carrying <see cref="ChatChunk.Error"/>. A request without a model id
+/// two chunks and then ends with a final chunk carrying <see cref="ChatChunk.Error"/>. One containing <c>/markdown</c> is
+/// answered with <see cref="MarkdownReply"/> (headings, a table, inline code, a link, an image, a C# block) and one
+/// containing <c>/long</c> with <see cref="LongReply"/> (about 2,000 tokens of mixed Markdown), for the chat window's
+/// rendering checks. A request without a model id
 /// (Auto) is answered by the local model. The delay between chunks is <c>PILLION_FAKEHOST_CHUNK_DELAY_MS</c> (120 ms by
 /// default). Only ids and counts are written to stderr, never text.
 /// </remarks>
@@ -85,7 +88,10 @@ internal sealed class FakeModelService : IModelService
         _inFlight[request.RequestId] = cancellation;
         try
         {
-            var pieces = Split(ReplyFor(model, request.Messages.Count), 14).ToList();
+            var reply = lastUser.Contains("/markdown", StringComparison.OrdinalIgnoreCase) ? MarkdownReply(model)
+                : lastUser.Contains("/long", StringComparison.OrdinalIgnoreCase) ? LongReply(model)
+                : ReplyFor(model, request.Messages.Count);
+            var pieces = Split(reply, 14).ToList();
             var sent = 0;
             foreach (var piece in partial ? pieces.Take(2) : pieces)
             {
@@ -211,6 +217,49 @@ internal sealed class FakeModelService : IModelService
         + "several chunks; the conversation so far has " + messageCount.ToString(CultureInfo.InvariantCulture)
         + " message(s).\n\n```csharp\n// A fenced code block, shown in a monospace block.\nConsole.WriteLine(\"Hello from "
         + model.ModelId + "\");\n```\n\nThat is the end of the reply from " + model.DisplayName + ".";
+
+    /// <summary>A reply that exercises the chat window's Markdown rendering.</summary>
+    internal static string MarkdownReply(ModelDescriptor model) =>
+        "# Markdown check\n\n"
+        + "Here is **bold**, *italic*, ~~struck through~~ and `inline code`, a [link to the Visual Studio docs]"
+        + "(https://learn.microsoft.com/visualstudio/extensibility/) that asks before opening, and an image that is never "
+        + "downloaded: ![Pillion logo](https://example.com/pillion-logo.png).\n\n"
+        + "## A table\n\n"
+        + "| Model | Where | First token |\n| :--- | :---: | ---: |\n"
+        + "| Fake Local Coder | local | 120 ms |\n| Fake Cloud Chat | cloud | 450 ms |\n\n"
+        + "## Steps\n\n"
+        + "1. Open a C# file.\n2. Put the caret where the method should go.\n3. Press **Insert at cursor** on the block below.\n\n"
+        + "```csharp\npublic static int Add(int a, int b)\n{\n    // Returns the sum of two numbers.\n    return a + b;\n}\n```\n\n"
+        + "> A quote with a link that is never opened: [run this](javascript:alert(1)).\n\n"
+        + "---\n\n"
+        + "That is the end of the Markdown check from " + model.DisplayName + ".";
+
+    /// <summary>About 2,000 tokens (8,000 characters) of mixed Markdown, for the incremental rendering measurement.</summary>
+    internal static string LongReply(ModelDescriptor model)
+    {
+        var builder = new System.Text.StringBuilder();
+        builder.Append("# A long answer from ").Append(model.DisplayName).Append("\n\n");
+        for (var section = 1; builder.Length < 8000; section++)
+        {
+            var n = section.ToString(CultureInfo.InvariantCulture);
+            builder.Append("## Part ").Append(n).Append("\n\n")
+                .Append("This part explains step ").Append(n).Append(" in some detail, with **strong text**, *emphasis*, ")
+                .Append("`InlineCode").Append(n).Append("()` and a [reference](https://example.com/docs/part-").Append(n)
+                .Append("). The paragraph is long enough to wrap across several lines in a narrow tool window, which is ")
+                .Append("what a real model's answer usually looks like.\n\n")
+                .Append("- First point of part ").Append(n).Append("\n- Second point, with `code`\n- Third point\n\n")
+                .Append("```csharp\npublic sealed class Part").Append(n).Append("\n{\n    public int Value { get; } = ")
+                .Append(n).Append(";\n\n    public override string ToString() => \"Part ").Append(n).Append("\";\n}\n```\n\n");
+            if (section % 3 == 0)
+            {
+                builder.Append("| Name | Value |\n| --- | ---: |\n| Part ").Append(n).Append(" | ").Append(n).Append(" |\n| Total | ")
+                    .Append((section * 10).ToString(CultureInfo.InvariantCulture)).Append(" |\n\n");
+            }
+        }
+
+        builder.Append("That is the end of the long answer.");
+        return builder.ToString();
+    }
 
     private static IEnumerable<string> Split(string text, int size)
     {

@@ -22,6 +22,10 @@
     <PackageReference Include="StreamJsonRpc" ExcludeAssets="runtime" PrivateAssets="all" />
     <PackageReference Include="Microsoft.VisualStudio.Threading" ExcludeAssets="runtime" PrivateAssets="all" />
     <PackageReference Include="Newtonsoft.Json" ExcludeAssets="runtime" PrivateAssets="all" />
+    <!-- The chat window's Markdown parser, packaged in the VSIX (see Directory.Packages.props). Its System.Memory
+         dependency is supplied by devenv.exe, so that one is compile-only here. -->
+    <PackageReference Include="Markdig" />
+    <PackageReference Include="System.Memory" ExcludeAssets="runtime" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
