@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "comment": "The model catalog (design section 6): data, not code. 'profiles' maps each profile to a default model id per provider kind; routing.profiles in settings overrides it. 'families' lists capability descriptors for known model families, matched in order against the model id (case-insensitive, '*' is a wildcard); the last entry must be the '*' default. Providers that report capabilities themselves (Ollama's /api/show) override the chat, fim, vision, tools and embeddings flags and the context window; the OpenAI-compatible adapter reads only the context window, when /models reports one. The anthropic defaults are the Claude API ids on the Anthropic models overview page, the gemini defaults the model codes on the Gemini API models page, and the mistral defaults aliases and ids from the Mistral documentation (October 2026; see the note on each family). Azure OpenAI has no defaults because deployment names are chosen by the user: pin a profile to a deployment with routing.profiles (azure/my-deployment) or list the deployments in providers[].models. A family's reasoningEffort says the adapter may set the provider's reasoning-effort control (Anthropic output_config.effort, Gemini thinkingLevel); note is documentation only. Every descriptor, cost included, is a default that a provider's own listing can override (the Anthropic, Gemini and Mistral adapters read context windows, output limits and capabilities from their model lists). The openai and openai-compatible defaults are OpenAI model ids taken from the OpenAI model list in October 2026 and are only defaults: set routing.profiles (bare id or provider/model) for a gateway with different ids, such as OpenRouter's openai/... names. The context windows of the gpt-6 family are conservative placeholders. Costs are left at 0 (unknown) until the cost governor ships.",
+  "comment": "The model catalog (design section 6): data, not code. 'profiles' maps each profile to a default model id per provider kind; routing.profiles in settings overrides it. 'families' lists capability descriptors for known model families, matched in order against the model id (case-insensitive, '*' is a wildcard); the last entry must be the '*' default. Providers that report capabilities themselves (Ollama's /api/show) override the chat, fim, vision, tools and embeddings flags and the context window; the OpenAI-compatible adapter reads only the context window, when /models reports one. The anthropic defaults are the Claude API ids on the Anthropic models overview page, the gemini defaults the model codes on the Gemini API models page, and the mistral defaults aliases and ids from the Mistral documentation (October 2026; see the note on each family). Azure OpenAI has no defaults because deployment names are chosen by the user: pin a profile to a deployment with routing.profiles (azure/my-deployment) or list the deployments in providers[].models. A family's reasoningEffort says the adapter may set the provider's reasoning-effort control (Anthropic output_config.effort, Gemini thinkingLevel); note is documentation only. Every descriptor, cost included, is a default that a provider's own listing can override (the Anthropic, Gemini and Mistral adapters read context windows, output limits and capabilities from their model lists). The openai and openai-compatible defaults are OpenAI model ids taken from the OpenAI model list in October 2026 and are only defaults: set routing.profiles (bare id or provider/model) for a gateway with different ids, such as OpenRouter's openai/... names. The context windows of the gpt-6 family are conservative placeholders. Costs are left at 0 (unknown) until the cost governor ships. A family's residency is the Ollama adapter's memory model (design section 6, Local model residency): vramMiB is the weights plus the runtime's fixed overhead at Q4_K_M in MiB, kvMiBPer1kTokens the key/value cache per 1,024 tokens of num_ctx at the default f16 cache type (2 x layers x KV heads x head size x 2 bytes), and recommendedContext the largest num_ctx to keep resident per GPU tier (cpu, 8gb, 12gb, 16gb, 24gb) when one instance serves both autocomplete and chat. The 7b figures were checked on an 8 GB RTX 2080 SUPER, where Ollama 0.40.1 reports 4,528 MiB for qwen2.5-coder:7b at num_ctx 4,096; the others are computed from the model architecture and the published file sizes.",
   "profiles": {
     "ollama": {
       "LocalFast": "qwen2.5-coder:1.5b",
@@ -39,7 +39,8 @@
       "maxOutputTokens": 4096,
       "chat": true,
       "fim": true,
-      "toolCalling": "none"
+      "toolCalling": "none",
+      "residency": { "vramMiB": 1050, "kvMiBPer1kTokens": 28, "recommendedContext": { "cpu": 4096, "8gb": 8192, "12gb": 8192, "16gb": 16384, "24gb": 16384 } }
     },
     {
       "match": "qwen2.5-coder:7b*",
@@ -47,7 +48,8 @@
       "maxOutputTokens": 8192,
       "chat": true,
       "fim": true,
-      "toolCalling": "native"
+      "toolCalling": "native",
+      "residency": { "vramMiB": 4300, "kvMiBPer1kTokens": 56, "recommendedContext": { "cpu": 4096, "8gb": 4096, "12gb": 8192, "16gb": 16384, "24gb": 32768 } }
     },
     {
       "match": "qwen2.5-coder:14b*",
@@ -55,7 +57,8 @@
       "maxOutputTokens": 8192,
       "chat": true,
       "fim": true,
-      "toolCalling": "native"
+      "toolCalling": "native",
+      "residency": { "vramMiB": 8800, "kvMiBPer1kTokens": 192, "recommendedContext": { "cpu": 4096, "8gb": 4096, "12gb": 8192, "16gb": 8192, "24gb": 16384 } }
     },
     {
       "match": "qwen2.5-coder:32b*",
@@ -63,7 +66,8 @@
       "maxOutputTokens": 8192,
       "chat": true,
       "fim": true,
-      "toolCalling": "native"
+      "toolCalling": "native",
+      "residency": { "vramMiB": 19200, "kvMiBPer1kTokens": 256, "recommendedContext": { "cpu": 4096, "8gb": 4096, "12gb": 4096, "16gb": 4096, "24gb": 8192 } }
     },
     {
       "match": "qwen2.5-coder*",

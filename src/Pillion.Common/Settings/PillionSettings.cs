@@ -122,6 +122,14 @@ public sealed class ModelsSettings : SettingsNode
     /// The tier picks the resident local models and the autocomplete prompt budget.
     /// </summary>
     public GpuTierSetting GpuTier { get; set; } = GpuTierSetting.Auto;
+
+    /// <summary>
+    /// Gets or sets the context size (<c>num_ctx</c>) a local model is kept resident at, by model id, for example
+    /// <c>{ "qwen2.5-coder:7b": 8192 }</c> (<c>models.residentContext.&lt;model&gt;</c>). Without an entry the catalog's recommended
+    /// size for the GPU tier applies to a model shared between autocomplete and chat. Model ids contain dots, so set the
+    /// whole object in <c>settings.json</c> rather than a dotted key path.
+    /// </summary>
+    public Dictionary<string, int> ResidentContext { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
 /// <summary>

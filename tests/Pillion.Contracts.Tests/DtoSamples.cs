@@ -156,7 +156,9 @@ internal static class DtoSamples
             PromptTokensCounted = 36000,
             PromptTokensEstimated = 4200,
             PromptTokensMax = 1010,
+            ResidentModels = [new ResidentModelInfo { ProviderId = "ollama", ModelId = "qwen2.5-coder:7b", ContextLength = 4096, VramBytes = 4748056984, KeepAlive = "-1", IsPinned = true }],
         },
+        new ResidentModelInfo { ProviderId = "ollama", ModelId = "gemma4:e2b", ContextLength = 4096, VramBytes = 1708392447, KeepAlive = "-1", IsPinned = true },
         new SearchRequest { Query = "where is the pipe opened", MaxResults = 10 },
         new SearchResult { FilePath = @"C:\src\Pipe.cs", StartLine = 10, EndLine = 20, Snippet = "new NamedPipeServerStream(", Score = 0.875 },
         new MentionRequest

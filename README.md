@@ -276,9 +276,17 @@ from it (1,024 tokens when the completion model runs on the CPU, 2,048 on a GPU)
 ```
 
 `auto` (the default) detects; `cpu`, `8gb`, `12gb`, `16gb` and `24gb` force a tier. The completion model is kept loaded
-(`keep_alive` -1) with a fixed context size per profile; see
-[src/Pillion.ModelGateway/README.md](src/Pillion.ModelGateway/README.md#autocomplete) for the `OLLAMA_MAX_LOADED_MODELS`
-setting that matches each tier.
+(`keep_alive` -1). Chat, inline edits and autocomplete share one loaded copy of a model on an 8 GB card, at 4,096 tokens
+of context for a 7B model (Ollama cannot hold a second copy at another context size there, and a request for one waits
+for ever); a request that needs more makes Pillion unload the model and load it once at the larger size. To keep a model
+at another size, set it per model (model ids contain dots, so edit the object in `settings.json`):
+
+```json
+{ "models": { "residentContext": { "qwen2.5-coder:7b": 8192 } } }
+```
+
+See [src/Pillion.ModelGateway/README.md](src/Pillion.ModelGateway/README.md#residency-and-ollama_max_loaded_models) for what
+stays resident per tier and the `OLLAMA_MAX_LOADED_MODELS` setting that matches each.
 
 ## Contributing
 

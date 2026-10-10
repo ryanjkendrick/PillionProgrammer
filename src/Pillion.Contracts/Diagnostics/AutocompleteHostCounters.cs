@@ -94,4 +94,41 @@ public sealed class AutocompleteHostCounters
     /// <summary>Gets or sets the largest prompt in the window, in tokens.</summary>
     [DataMember(Order = 20)]
     public int PromptTokensMax { get; set; }
+
+    /// <summary>
+    /// Gets or sets the local models that are loaded now, as Ollama last reported them (read at most every 30 seconds):
+    /// context size, GPU memory and keep-alive, for the status bar. Empty when no local provider is configured or none has
+    /// been asked yet.
+    /// </summary>
+    [DataMember(Order = 21)]
+    public ResidentModelInfo[] ResidentModels { get; set; } = [];
+}
+
+/// <summary>A local model that is loaded in its runtime (design section 6, Local model residency).</summary>
+[DataContract]
+public sealed class ResidentModelInfo
+{
+    /// <summary>Gets or sets the provider that serves the model.</summary>
+    [DataMember(Order = 0)]
+    public string ProviderId { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the provider's model id.</summary>
+    [DataMember(Order = 1)]
+    public string ModelId { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the context size (<c>num_ctx</c>) it is loaded with, or <see langword="null"/> when the runtime does not say.</summary>
+    [DataMember(Order = 2)]
+    public int? ContextLength { get; set; }
+
+    /// <summary>Gets or sets the GPU memory it uses, in bytes (0 when it runs on the CPU).</summary>
+    [DataMember(Order = 3)]
+    public long VramBytes { get; set; }
+
+    /// <summary>Gets or sets the keep-alive: <c>-1</c> for loaded for ever, otherwise the time left such as <c>29m</c>.</summary>
+    [DataMember(Order = 4)]
+    public string KeepAlive { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets a value indicating whether the model stays loaded for ever (the autocomplete model).</summary>
+    [DataMember(Order = 5)]
+    public bool IsPinned { get; set; }
 }
