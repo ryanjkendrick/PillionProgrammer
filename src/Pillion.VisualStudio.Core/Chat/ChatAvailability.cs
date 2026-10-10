@@ -8,7 +8,9 @@ namespace Pillion.VisualStudio.Core;
 
 /// <summary>
 /// Whether chat is available, according to the host's effective feature flags (the <c>chat</c> flag after the user
-/// settings and repository policies are applied; read through <c>ISettingsService.GetAsync("effective.features")</c>).
+/// settings and repository policies are applied; read through <c>ISettingsService.GetAsync("effective.features")</c>),
+/// and whether the chat window's mentions (<c>mentions</c>) and Context Inspector and Outbound log (<c>outboundLogView</c>)
+/// are.
 /// Chat is available until the host says otherwise: before the first answer, when the host is not connected, when
 /// the host is older than the flags, and when the answer cannot be read. The last answer is kept while the host
 /// restarts and refreshed when it is ready again.
@@ -22,11 +24,15 @@ public sealed class ChatAvailability : IDisposable
     public const string EffectiveFeaturesKey = "effective.features";
 
     private const string ChatFlag = "chat";
+    private const string MentionsFlag = "mentions";
+    private const string OutboundLogViewFlag = "outboundLogView";
 
     private readonly IHostConnection _connection;
     private readonly PillionLog? _log;
     private int _version;
     private volatile bool _isEnabled = true;
+    private volatile bool _isMentionsEnabled = true;
+    private volatile bool _isOutboundLogEnabled = true;
     private bool _started;
     private bool _disposed;
 
@@ -39,11 +45,17 @@ public sealed class ChatAvailability : IDisposable
         _log = log;
     }
 
-    /// <summary>Raised, on any thread, when <see cref="IsEnabled"/> changed.</summary>
+    /// <summary>Raised, on any thread, when <see cref="IsEnabled"/>, <see cref="IsMentionsEnabled"/> or <see cref="IsOutboundLogEnabled"/> changed.</summary>
     public event EventHandler? Changed;
 
     /// <summary>Gets a value indicating whether chat is available. Safe to read on any thread.</summary>
     public bool IsEnabled => _isEnabled;
+
+    /// <summary>Gets a value indicating whether the chat window offers <c>@</c>-mentions and pins (the <c>mentions</c> flag). Safe to read on any thread.</summary>
+    public bool IsMentionsEnabled => _isMentionsEnabled;
+
+    /// <summary>Gets a value indicating whether the chat window shows the Context Inspector and the Outbound log (the <c>outboundLogView</c> flag). Safe to read on any thread.</summary>
+    public bool IsOutboundLogEnabled => _isOutboundLogEnabled;
 
     /// <summary>Starts following the host: the flags are read every time the host becomes ready.</summary>
     public void Start()
@@ -73,10 +85,14 @@ public sealed class ChatAvailability : IDisposable
 
         var version = Interlocked.Increment(ref _version);
         bool enabled;
+        bool mentions;
+        bool outboundLog;
         try
         {
             var json = await _connection.GetProxy<ISettingsService>().GetAsync(EffectiveFeaturesKey, cancellationToken).ConfigureAwait(false);
             enabled = ReadChatFlag(json);
+            mentions = ReadFlag(json, MentionsFlag);
+            outboundLog = ReadFlag(json, OutboundLogViewFlag);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -95,14 +111,20 @@ public sealed class ChatAvailability : IDisposable
             return; // A newer read is on its way.
         }
 
-        Apply(enabled);
+        Apply(enabled, mentions, outboundLog);
     }
 
     /// <summary>Reads the <c>chat</c> flag from the JSON the host returned.</summary>
     /// <param name="json">The JSON object, or <see langword="null"/> when the host does not know the key.</param>
     /// <returns><see langword="false"/> only when the object says <c>"chat": false</c>.</returns>
-    public static bool ReadChatFlag(string? json) =>
-        !(SettingsJsonText.ReadObject(json).TryGetValue(ChatFlag, StringComparison.Ordinal, out var token)
+    public static bool ReadChatFlag(string? json) => ReadFlag(json, ChatFlag);
+
+    /// <summary>Reads a feature flag from the JSON the host returned; a flag the host does not report is on.</summary>
+    /// <param name="json">The JSON object, or <see langword="null"/> when the host does not know the key.</param>
+    /// <param name="flag">The flag's name, for example <c>mentions</c>.</param>
+    /// <returns><see langword="false"/> only when the object says <c>false</c> for the flag.</returns>
+    public static bool ReadFlag(string? json, string flag) =>
+        !(SettingsJsonText.ReadObject(json).TryGetValue(flag, StringComparison.Ordinal, out var token)
             && token is JValue { Type: JTokenType.Boolean } value
             && !(bool)value);
 
@@ -123,15 +145,21 @@ public sealed class ChatAvailability : IDisposable
 
     private static bool IsUsable(HostState state) => state is HostState.Ready or HostState.Degraded;
 
-    private void Apply(bool enabled)
+    private void Apply(bool enabled, bool mentions, bool outboundLog)
     {
-        if (_isEnabled == enabled)
+        if (_isEnabled == enabled && _isMentionsEnabled == mentions && _isOutboundLogEnabled == outboundLog)
         {
             return;
         }
 
+        if (_isEnabled != enabled)
+        {
+            _log?.Info("chat.features.changed", enabled ? "Chat is enabled." : "Chat is disabled by settings or policy.");
+        }
+
         _isEnabled = enabled;
-        _log?.Info("chat.features.changed", enabled ? "Chat is enabled." : "Chat is disabled by settings or policy.");
+        _isMentionsEnabled = mentions;
+        _isOutboundLogEnabled = outboundLog;
         Changed?.Invoke(this, EventArgs.Empty);
     }
 

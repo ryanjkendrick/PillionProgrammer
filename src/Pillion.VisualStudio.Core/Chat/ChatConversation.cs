@@ -2,6 +2,7 @@ using System;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Linq;
+using Pillion.VisualStudio.Core.Mentions;
 
 namespace Pillion.VisualStudio.Core;
 
@@ -50,6 +51,12 @@ public sealed class ChatConversation : ObservableObject
 
     /// <summary>Gets the transcript, oldest first.</summary>
     public ObservableCollection<ChatTurnViewModel> Turns { get; } = [];
+
+    /// <summary>
+    /// Gets the context pinned to the conversation with <c>@</c>-mentions, in the order they were pinned. They are sent with
+    /// every message of the conversation and kept with it in memory (design section 7: pins persist for the conversation).
+    /// </summary>
+    public ObservableCollection<MentionPin> Pins { get; } = [];
 
     /// <summary>Gets a value indicating whether the conversation has no turns.</summary>
     public bool IsEmpty => Turns.Count == 0;

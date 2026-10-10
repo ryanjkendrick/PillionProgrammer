@@ -4,6 +4,7 @@
              x:ClassModifier="internal"
              xmlns:core="clr-namespace:Pillion.VisualStudio.Core;assembly=Pillion.VisualStudio.Core"
              xmlns:local="clr-namespace:Pillion.VisualStudio.ToolWindows"
+             xmlns:mentions="clr-namespace:Pillion.VisualStudio.Core.Mentions;assembly=Pillion.VisualStudio.Core"
              xmlns:vsshell="clr-namespace:Microsoft.VisualStudio.Shell;assembly=Microsoft.VisualStudio.Shell.15.0"
              xmlns:platformui="clr-namespace:Microsoft.VisualStudio.PlatformUI;assembly=Microsoft.VisualStudio.Shell.15.0"
              platformui:ThemedDialogStyleLoader.UseDefaultThemedDialogStyles="True"
@@ -275,12 +276,73 @@
                        AutomationProperties.LiveSetting="Polite" />
         </DockPanel>
 
-        <!-- Input: Enter sends, Shift+Enter inserts a new line. -->
+        <!--
+          The Outbound log (work item 1.13): every request sent to any model, newest first, counts and durations only. Shown
+          while the outboundLogView feature flag is on.
+        -->
+        <Expander x:Name="OutboundLogExpander"
+                  DockPanel.Dock="Bottom"
+                  Margin="0,4,0,0"
+                  IsExpanded="{Binding OutboundLog.IsExpanded, Mode=TwoWay}"
+                  Visibility="{Binding IsOutboundLogEnabled, Converter={StaticResource VisibleWhenTrue}}"
+                  Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
+                  AutomationProperties.Name="{x:Static core:ChatStrings.OutboundListName}">
+            <Expander.Header>
+                <TextBlock>
+                    <AccessText Text="{x:Static core:ChatStrings.OutboundLogHeader}" FontWeight="SemiBold" />
+                    <Run Text=" " /><Run Text="{Binding OutboundLog.Summary, Mode=OneWay}" Foreground="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" />
+                </TextBlock>
+            </Expander.Header>
+            <DockPanel Margin="0,4,0,0">
+                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,4">
+                    <Button Content="{x:Static core:ChatStrings.OutboundRefreshButton}" Command="{Binding OutboundLog.RefreshCommand}" MinWidth="60"
+                            AutomationProperties.Name="{x:Static core:ChatStrings.OutboundRefreshName}" ToolTip="{x:Static core:ChatStrings.OutboundRefreshName}" />
+                    <Button Content="{x:Static core:ChatStrings.OutboundCopyButton}" Command="{Binding OutboundLog.CopyCommand}" MinWidth="60" Margin="4,0,0,0"
+                            AutomationProperties.Name="{x:Static core:ChatStrings.OutboundCopyName}" ToolTip="{x:Static core:ChatStrings.OutboundCopyName}" />
+                </StackPanel>
+                <TextBlock DockPanel.Dock="Top" Text="{Binding OutboundLog.Error}" Style="{StaticResource SecondaryText}"
+                           Visibility="{Binding OutboundLog.HasError, Converter={StaticResource VisibleWhenTrue}}" AutomationProperties.LiveSetting="Polite" />
+                <ListView x:Name="OutboundList"
+                          ItemsSource="{Binding OutboundLog.Records}"
+                          MaxHeight="220"
+                          Background="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}"
+                          Foreground="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}"
+                          BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBorderKey}}"
+                          ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                          AutomationProperties.Name="{x:Static core:ChatStrings.OutboundListName}">
+                    <ListView.ItemContainerStyle>
+                        <Style TargetType="ListViewItem">
+                            <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                            <Setter Property="ToolTip" Value="{Binding Context}" />
+                            <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}" />
+                        </Style>
+                    </ListView.ItemContainerStyle>
+                    <ListView.View>
+                        <GridView>
+                            <GridViewColumn Header="{x:Static core:ChatStrings.OutboundColumnTime}" DisplayMemberBinding="{Binding Time}" />
+                            <GridViewColumn Header="{x:Static core:ChatStrings.OutboundColumnTaskClass}" DisplayMemberBinding="{Binding TaskClass}" />
+                            <GridViewColumn Header="{x:Static core:ChatStrings.OutboundColumnModel}" DisplayMemberBinding="{Binding ProviderModel}" />
+                            <GridViewColumn Header="{x:Static core:ChatStrings.OutboundColumnLocality}" DisplayMemberBinding="{Binding Locality}" />
+                            <GridViewColumn Header="{x:Static core:ChatStrings.OutboundColumnTokens}" DisplayMemberBinding="{Binding Tokens}" />
+                            <GridViewColumn Header="{x:Static core:ChatStrings.OutboundColumnRedactions}" DisplayMemberBinding="{Binding Redactions}" />
+                            <GridViewColumn Header="{x:Static core:ChatStrings.OutboundColumnDuration}" DisplayMemberBinding="{Binding Duration}" />
+                            <GridViewColumn Header="{x:Static core:ChatStrings.OutboundColumnOutcome}" DisplayMemberBinding="{Binding Outcome}" />
+                        </GridView>
+                    </ListView.View>
+                </ListView>
+            </DockPanel>
+        </Expander>
+
+        <!-- Input: Enter sends, Shift+Enter inserts a new line; @ opens the mention picker at the caret. -->
         <Grid DockPanel.Dock="Bottom" Margin="0,4,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
             <TextBox x:Name="Input"
                      Grid.Column="0"
                      Text="{Binding InputText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
@@ -292,15 +354,242 @@
                      VerticalScrollBarVisibility="Auto"
                      SpellCheck.IsEnabled="False"
                      PreviewKeyDown="OnInputPreviewKeyDown"
+                     TextChanged="OnInputTextChanged"
+                     SelectionChanged="OnInputSelectionChanged"
+                     LostKeyboardFocus="OnInputLostKeyboardFocus"
                      AutomationProperties.Name="Message"
-                     AutomationProperties.HelpText="Type a message. Enter sends; Shift+Enter starts a new line." />
-            <StackPanel Grid.Column="1" Margin="4,0,0,0" VerticalAlignment="Bottom">
+                     AutomationProperties.HelpText="Type a message. Enter sends; Shift+Enter starts a new line. Type @ to pin a file, folder, the selection, the errors or the clipboard." />
+            <CheckBox Grid.Row="1"
+                      Grid.Column="0"
+                      Margin="0,4,0,0"
+                      IsChecked="{Binding IncludeCurrentFile, Mode=TwoWay}"
+                      Visibility="{Binding IsMentionsEnabled, Converter={StaticResource VisibleWhenTrue}}"
+                      Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
+                      ToolTip="{x:Static core:ChatStrings.IncludeCurrentFileHelp}"
+                      AutomationProperties.HelpText="{x:Static core:ChatStrings.IncludeCurrentFileHelp}">
+                <AccessText Text="{x:Static core:ChatStrings.IncludeCurrentFileLabel}" />
+            </CheckBox>
+            <StackPanel Grid.Column="1" Grid.RowSpan="2" Margin="4,0,0,0" VerticalAlignment="Bottom">
                 <Button Content="Send" Command="{Binding SendCommand}" MinWidth="70" Margin="0,0,0,4"
                         AutomationProperties.Name="Send" ToolTip="Send (Enter)" />
+                <Button Command="{Binding InspectContextCommand}" MinWidth="70" Margin="0,0,0,4"
+                        Visibility="{Binding IsOutboundLogEnabled, Converter={StaticResource VisibleWhenTrue}}"
+                        AutomationProperties.Name="{x:Static core:ChatStrings.InspectContextName}" ToolTip="{x:Static core:ChatStrings.InspectContextToolTip}">
+                    <AccessText Text="{x:Static core:ChatStrings.InspectContextButton}" />
+                </Button>
                 <Button Content="Stop" Command="{Binding StopCommand}" MinWidth="70"
                         AutomationProperties.Name="Stop" ToolTip="Stop the reply" />
             </StackPanel>
+
+            <!-- The mention picker, at the caret: kinds first, then fuzzy file matches; also the sub-picker of an ambiguous match. -->
+            <Popup x:Name="MentionPopup"
+                   PlacementTarget="{Binding ElementName=Input}"
+                   Placement="Top"
+                   AllowsTransparency="True"
+                   StaysOpen="True"
+                   Focusable="False"
+                   IsOpen="{Binding Mentions.Picker.IsOpen, Mode=OneWay}">
+                <Border Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
+                        BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBorderKey}}"
+                        BorderThickness="1"
+                        Padding="4"
+                        MinWidth="260"
+                        MaxWidth="480">
+                    <StackPanel>
+                        <TextBlock Text="{Binding Mentions.Picker.Title}" Style="{StaticResource SecondaryText}" Margin="2,0,2,4"
+                                   AutomationProperties.LiveSetting="Polite" />
+                        <ListBox x:Name="MentionList"
+                                 ItemsSource="{Binding Mentions.Picker.Items}"
+                                 SelectedIndex="{Binding Mentions.Picker.SelectedIndex, Mode=OneWay}"
+                                 Focusable="False"
+                                 MaxHeight="260"
+                                 BorderThickness="0"
+                                 Background="Transparent"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 AutomationProperties.Name="{x:Static core:ChatStrings.MentionPickerName}">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Focusable" Value="False" />
+                                    <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                                    <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+                                    <Setter Property="Padding" Value="4,2,4,2" />
+                                    <EventSetter Event="PreviewMouseLeftButtonUp" Handler="OnMentionItemClicked" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                            <Setter Property="Background" Value="{DynamicResource {x:Static platformui:EnvironmentColors.CommandBarMouseOverBackgroundBeginBrushKey}}" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate DataType="{x:Type mentions:MentionPickerItem}">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Label}" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding Detail}" Style="{StaticResource SecondaryText}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </StackPanel>
+                </Border>
+            </Popup>
         </Grid>
+
+        <!-- Pins (work item 1.9): the context pinned to this conversation, each with its token badge; approval and notices. -->
+        <StackPanel DockPanel.Dock="Bottom"
+                    Margin="0,4,0,0"
+                    Visibility="{Binding IsMentionsEnabled, Converter={StaticResource VisibleWhenTrue}}">
+            <ItemsControl x:Name="PinList"
+                          ItemsSource="{Binding Mentions.Pins}"
+                          Focusable="False"
+                          AutomationProperties.Name="{x:Static core:ChatStrings.PinsListName}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="{x:Type mentions:MentionPin}">
+                        <Border Margin="0,0,4,4"
+                                Padding="5,1,2,1"
+                                CornerRadius="3"
+                                BorderThickness="1"
+                                BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBorderKey}}"
+                                ToolTip="{Binding ToolTip}"
+                                AutomationProperties.Name="{Binding AutomationName}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock x:Name="Lock" Text="&#xE72E;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center" Margin="0,0,4,0" Visibility="Collapsed"
+                                           AutomationProperties.Name="{x:Static core:ChatStrings.SensitiveGlyphName}" />
+                                <TextBlock Text="{Binding DisplayName}" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding TokenBadge}" VerticalAlignment="Center" Margin="6,0,0,0" Style="{StaticResource SecondaryText}" />
+                                <Button Content="&#xE711;"
+                                        FontFamily="Segoe MDL2 Assets"
+                                        FontSize="9"
+                                        Padding="3,1,3,1"
+                                        Margin="4,0,0,0"
+                                        MinWidth="0"
+                                        VerticalAlignment="Center"
+                                        Command="{Binding DataContext.Mentions.RemovePinCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                        CommandParameter="{Binding}"
+                                        ToolTip="{x:Static core:ChatStrings.RemovePinToolTip}"
+                                        AutomationProperties.Name="{Binding RemoveAutomationName}" />
+                            </StackPanel>
+                        </Border>
+                        <DataTemplate.Triggers>
+                            <DataTrigger Binding="{Binding IsSensitive}" Value="True">
+                                <Setter TargetName="Lock" Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </DataTemplate.Triggers>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <!-- Per-file approval for an excluded or secret file. -->
+            <Border Visibility="{Binding Mentions.HasPendingApproval, Converter={StaticResource VisibleWhenTrue}}"
+                    BorderThickness="2,0,0,0"
+                    BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBorderKey}}"
+                    Padding="6,2,2,2"
+                    Margin="0,0,0,4">
+                <StackPanel>
+                    <TextBlock Text="{Binding Mentions.PendingApproval.Prompt}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Assertive"
+                               AutomationProperties.Name="{Binding Mentions.PendingApproval.Prompt}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                        <Button Command="{Binding Mentions.ApproveCommand}" MinWidth="80">
+                            <AccessText Text="{x:Static core:ChatStrings.PinApproveButton}" />
+                        </Button>
+                        <Button Command="{Binding Mentions.DeclineCommand}" MinWidth="80" Margin="4,0,0,0">
+                            <AccessText Text="{x:Static core:ChatStrings.PinDeclineButton}" />
+                        </Button>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- Why a mention did not resolve. -->
+            <DockPanel Visibility="{Binding Mentions.HasNotice, Converter={StaticResource VisibleWhenTrue}}" Margin="0,0,0,4">
+                <Button DockPanel.Dock="Right" Content="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="9" Padding="3,1,3,1" MinWidth="0" VerticalAlignment="Top"
+                        Command="{Binding Mentions.DismissNoticeCommand}"
+                        ToolTip="{x:Static core:ChatStrings.DismissNoticeName}" AutomationProperties.Name="{x:Static core:ChatStrings.DismissNoticeName}" />
+                <TextBlock Text="{Binding Mentions.Notice}" Style="{StaticResource SecondaryText}" AutomationProperties.LiveSetting="Polite"
+                           AutomationProperties.Name="{Binding Mentions.Notice}" />
+            </DockPanel>
+        </StackPanel>
+
+        <!-- The Context Inspector (work item 1.13): the context the message would be sent with, before it is sent. -->
+        <Border x:Name="InspectorPanel"
+                DockPanel.Dock="Bottom"
+                Margin="0,4,0,0"
+                Padding="6"
+                BorderThickness="1"
+                BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBorderKey}}"
+                Visibility="{Binding Inspector.IsOpen, Converter={StaticResource VisibleWhenTrue}}"
+                AutomationProperties.Name="{x:Static core:ChatStrings.InspectorTitle}">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Top" Text="{x:Static core:ChatStrings.InspectorTitle}" FontWeight="SemiBold" />
+                <TextBlock DockPanel.Dock="Top" Text="{Binding Inspector.Summary}" TextWrapping="Wrap" Margin="0,2,0,0" AutomationProperties.LiveSetting="Polite" />
+                <TextBlock DockPanel.Dock="Top" Text="{x:Static core:ChatStrings.InspectorLoading}" Style="{StaticResource SecondaryText}"
+                           Visibility="{Binding Inspector.IsLoading, Converter={StaticResource VisibleWhenTrue}}" />
+                <TextBlock DockPanel.Dock="Top" Text="{Binding Inspector.Error}" TextWrapping="Wrap"
+                           Visibility="{Binding Inspector.HasError, Converter={StaticResource VisibleWhenTrue}}" AutomationProperties.LiveSetting="Assertive" />
+                <TextBlock DockPanel.Dock="Top" Text="{Binding Inspector.ModeNote}" Style="{StaticResource SecondaryText}"
+                           Visibility="{Binding Inspector.HasModeNote, Converter={StaticResource VisibleWhenTrue}}" />
+                <TextBlock DockPanel.Dock="Top" Text="{Binding Inspector.RedactionNotice}" TextWrapping="Wrap" FontWeight="SemiBold"
+                           Visibility="{Binding Inspector.HasRedactionNotice, Converter={StaticResource VisibleWhenTrue}}" />
+                <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,4,0,0">
+                    <Button Content="{x:Static core:ChatStrings.InspectorSendButton}" Command="{Binding Inspector.SendCommand}" MinWidth="70"
+                            AutomationProperties.Name="{x:Static core:ChatStrings.InspectorSendButton}" />
+                    <Button Content="{x:Static core:ChatStrings.InspectorCloseButton}" Command="{Binding Inspector.CloseCommand}" MinWidth="70" Margin="4,0,0,0"
+                            AutomationProperties.Name="{x:Static core:ChatStrings.InspectorCloseButton}" />
+                </StackPanel>
+                <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,4,0,0" Focusable="False">
+                    <ItemsControl ItemsSource="{Binding Inspector.Items}" Focusable="False" AutomationProperties.Name="{x:Static core:ChatStrings.InspectorListName}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type core:ContextInspectorItem}">
+                                <Grid Margin="0,0,0,4" AutomationProperties.Name="{Binding AutomationName}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock TextTrimming="CharacterEllipsis">
+                                            <Run Text="{Binding KindLabel, Mode=OneWay}" Foreground="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" /><Run Text="  " /><Run Text="{Binding Name, Mode=OneWay}" />
+                                        </TextBlock>
+                                        <TextBlock x:Name="State" Text="{Binding StateText}" Style="{StaticResource SecondaryText}" FontStyle="Italic" Visibility="Collapsed" />
+                                        <TextBlock x:Name="Redaction" Text="{Binding RedactionText}" TextWrapping="Wrap" Visibility="Collapsed" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="1" Text="{Binding TokensText}" Margin="8,0,0,0" VerticalAlignment="Top" />
+                                    <Button x:Name="Remove"
+                                            Grid.Column="2"
+                                            Content="&#xE711;"
+                                            FontFamily="Segoe MDL2 Assets"
+                                            FontSize="9"
+                                            Padding="3,1,3,1"
+                                            Margin="6,0,0,0"
+                                            MinWidth="0"
+                                            VerticalAlignment="Top"
+                                            Visibility="Hidden"
+                                            Command="{Binding DataContext.Inspector.RemoveCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                            CommandParameter="{Binding}"
+                                            ToolTip="{x:Static core:ChatStrings.RemovePinToolTip}"
+                                            AutomationProperties.Name="{Binding RemoveAutomationName}" />
+                                </Grid>
+                                <DataTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding HasStateText}" Value="True">
+                                        <Setter TargetName="State" Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding HasRedaction}" Value="True">
+                                        <Setter TargetName="Redaction" Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding CanRemove}" Value="True">
+                                        <Setter TargetName="Remove" Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </DockPanel>
+        </Border>
 
         <!-- Transcript: a virtualising list (pixel scrolling, recycled containers). -->
         <local:TranscriptItemsControl x:Name="Transcript"

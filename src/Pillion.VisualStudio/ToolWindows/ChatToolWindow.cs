@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.Editor;
@@ -17,13 +18,18 @@ internal sealed class ChatToolWindowState
 {
     /// <summary>Initializes a new instance of the <see cref="ChatToolWindowState"/> class.</summary>
     /// <param name="viewModel">The chat view model (not yet started).</param>
-    public ChatToolWindowState(ChatViewModel viewModel)
+    /// <param name="ownedResources">Disposed with the window (the solution file list the mentions use).</param>
+    public ChatToolWindowState(ChatViewModel viewModel, params IDisposable[] ownedResources)
     {
         ViewModel = viewModel;
+        OwnedResources = ownedResources ?? [];
     }
 
     /// <summary>Gets the chat view model.</summary>
     public ChatViewModel ViewModel { get; }
+
+    /// <summary>Gets what is disposed with the window.</summary>
+    public IReadOnlyList<IDisposable> OwnedResources { get; }
 }
 
 /// <summary>
@@ -38,6 +44,7 @@ internal sealed class ChatToolWindow : ToolWindowPane
 
     private readonly ChatViewModel _viewModel;
     private readonly ChatToolWindowControl _control;
+    private readonly IReadOnlyList<IDisposable> _owned;
 
     /// <summary>Initializes a new instance of the <see cref="ChatToolWindow"/> class. Runs on the UI thread.</summary>
     /// <param name="state">The state from <see cref="PillionPackage"/>.</param>
@@ -52,6 +59,7 @@ internal sealed class ChatToolWindow : ToolWindowPane
         ThreadHelper.ThrowIfNotOnUIThread();
         Caption = Title;
         _viewModel = state.ViewModel;
+        _owned = state.OwnedResources;
         var log = PillionPackage.Instance?.Log;
         var actions = CreateActions(log);
         _viewModel.ConfirmDelete = actions.ConfirmDelete;
@@ -74,9 +82,28 @@ internal sealed class ChatToolWindow : ToolWindowPane
         {
             _control.Dispose();
             _viewModel.Dispose();
+            foreach (var resource in _owned)
+            {
+                resource.Dispose();
+            }
         }
 
         base.Dispose(disposing);
+    }
+
+    /// <summary>Puts text on the clipboard (the Outbound log's Copy). Must be called on the UI thread.</summary>
+    /// <param name="text">The text.</param>
+    public static void CopyToClipboard(string text)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            System.Windows.Clipboard.SetText(text ?? string.Empty);
+        }
+        catch (Exception ex) when (ex is ExternalException or COMException)
+        {
+            PillionPackage.Instance?.Log?.Warning("chat.copy.failed", "Copying to the clipboard failed.", ("error", ex.GetType().Name));
+        }
     }
 
     private static ChatEditorActions CreateActions(PillionLog? log)

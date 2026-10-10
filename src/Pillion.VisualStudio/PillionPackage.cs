@@ -153,11 +153,20 @@ public sealed class PillionPackage : AsyncPackage
         }
 
         // Runs after InitializeAsync, so the supervisor exists. The view model starts on the UI thread, in the window.
+        var files = new WorkspaceFileIndex(JoinableTaskFactory, _log); // Mentions (work item 1.9): the solution or folder file list.
         var viewModel = new ChatViewModel(
             _supervisor!,
             JoinableTaskFactory,
-            new ChatViewModelOptions { OpenLogs = OpenLogFolder, Log = _log, Availability = _chatAvailability });
-        return System.Threading.Tasks.Task.FromResult<object>(new ChatToolWindowState(viewModel));
+            new ChatViewModelOptions
+            {
+                OpenLogs = OpenLogFolder,
+                Log = _log,
+                Availability = _chatAvailability,
+                WorkspaceFiles = files,
+                EditorContext = new EditorChatContext(JoinableTaskFactory, () => _signals?.Hub, _log),
+                CopyText = ChatToolWindow.CopyToClipboard,
+            });
+        return System.Threading.Tasks.Task.FromResult<object>(new ChatToolWindowState(viewModel, files));
     }
 
     /// <inheritdoc/>
@@ -237,7 +246,7 @@ public sealed class PillionPackage : AsyncPackage
             LogDirectory = PillionLog.DefaultDirectory,
         };
 
-        return new HostSupervisor(new HostProcessLauncher(options, log), JoinableTaskFactory, log);
+        return new HostSupervisor(new HostLauncherSelector(options, log), JoinableTaskFactory, log); // The selector lets the IDE tests swap in the fake host.
     }
 
     /// <summary>Raised on a background thread; switches to the UI thread only to update the status bar and Output pane.</summary>
