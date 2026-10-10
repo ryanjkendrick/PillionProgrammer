@@ -31,6 +31,7 @@ internal sealed class EditorService : NotImplementedEditorService
     {
         // The running document table and the selection service are main-thread objects.
         await _package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        using var timing = UiThreadTimings.Measure("editor.opendocuments");
 
         if (await _package.GetServiceAsync(typeof(SVsRunningDocumentTable)).ConfigureAwait(true) is not IVsRunningDocumentTable4 table4)
         {

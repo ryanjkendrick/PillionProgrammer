@@ -4,6 +4,7 @@ using System.Text;
 using System.Threading;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Threading;
+using Pillion.VisualStudio.Core;
 
 namespace Pillion.VisualStudio;
 
@@ -51,6 +52,8 @@ internal sealed class OutputPaneWriter
         {
             return;
         }
+
+        using var timing = UiThreadTimings.Measure("output.flush");
 
         // Reset before draining: a line queued after this point schedules another flush.
         Volatile.Write(ref _flushScheduled, 0);

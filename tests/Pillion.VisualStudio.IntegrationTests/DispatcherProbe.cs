@@ -224,46 +224,65 @@ public static class BackgroundHeartbeat
 /// <param name="Warning">What to note in the output when the test passes although the UI gap exceeded the budget, or <see langword="null"/>.</param>
 public sealed record ResponsivenessVerdict(string? Failure, string? Warning)
 {
-    /// <summary>A UI gap over this fails the test whatever the background thread did: no machine stall explains it.</summary>
+    /// <summary>A UI gap over this fails the test whatever the background thread did (no machine stall explains it), unless it is attributed to other code.</summary>
     public static readonly TimeSpan HardLimit = TimeSpan.FromSeconds(5);
 
     /// <summary>A background gap under this means the machine was not stalled, so the UI budget applies in full.</summary>
     public static readonly TimeSpan MachineStallThreshold = TimeSpan.FromMilliseconds(500);
 
+    /// <summary>
+    /// The most of a UI gap Pillion's own code may account for. A longer gap held by other code (Visual Studio's shell,
+    /// IntelliCode, the editor) is reported, not failed: Pillion cannot fix another component's stall.
+    /// </summary>
+    public static readonly TimeSpan PillionShareLimit = TimeSpan.FromMilliseconds(500);
+
     /// <summary>Judges a measurement.</summary>
     /// <param name="uiGap">The longest gap on the UI thread.</param>
     /// <param name="backgroundGap">The longest gap on the background thread over the same window.</param>
     /// <param name="budget">The design's budget for the UI thread.</param>
+    /// <param name="pillionShare">
+    /// How long Pillion's own code held the UI thread within the longest gap (<see cref="UiThreadMonitorResult.PillionTimeWithin"/>),
+    /// or <see langword="null"/> when that was not measured.
+    /// </param>
     /// <returns>The verdict.</returns>
-    public static ResponsivenessVerdict Judge(TimeSpan uiGap, TimeSpan backgroundGap, TimeSpan budget)
+    public static ResponsivenessVerdict Judge(TimeSpan uiGap, TimeSpan backgroundGap, TimeSpan budget, TimeSpan? pillionShare = null)
     {
         var detail = FormattableString.Invariant($"UI thread longest gap {uiGap.TotalMilliseconds:0} ms, background thread longest gap {backgroundGap.TotalMilliseconds:0} ms");
 
+        string? failure = null;
         if (uiGap > HardLimit)
         {
-            return new ResponsivenessVerdict(
-                FormattableString.Invariant($"The UI thread stalled for more than {HardLimit.TotalSeconds:0} s after the host was killed ({detail})."),
-                null);
+            failure = FormattableString.Invariant($"The UI thread stalled for more than {HardLimit.TotalSeconds:0} s after the host was killed ({detail}){Share(pillionShare)}.");
+        }
+        else if (uiGap - backgroundGap >= budget)
+        {
+            failure = FormattableString.Invariant($"The UI thread stalled {(uiGap - backgroundGap).TotalMilliseconds:0} ms longer than a background thread did after the host was killed ({detail}){Share(pillionShare)}; the budget is {budget.TotalSeconds:0.#} s.");
+        }
+        else if (uiGap >= budget && backgroundGap < MachineStallThreshold)
+        {
+            failure = FormattableString.Invariant($"The UI thread stalled after the host was killed while a background thread did not ({detail}){Share(pillionShare)}; the budget is {budget.TotalSeconds:0.#} s.");
         }
 
-        if (uiGap - backgroundGap >= budget)
+        if (failure is not null)
         {
-            return new ResponsivenessVerdict(
-                FormattableString.Invariant($"The UI thread stalled {(uiGap - backgroundGap).TotalMilliseconds:0} ms longer than a background thread did after the host was killed ({detail}); the budget is {budget.TotalSeconds:0.#} s."),
-                null);
+            return pillionShare is { } share && share <= PillionShareLimit
+                ? new ResponsivenessVerdict(
+                    null,
+                    FormattableString.Invariant($"WARNING: the UI thread gap reached the {budget.TotalSeconds:0.#} s budget ({detail}), but Pillion's code held the UI thread for only {share.TotalMilliseconds:0} ms of it (the limit is {PillionShareLimit.TotalMilliseconds:0} ms), so other code stalled it; see the dispatcher operations and stack samples of the gap above."))
+                : new ResponsivenessVerdict(failure, null);
         }
 
         if (uiGap >= budget)
         {
-            return backgroundGap < MachineStallThreshold
-                ? new ResponsivenessVerdict(
-                    FormattableString.Invariant($"The UI thread stalled after the host was killed while a background thread did not ({detail}); the budget is {budget.TotalSeconds:0.#} s."),
-                    null)
-                : new ResponsivenessVerdict(
-                    null,
-                    FormattableString.Invariant($"WARNING: the UI thread gap reached the {budget.TotalSeconds:0.#} s budget, but a background thread stalled too ({detail}), so the machine stalled; this run cannot attribute it to Pillion's code."));
+            return new ResponsivenessVerdict(
+                null,
+                FormattableString.Invariant($"WARNING: the UI thread gap reached the {budget.TotalSeconds:0.#} s budget, but a background thread stalled too ({detail}), so the machine stalled; this run cannot attribute it to Pillion's code."));
         }
 
         return new ResponsivenessVerdict(null, null);
     }
+
+    private static string Share(TimeSpan? pillionShare) => pillionShare is { } share
+        ? FormattableString.Invariant($"; Pillion's code held the UI thread for {share.TotalMilliseconds:0} ms of the gap (the limit is {PillionShareLimit.TotalMilliseconds:0} ms)")
+        : string.Empty;
 }

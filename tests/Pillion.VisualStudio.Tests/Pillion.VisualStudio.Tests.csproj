@@ -38,6 +38,16 @@
     <Reference Include="System.Xaml" />
   </ItemGroup>
 
+  <!--
+    The host kill integration test's verdict and UI-thread attribution (HostKillVerdictTests): plain WPF and BCL code
+    from the integration tests, which only run inside Visual Studio.
+  -->
+  <ItemGroup>
+    <Compile Include="..\Pillion.VisualStudio.IntegrationTests\DispatcherProbe.cs" Link="Linked\DispatcherProbe.cs" />
+    <Compile Include="..\Pillion.VisualStudio.IntegrationTests\UiThreadMonitor.cs" Link="Linked\UiThreadMonitor.cs" />
+    <Compile Include="..\Pillion.VisualStudio.IntegrationTests\Polyfills.cs" Link="Linked\Polyfills.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
       <_Parameter1>FakeHostPath</_Parameter1>
