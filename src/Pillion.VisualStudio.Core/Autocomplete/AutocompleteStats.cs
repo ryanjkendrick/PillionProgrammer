@@ -32,6 +32,9 @@ public enum AutocompleteOutcome
 
     /// <summary>The model answered with nothing worth showing.</summary>
     Empty,
+
+    /// <summary>A suggestion was shown and another provider's proposal (Copilot's, IntelliCode's) replaced it.</summary>
+    Displaced,
 }
 
 /// <summary>What the status bar says about autocomplete besides the host state.</summary>
@@ -120,6 +123,7 @@ public sealed class AutocompleteStats
         Accepted = counts.Accepted;
         AcceptedWord = counts.AcceptedWord;
         Rejected = counts.Rejected;
+        Displaced = counts.Displaced;
         CancelledByKeystroke = counts.Cancelled;
         Suppressed = counts.Suppressed;
         Errors = counts.Errors;
@@ -149,6 +153,9 @@ public sealed class AutocompleteStats
 
     /// <summary>Gets the number of shown suggestions that were dismissed or typed over.</summary>
     public long Rejected { get; }
+
+    /// <summary>Gets the number of shown suggestions that another provider's proposal replaced.</summary>
+    public long Displaced { get; }
 
     /// <summary>Gets the number of attempts a keystroke or caret move cancelled (before or after the request was sent).</summary>
     public long CancelledByKeystroke { get; }

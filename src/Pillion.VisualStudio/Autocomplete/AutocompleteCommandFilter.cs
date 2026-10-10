@@ -45,6 +45,7 @@ internal sealed class AutocompleteCommandFilterProvider : IVsTextViewCreationLis
         if (ErrorHandler.Succeeded(textViewAdapter.AddCommandFilter(filter, out var next)))
         {
             filter.Next = next;
+            _host.GetOrCreate(view).EditorCommands = next;
         }
     }
 }
@@ -56,7 +57,8 @@ internal sealed class AutocompleteCommandFilterProvider : IVsTextViewCreationLis
 /// Previous Suggestion" (Alt+[) are commands in the package's command set, routed here because the active view's
 /// filters see every command first; while a Pillion suggestion is displayed they run the editor's own
 /// <c>Edit.NextSuggestion</c> and <c>Edit.PreviousSuggestion</c>, which cycle through the proposals Pillion returned.
-/// Tab and Esc are left to the editor.
+/// "Pillion: Suggest" (the prefix chord, then S) asks for one suggestion at the caret (<see cref="ViewAutocomplete.SuggestNow"/>).
+/// Tab and Esc are left to the editor: Pillion never takes Tab, whoever's proposal is displayed.
 /// </summary>
 internal sealed class AutocompleteCommandFilter : IOleCommandTarget
 {
@@ -76,7 +78,7 @@ internal sealed class AutocompleteCommandFilter : IOleCommandTarget
     /// The command set of Visual Studio 18's inline-suggestion commands; <c>Edit.AcceptNextWordinSuggestion</c> (id 100)
     /// is bound to Ctrl+Right in the "Inline Suggestions Active" scope and would otherwise take Pillion's suggestion.
     /// </summary>
-    private static readonly Guid InlineSuggestionCommands = new("160961B3-909D-4B28-9353-A1BEF587B4A6");
+    internal static readonly Guid InlineSuggestionCommands = new("160961B3-909D-4B28-9353-A1BEF587B4A6");
 
     private const uint AcceptNextWordInSuggestion = 100;
 
@@ -84,7 +86,7 @@ internal sealed class AutocompleteCommandFilter : IOleCommandTarget
     private const uint PreviousSuggestion = 93;
 
     /// <summary><c>Edit.NextSuggestion</c> (Alt+. by default) in <see cref="InlineSuggestionCommands"/>.</summary>
-    private const uint NextSuggestion = 94;
+    internal const uint NextSuggestion = 94;
 
     /// <summary>Gets or sets the next command target in the chain.</summary>
     public IOleCommandTarget? Next { get; set; }
@@ -97,6 +99,12 @@ internal sealed class AutocompleteCommandFilter : IOleCommandTarget
         {
             if (IsWordAccept(pguidCmdGroup, nCmdID) && state.TryAcceptNextWord())
             {
+                return VSConstants.S_OK;
+            }
+
+            if (pguidCmdGroup == PackageGuids.CommandSet && nCmdID == PackageIds.SuggestCommand)
+            {
+                _ = state.SuggestNow();
                 return VSConstants.S_OK;
             }
 
@@ -126,7 +134,7 @@ internal sealed class AutocompleteCommandFilter : IOleCommandTarget
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         if (pguidCmdGroup == PackageGuids.CommandSet && cCmds == 1
-            && prgCmds[0].cmdID is PackageIds.NextSuggestionCommand or PackageIds.PreviousSuggestionCommand)
+            && prgCmds[0].cmdID is PackageIds.NextSuggestionCommand or PackageIds.PreviousSuggestionCommand or PackageIds.SuggestCommand)
         {
             var enabled = _host.Feature?.Availability.Settings.Enabled ?? false;
             prgCmds[0].cmdf = (uint)(OLECMDF.OLECMDF_SUPPORTED | (enabled ? OLECMDF.OLECMDF_ENABLED : 0));

@@ -54,6 +54,18 @@ public sealed class AutocompleteSession : IDisposable
     /// <returns><see langword="true"/> when no newer attempt has started.</returns>
     public bool IsCurrent(long attempt) => Interlocked.Read(ref _latestAttempt) == attempt;
 
+    /// <summary>Gets the attempt in flight when it was started for exactly this text version and caret.</summary>
+    /// <param name="textVersion">The text version.</param>
+    /// <param name="caret">The caret position.</param>
+    /// <returns>The attempt, or <see langword="null"/>.</returns>
+    public CompletionAttempt? CurrentFor(long textVersion, int caret)
+    {
+        lock (_gate)
+        {
+            return _current is not null && _currentInput is { } input && input.TextVersion == textVersion && input.Caret == caret ? _current : null;
+        }
+    }
+
     /// <summary>Cancels the attempt in flight, if any. Cheap.</summary>
     public void CancelPending()
     {
@@ -268,7 +280,7 @@ public sealed class AutocompleteSession : IDisposable
     {
         var multiLine = MultiLineDecision.IsMultiLine(reason);
         _engine.Metrics.RequestSent(attempt.Id, multiLine, _engine.Latency.IsDegraded);
-        var service = _engine.Connection.GetProxy<IModelService>();
+        var service = AutocompleteOverrides.ModelService ?? _engine.Connection.GetProxy<IModelService>();
         var sent = _engine.Clock.UtcNow;
         var firstChunkSeen = false;
         string? modelId = null;

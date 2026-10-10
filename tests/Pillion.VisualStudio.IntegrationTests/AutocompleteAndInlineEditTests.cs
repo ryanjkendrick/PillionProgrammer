@@ -1,42 +1,288 @@
+using System;
+using System.IO;
 using System.Threading.Tasks;
+using Microsoft.VisualStudio;
+using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio.Text.Editor;
 using Xunit.Abstractions;
 
 namespace Pillion.VisualStudio.IntegrationTests;
 
 /// <summary>
-/// The in-editor paths of phase 1: placeholders for the proposal source (work item 1.1), named and skipped so the gate's
-/// evidence list is visible in every test run, and the inline difference view tests of work item 1.7 in
-/// AutocompleteAndInlineEditTests.InlineChat.cs. Work item 1.1 replaces each placeholder body with the steps in its
-/// comment, written against its public types, and removes the Skip.
+/// The in-editor paths of phase 1: the proposal source (work items 1.1 and 1.4), here, and the inline difference view
+/// tests of work item 1.7 in AutocompleteAndInlineEditTests.InlineChat.cs. No model is needed: the ghost-text tests give
+/// autocomplete a canned completion service (<see cref="AutocompleteChecks"/>), and whatever competitor the instance
+/// has (Copilot on 18.x, IntelliCode on 17.x) stays enabled.
 /// </summary>
 [IdeSettings(MinVersion = IdeTarget.Version, MaxVersion = IdeTarget.Version)]
 public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper output) : PillionIdeTest(output)
 {
-    private const string WaitingFor1_1 = "Waiting for work item 1.1 (proposal source).";
+    /// <summary>The message of IntelliCodeRequirement.Message in the extension.</summary>
+    private const string IntelliCodeMessage = "Inline suggestions need IntelliCode's automatic code completions on Visual Studio 2022";
 
-    [IdeFact(Skip = WaitingFor1_1)]
+    private string? _ghostPath;
+
+    [IdeFact]
     public async Task ProposalSource_ShowsGhostText_WithTheCompetitorEnabled()
     {
-        // 1.1: open the scratch folder's Program.cs, place the caret inside Main, type a statement prefix and wait for
-        // the suggestion session; assert that the shown proposal comes from Pillion's proposal source (its provider
-        // name or proposal id prefix), with IntelliCode's automatic completions on (17.x) or Copilot on (18.x).
-        // Tab accepts it as one edit; Esc dismisses it and leaves the buffer unchanged.
         await EnsurePackageLoadedAsync();
+        var view = await OpenGhostDocumentAsync();
+        try
+        {
+            // Typed through the view's command chain, as from the keyboard: the broker asks Pillion's source on TypeChar.
+            var original = await TypeStatementPrefixAsync(view, line: 6);
+            await WaitForPillionProposalAsync(view, "Pillion's proposal after typing");
+
+            await AcceptSuggestionAsync(view);
+            var accepted = view.TextBuffer.CurrentSnapshot.GetLineFromLineNumber(6).GetText();
+            Output.WriteLine($"After Tab: {accepted.Trim()}");
+            Assert.Equal("        var total = " + AutocompleteChecks.CannedCompletion, accepted);
+            Assert.NotEqual(original, view.TextBuffer.CurrentSnapshot.GetText());
+
+            // Esc dismisses and leaves the buffer as it was.
+            await TypeStatementPrefixAsync(view, line: 7);
+            await WaitForPillionProposalAsync(view, "Pillion's proposal on the next line");
+            await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+            var beforeEsc = view.TextBuffer.CurrentSnapshot.GetText();
+            AutocompleteChecks.Exec(view, VSConstants.VSStd2KCmdID.CANCEL);
+            await WaitUntilAsync(
+                async () =>
+                {
+                    await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+                    return !AutocompleteChecks.IsPillionDisplayed(view);
+                },
+                TimeSpan.FromSeconds(5),
+                "Esc to dismiss the proposal").ConfigureAwait(true);
+            Assert.Equal(beforeEsc, view.TextBuffer.CurrentSnapshot.GetText());
+
+            // "Pillion: Suggest" (work item 1.4) asks for one suggestion at the caret, whatever else is displayed.
+            AutocompleteChecks.Suggest(view);
+            await WaitForPillionProposalAsync(view, "Pillion: Suggest to show a proposal");
+            Output.WriteLine("Typed, accepted with Tab, dismissed with Esc and asked again with Pillion: Suggest.");
+        }
+        finally
+        {
+            await CloseGhostDocumentAsync();
+        }
     }
 
-    [IdeFact(Skip = WaitingFor1_1)]
+    [IdeFact]
     public async Task ProposalSource_NoProposal_WhileACompletionListItemIsSelected()
     {
-        // 1.1: trigger the completion list (Ctrl+Space), select an item, and assert Pillion offers no proposal until
-        // the list is dismissed (Gate 1, "ghost text works").
         await EnsurePackageLoadedAsync();
+        var view = await OpenGhostDocumentAsync();
+        try
+        {
+            await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+            view.Caret.MoveTo(view.TextSnapshot.GetLineFromLineNumber(6).End);
+            // Typing a letter opens Roslyn's completion list with the best match selected.
+            AutocompleteChecks.Type(view, "        Con");
+            string? selected = null;
+            await WaitUntilAsync(
+                async () =>
+                {
+                    await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+                    selected = AutocompleteChecks.SelectedCompletionItem(view);
+                    return selected is not null;
+                },
+                TimeSpan.FromSeconds(20),
+                "a completion list with a selected item").ConfigureAwait(true);
+            Output.WriteLine($"Completion list open with \"{selected}\" selected.");
+
+            // The canned service answers in about 50 ms: check every 50 ms for two seconds while the list stays open.
+            var checks = 0;
+            for (var i = 0; i < 40; i++)
+            {
+                await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+                if (AutocompleteChecks.SelectedCompletionItem(view) is null)
+                {
+                    break;
+                }
+
+                checks++;
+                Assert.False(AutocompleteChecks.IsPillionDisplayed(view), "A Pillion proposal was shown while a completion list had a selected item.");
+                await Task.Delay(50, HangMitigatingCancellationToken).ConfigureAwait(true);
+            }
+
+            await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+            Output.WriteLine($"No Pillion proposal in {checks} checks ({checks * 50} ms) while the list had a selected item; displayed now: {AutocompleteChecks.DisplayedProposalId(view) ?? "nothing"}.");
+            AutocompleteChecks.Exec(view, VSConstants.VSStd2KCmdID.CANCEL);
+            Assert.True(checks >= 4, "The completion list closed before it could be checked for 200 ms.");
+        }
+        finally
+        {
+            await CloseGhostDocumentAsync();
+        }
     }
 
-    [IdeFact(Skip = WaitingFor1_1, MaxVersion = VisualStudioVersion.VS2022)]
+    [IdeFact(MaxVersion = VisualStudioVersion.VS2022)]
     public async Task IntelliCodeCheck_ReportsWhenAutomaticCompletionsAreOff()
     {
-        // 1.1, 17.x only: turn IntelliCode's automatic completions off, reload, and assert the status bar and the
-        // Pillion Output pane say so and nothing throws (Gate 1, "IntelliCode run-time check on 17.x").
         await EnsurePackageLoadedAsync();
+        var previous = await AutocompleteChecks.SetIntelliCodeCompletionsAsync(2);
+        Output.WriteLine($"IntelliCode automatic completions switched off (was {previous ?? "<unset>"}).");
+        bool seenStatus = false, seenOutput = false;
+        try
+        {
+            await WaitUntilAsync(
+                async () =>
+                {
+                    // The check runs again whenever the Tools menu (here: the Open Chat command's status) is queried.
+                    await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+                    QueryOpenChatStatus();
+                    seenStatus |= AutocompleteChecks.StatusBarText().Contains(IntelliCodeMessage);
+                    seenOutput |= (await AutocompleteChecks.PillionOutputTextAsync(HangMitigatingCancellationToken)).Contains(IntelliCodeMessage);
+                    await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+                    return seenStatus && seenOutput;
+                },
+                TimeSpan.FromSeconds(30),
+                "the status bar and the Output pane to report IntelliCode's completions off").ConfigureAwait(true);
+            await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+            Output.WriteLine("Status bar: " + AutocompleteChecks.StatusBarText());
+        }
+        finally
+        {
+            await AutocompleteChecks.SetIntelliCodeCompletionsAsync(previous is int value ? value : 0);
+            await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+            Output.WriteLine($"Seen in the status bar: {seenStatus}; in the Output pane: {seenOutput}; status bar now: {AutocompleteChecks.StatusBarText()}");
+        }
+
+        await WaitUntilAsync(
+            async () =>
+            {
+                await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+                QueryOpenChatStatus();
+                return !AutocompleteChecks.StatusBarText().Contains(IntelliCodeMessage);
+            },
+            TimeSpan.FromSeconds(20),
+            "the status bar to clear once the completions are on again").ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Accepts the displayed proposal the way Tab does: Visual Studio 18 binds Tab to <c>Edit.AcceptSuggestion</c> in the
+    /// "Inline Suggestions Active" scope; Visual Studio 2022 (IntelliCode) handles the Tab key command itself.
+    /// </summary>
+    private async Task AcceptSuggestionAsync(IWpfTextView view)
+    {
+        try
+        {
+            await TestServices.Shell.ExecuteCommandAsync("Edit.AcceptSuggestion", HangMitigatingCancellationToken);
+            Output.WriteLine("Accepted with Edit.AcceptSuggestion.");
+        }
+        catch (System.Runtime.InteropServices.COMException ex)
+        {
+            Output.WriteLine($"Edit.AcceptSuggestion: {ex.Message}; sending Tab.");
+            await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+            AutocompleteChecks.Exec(view, VSConstants.VSStd2KCmdID.TAB);
+        }
+
+        await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+    }
+
+    private static void QueryOpenChatStatus()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (ServiceProvider.GlobalProvider.GetService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte)
+        {
+            _ = dte.Commands.Item("Tools.PillionOpenChat").IsAvailable;
+        }
+    }
+
+    private async Task<string> TypeStatementPrefixAsync(IWpfTextView view, int line)
+    {
+        await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+        view.Caret.MoveTo(view.TextSnapshot.GetLineFromLineNumber(line).End);
+        var original = view.TextBuffer.CurrentSnapshot.GetText();
+        AutocompleteChecks.Type(view, "        var total = ");
+        return original;
+    }
+
+    private Task WaitForPillionProposalAsync(IWpfTextView view, string what) =>
+        WaitUntilAsync(
+            async () =>
+            {
+                await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+                var id = AutocompleteChecks.DisplayedProposalId(view);
+                if (id is not null && !AutocompleteChecks.IsPillionDisplayed(view))
+                {
+                    Output.WriteLine($"Another provider's proposal is displayed: {id}");
+                }
+
+                return AutocompleteChecks.IsPillionDisplayed(view);
+            },
+            TimeSpan.FromSeconds(20),
+            what);
+
+    private async Task<IWpfTextView> OpenGhostDocumentAsync()
+    {
+        await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+        AutocompleteChecks.InstallCannedCompletions();
+        var folder = Path.Combine(Path.GetTempPath(), "pillion-ide-tests", "ghost-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+        Directory.CreateDirectory(folder);
+        _ghostPath = Path.Combine(folder, "Totals.cs");
+        File.WriteAllText(
+            _ghostPath,
+            string.Join(
+                "\r\n",
+                "namespace Scratch;",
+                string.Empty,
+                "internal static class Totals",
+                "{",
+                "    public static void Print(int[] numbers)",
+                "    {",
+                string.Empty,
+                string.Empty,
+                "    }",
+                "}",
+                string.Empty));
+
+        VsShellUtilities.OpenDocument(ServiceProvider.GlobalProvider, _ghostPath);
+        IWpfTextView? view = null;
+        await WaitUntilAsync(
+            async () =>
+            {
+                view = await TestServices.Editor.GetActiveTextViewAsync(HangMitigatingCancellationToken);
+                return view.TextBuffer.CurrentSnapshot.GetText().Contains("class Totals");
+            },
+            TimeSpan.FromSeconds(30),
+            "the ghost-text document to open").ConfigureAwait(true);
+
+        // The broker serves the focused view: another test may have left a tool window (Pillion Chat) focused.
+        await WaitUntilAsync(
+            async () =>
+            {
+                await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+                _ = view!.VisualElement.Focus();
+                return view.HasAggregateFocus;
+            },
+            TimeSpan.FromSeconds(10),
+            "the ghost-text document to get keyboard focus").ConfigureAwait(true);
+        Output.WriteLine($"Opened {_ghostPath}");
+        return view!;
+    }
+
+    private async Task CloseGhostDocumentAsync()
+    {
+        await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+        AutocompleteChecks.RemoveCannedCompletions();
+        if (_ghostPath is not null
+            && VsShellUtilities.IsDocumentOpen(ServiceProvider.GlobalProvider, _ghostPath, Guid.Empty, out _, out _, out var frame)
+            && frame is not null)
+        {
+            _ = frame.CloseFrame((uint)__FRAMECLOSE.FRAMECLOSE_NoSave);
+        }
+
+        try
+        {
+            if (_ghostPath is not null)
+            {
+                Directory.Delete(Path.GetDirectoryName(_ghostPath)!, recursive: true);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // %TEMP% is cleaned up eventually.
+        }
     }
 }

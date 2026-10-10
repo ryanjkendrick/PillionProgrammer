@@ -853,7 +853,7 @@ public sealed class AutocompleteMetricsOutputTests : IDisposable
 
     private static readonly HashSet<string> KnownKeys = new(StringComparer.Ordinal)
     {
-        "schema", "windowStart", "windowEnd", "seconds", "attempts", "requests", "shown", "accepted", "acceptedWord", "rejected",
+        "schema", "windowStart", "windowEnd", "seconds", "attempts", "requests", "shown", "accepted", "acceptedWord", "rejected", "displaced",
         "cancelled", "suppressed", "errors", "empty", "multiLine", "degradedRequests", "showRate", "acceptanceRate",
         "firstChunkMs", "firstChunkMs.count", "firstChunkMs.p50", "firstChunkMs.p95",
         "suggestionMs", "suggestionMs.count", "suggestionMs.p50", "suggestionMs.p95",

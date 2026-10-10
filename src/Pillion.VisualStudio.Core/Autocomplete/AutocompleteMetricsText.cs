@@ -54,7 +54,7 @@ public static class AutocompleteMetricsText
         builder.AppendLine("Autocomplete, last " + SpanText(snapshot.WindowLength));
         builder.AppendLine(string.Format(
             CultureInfo.InvariantCulture,
-            "  {0} sent to the host, {1} shown ({2} of requests); {3} taken ({4} of shown: {5} whole, {6} by word); {7} rejected",
+            "  {0} sent to the host, {1} shown ({2} of requests); {3} taken ({4} of shown: {5} whole, {6} by word); {7} rejected; {8} displaced by another provider",
             recent.Requests,
             recent.Shown,
             Percent(recent.ShowRate),
@@ -62,7 +62,8 @@ public static class AutocompleteMetricsText
             Percent(recent.AcceptanceRate),
             recent.Accepted,
             recent.AcceptedWord,
-            recent.Rejected));
+            recent.Rejected,
+            recent.Displaced));
         builder.AppendLine(string.Format(
             CultureInfo.InvariantCulture,
             "  Cancelled by typing: {0}; suppressed: {1}; empty: {2}; errors: {3}; multi-line: {4}; in flight: {5}",

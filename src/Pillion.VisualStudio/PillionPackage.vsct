@@ -87,6 +87,19 @@
           <LocCanonicalName>Pillion.PreviousSuggestion</LocCanonicalName>
         </Strings>
       </Button>
+
+      <!-- "Pillion: Suggest" asks for one suggestion at the caret now (the only way to get one when autocomplete.ordering
+           is onDemand; it also works in the other modes). Handled by the text view's command filter. -->
+      <Button guid="guidPillionCommandSet" id="cmdidSuggest" priority="0x0202" type="Button">
+        <Parent guid="guidPillionCommandSet" id="PillionToolsMenuGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>DefaultDisabled</CommandFlag>
+        <Strings>
+          <ButtonText>Pillion: Suggest</ButtonText>
+          <CanonicalName>Pillion.Suggest</CanonicalName>
+          <LocCanonicalName>Pillion.Suggest</LocCanonicalName>
+        </Strings>
+      </Button>
     </Buttons>
   </Commands>
 
@@ -108,6 +121,8 @@
          Edit.WordNext, taken by the text view's command filter only while a Pillion suggestion is displayed. -->
     <KeyBinding guid="guidPillionCommandSet" id="cmdidNextSuggestion" editor="guidTextEditor" key1="VK_OEM_6" mod1="Alt" />
     <KeyBinding guid="guidPillionCommandSet" id="cmdidPreviousSuggestion" editor="guidTextEditor" key1="VK_OEM_4" mod1="Alt" />
+    <!-- Suggest: the prefix chord, then S (Alt+\ is Edit.GoToMember in Visual Studio 2026's default scheme). -->
+    <KeyBinding guid="guidPillionCommandSet" id="cmdidSuggest" editor="guidVSStd97" key1="P" mod1="Control Alt Shift" key2="S" />
   </KeyBindings>
 
   <Symbols>
@@ -126,6 +141,7 @@
       <IDSymbol name="cmdidPreviousSuggestion" value="0x0106" />
       <IDSymbol name="cmdidInlineChat" value="0x0300" />
       <IDSymbol name="PillionEditorContextGroup" value="0x1030" />
+      <IDSymbol name="cmdidSuggest" value="0x0310" />
     </GuidSymbol>
 
     <!-- The Text Editor key-binding scope (GUID_TextEditorFactory). -->

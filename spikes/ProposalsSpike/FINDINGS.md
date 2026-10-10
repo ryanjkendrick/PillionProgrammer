@@ -586,3 +586,137 @@ self-inflicted. `Focus-Exp` taps Alt to release the foreground lock, which can l
 next Enter then opens the File menu, and a typed `t` picks **Close Solu&tion**. It happened once in this session when
 `Focus-Exp` was called explicitly before typing `//two`, and was cancelled with Esc. Clicking into the editor after
 `Focus-Exp` (as `Run-Scenarios.ps1` does) avoids it.
+
+## Coexistence countermeasure (work item 1.4)
+
+Run date: 2026-10-10. Visual Studio Community 2026 **18.10.12224.181** with GitHub Copilot signed in, and Visual Studio
+Community 2022 **17.14.41** with IntelliCode (automatic completions on, no Copilot), both under `/rootsuffix PillionCx`,
+with the real Pillion Host and Ollama `qwen2.5-coder:7b` on the GPU. Traces, screenshots and the drivers stayed in the
+session scratchpad, not in the repo.
+
+### What the broker does, measured with canned proposals
+
+A session-local probe build (not committed) made Pillion's source return a fixed `/*P*/` at every request, optionally
+after a delay, and logged every suggestion-service event and every manager and source call.
+
+* **Queued takeover, both versions.** Pillion's proposal shown, a typed character that does not match it
+  (`DivergedAfterTypeChar`), then the competitor's proposal from the *same* broker request displayed 30 ms later (18.10,
+  Copilot) or 41 ms later (17.14, IntelliCode). Neither Pillion's manager nor its source is asked while that proposal still
+  matches what is typed. This reproduces the Gate 0 finding.
+* **The broker waits about 0.8 s for a source ordered ahead.** With Pillion answering after 400 ms, Pillion's proposal was
+  shown and Copilot's queued. With 800 ms or 1,500 ms, Copilot's was shown about 790 ms after the request (18.10) and
+  IntelliCode's about 850 ms after it (17.14); Pillion's later answer was queued, not shown. So `[Order]` does decide,
+  but only inside that window. That is why it looked indecisive in the spike: an answer after the window loses.
+* **`SuggestionServiceBase.TryUpdateProposal` cannot replace another source's proposal.** It returns the proposal, but the
+  competitor's stays displayed (18.10).
+* **A second suggestion provider is not usable.** With `TryRegisterProviderAsync` and `TryDisplaySuggestionAsync`, no
+  session is returned while another proposal is displayed, and a second registration in the same view returns no manager.
+* **An explicit invocation reaches Pillion's source.** `Edit.NextSuggestion` (command group `160961B3-...`, id 94) with
+  nothing displayed makes the broker ask every manager and source with `ProposalScenario.ExplicitInvocation`, on both
+  versions. With a proposal displayed it cycles instead. On 18.10 this also works across sources: it brought a late,
+  queued Pillion proposal forward (`DivergedDueToChangeProposal`).
+* **Only a dismissal with `DismissedAfterUserEscape` clears the broker's queue.** After `DismissProposalAsync` with
+  `DismissedForRefinement`, `DismissedBySession` or `DismissedAfterCaretMoved`, an explicit invocation re-showed the queued
+  competitor proposal (same id) without asking any source. After `DismissedAfterUserEscape` it asked every source and
+  Pillion's answer was shown (18.10; the same on 17.14).
+* **Never dismiss and invoke from inside the suggestion service's own event handling.** On 17.14, doing both inside the
+  competitor's `ProposalDisplayed` handling (a type-through cache hit made the push run 16 ms after the display) left
+  IntelliCode's broker consulting the managers but asking no source again for the rest of the session. This happened in
+  two runs. The shipped code waits 150 ms off the handler before a push.
+* **`ProposalBrokerProviderBase.GetProposalBroker(view).RequestProposals(...)` is public** and returns every source's
+  collection (Copilot's source name is `CompletionsProposalSource`). It makes every source run again, so it is not used to
+  inspect the competitor.
+* **Detection without private APIs.** The `Name` metadata of the `ProposalSourceProviderBase` exports names the
+  competitors: `CompletionsProposalSourceProvider` (Copilot, 18.10), `IntelliCodeCSharpProposalSource` (both versions) and
+  `IntelliCodeVCProposalSource` (18.10). On a fresh hive, the settings manager returns `Missing` for
+  `Microsoft.VisualStudio.Conversations.AreCopilotCompletionsEnabled`,
+  `Microsoft.VisualStudio.IntelliCode.ShowIntellicodeCompletions`, `...ShowAICompletions` and Visual Studio 18's
+  `textEditor.codeCompletions.general.codeCompletionsProviders`. Until the user changes them, "on by default" is all that
+  can be read. Copilot's sign-in state has no public API. Proposal ids tell the providers apart: Copilot's start with `cpt`
+  (completions) or `nes`, and IntelliCode's are a GUID, a colon and a number.
+* **Settings links.** On 17.14, `Tools.Options` with IntelliCode's General page GUID (`c6a0ae28-f8eb-330b-8012-35a3022dded0`)
+  opens that page. On 18.10, `Tools.Options` opens the unified Settings document; a category moniker does not navigate,
+  so the link opens Settings at the top.
+* **Shortcut.** Alt+\ is bound to `Edit.GoToMember` (Global) in Visual Studio 2026's default scheme. "Pillion: Suggest" is
+  therefore on the prefix chord, then S (`Global::Ctrl+Shift+Alt+P, S`, no conflict).
+
+### Countermeasures evaluated
+
+* **(a) Re-request outside the broker** whenever a competitor's proposal is displayed, and on every keystroke while it is
+  typed through (the broker asks nobody then). **(b) Type-through from the cache** is tried first. Both only produce a
+  Pillion suggestion; showing it needs the dismiss-and-explicit-invocation lever above.
+* **Replace** (chosen) combines (a) and (b) with showing the result:
+  * The competitor's proposal stays on screen until Pillion has a suggestion for exactly that caret and text.
+  * Then Pillion dismisses it with the user-Escape reason and invokes explicitly. Pillion's source answers at once from
+    what it kept.
+  * This also applies when Pillion's answer arrives after the broker's 0.8 s wait.
+  * At most once per position. Never while a completion list is open, after the user cycled with Alt+., or when Pillion
+    has nothing.
+  * If the explicit invocation re-shows a queued competitor proposal instead (seen once on 18.10 right after the user
+    pressed Esc), Pillion dismisses it and asks once more.
+* **(c) Decline**: dismiss the competitor's proposal at once while a Pillion request for that caret is in flight, then
+  show Pillion's suggestion, or ask every source again when Pillion has nothing.
+
+### Measurements: steady typing of a known snippet
+
+**Driver.** A session-local script (built on `tools/vsdrive.ps1`) types seven C# statements into `Main` of a scratch
+console project. It sends one key every 110 ms through SendKeys, waits 0.9 s at each line end, then presses Esc, End and
+Enter. Each row is two runs, and Tab is never pressed. The measurement variable `PILLION_AUTOCOMPLETE_COUNTERMEASURE`
+(`off`, `replace`, `decline`) switched the countermeasure, and `PILLION_COEXISTENCE_TRACE` wrote the slot timeline.
+
+**Columns:**
+
+* **Displaced**: a Pillion proposal that a competitor's replaced while it was shown, or within 250 ms of diverging. This is
+  the new `displaced` metrics outcome.
+* **Not regained**: no Pillion proposal appeared within 2 s after the displacement.
+* **Pillion slot share**: the time a Pillion proposal was displayed, over the time any proposal was displayed.
+
+| Version, competitor | Build, countermeasure | Pillion shown | Displaced | Not regained | Competitor shown | Taken back (Pillion then shown) | Pillion slot share |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 18.10, Copilot | off (before) | 34 | 2 (5.9%) | 2 | 13 | 0 | 90.4% (183 s vs 19.5 s) |
+| 18.10, Copilot | replace, first build | 35 | 2 (5.7%) | 2 | 11 | 4 (2; Copilot re-proposed the other 2) | 96.6% (196 s vs 7.0 s) |
+| 18.10, Copilot | replace, second build | 34 | 2 (5.9%) | 2 | 10 | 0 | 96.3% (211 s vs 8.1 s) |
+| 18.10, Copilot | replace, final build | 37 | 4 (10.8%) | 2 | 14 | 3 (3) | 95.2% (213 s vs 10.8 s) |
+| 18.10, Copilot | decline | 36 | 2 (5.6%) | 2 | 14 | - | 100% (Copilot 0 s on screen) |
+| 17.14, IntelliCode | off (before) | 38 | 5 (13.2%) | 2 | 20 | 0 | 87.5% (206 s vs 29.4 s) |
+| 17.14, IntelliCode | off, final build | 39 | 1 (2.6%) | 0 | 19 | 0 | 88.4% (224 s vs 29.6 s) |
+| 17.14, IntelliCode | replace, first build | 40 | 5 (12.5%) | 2 | 19 | 7 (7) | 95.0% (214 s vs 11.3 s) |
+| 17.14, IntelliCode | replace, second build (push inside the display handler) | 1 | 0 | 0 | 1 | 1 (0) | IntelliCode's broker stopped asking any source after the first push |
+| 17.14, IntelliCode | replace, final build (push 150 ms off the handler) | 43 | 2 (4.7%) | 1 | 20 | 4 (4) | 91.9% (235 s vs 20.6 s) |
+| 17.14, IntelliCode | decline | 1 | 0 | 0 | 1 | - | the same stop after its first dismiss-then-invoke, in two runs |
+
+**Reading the table:**
+
+* **Displacement is rare during steady typing.** With the real 7B model, the pipeline usually answers inside the broker's
+  0.8 s wait, so Pillion's proposal is shown first: 2 to 4 displaced per 34 to 37 shown on 18.10, and 1 to 5 per 38 to 43 on 17.14.
+  In the displaced cases that were not regained, the re-request found **no better Pillion suggestion** for the new caret
+  (the model answered empty or with the text already typed), so "replace" correctly left the competitor's proposal in
+  place; the others were taken back. The
+  displacement rate itself cannot drop further without starving the competitor.
+* **"Replace" reduces the competitor's other time in the slot.** When the competitor answered first or Pillion answered
+  late, Pillion's suggestion took the slot back. Pillion's share rose from 90% to 95 to 97% on 18.10, and from 88% to 92 to 95%
+  on 17.14. The competitor was still shown 10 to 20 times when Pillion had nothing, and its proposal was never removed
+  without one of Pillion's taking its place.
+* **"Decline" was not chosen.** It starved Copilot completely (14 proposals, 0 s on screen). On 17.14, its immediate
+  dismiss-then-invoke stopped IntelliCode's broker.
+* **Chosen rules:** `pillionFirst` by default, with "replace", as listed in the README ("When Copilot or IntelliCode also
+  suggest").
+* **Other orderings, checked by hand:**
+  * `competitorFirst` gave IntelliCode 93% of the slot on 17.14 and Copilot 74% on 18.10, with Pillion filling in only
+    when nothing was displayed.
+  * `onDemand` showed no Pillion proposal while typing. "Pillion: Suggest" showed one at the caret on both versions,
+    3 times out of 3 on 18.10 straight after Esc.
+* **Info bar.** It appeared on the first document on 17.14 (IntelliCode, at start-up) and on 18.10 (at the first Copilot
+  proposal). Answering it wrote `autocomplete.ordering` and `autocomplete.coexistencePromptDone`, and it did not come back
+  after a restart once the host's settings were read. The first build read the flag before the host answered and showed
+  the bar again; that is fixed.
+
+**Side effects.** The competitor records each replaced proposal as dismissed by Escape, because no other reason clears the
+queue. Each takeover also makes every source run once more for the explicit invocation, Copilot's included.
+
+**Not verified:**
+
+* The prefix chord itself. Ctrl+Alt+Shift chords could not be injected with SendKeys or `keybd_event`, including the
+  existing Open Chat chord. The binding is registered and the command was run through DTE.
+* Copilot on Visual Studio 2022.
+* A slower model or the CPU tier, where Pillion would miss the 0.8 s window more often and "replace" would matter more.

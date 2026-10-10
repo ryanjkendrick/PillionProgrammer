@@ -81,8 +81,8 @@ public sealed class AutocompleteEngine
     /// <summary>Gets the current settings (the defaults until the host has answered).</summary>
     public AutocompleteSettings Settings => _availability?.Settings ?? AutocompleteSettings.Default;
 
-    /// <summary>Gets a value indicating whether the host can take requests now.</summary>
-    public bool HostUsable => Connection.State is HostState.Ready or HostState.Degraded;
+    /// <summary>Gets a value indicating whether the host (or the test override, <see cref="AutocompleteOverrides"/>) can take requests now.</summary>
+    public bool HostUsable => AutocompleteOverrides.ModelService is not null || Connection.State is HostState.Ready or HostState.Degraded;
 
     /// <summary>Asks the host for its autocomplete counters (cache hits, host-side latencies). Never throws.</summary>
     /// <param name="timeout">How long to wait for the host.</param>

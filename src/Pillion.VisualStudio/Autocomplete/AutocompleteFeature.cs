@@ -8,7 +8,7 @@ namespace Pillion.VisualStudio.Autocomplete;
 
 /// <summary>
 /// The package-owned part of autocomplete: the feature flag and settings, the request engine shared by every view, the
-/// latest IntelliCode check, and the local telemetry (the metrics log and the five-minute Output pane summary). Created
+/// latest IntelliCode check, suggestion coexistence, and the local telemetry (the metrics log and the five-minute Output pane summary). Created
 /// when the package loads; the MEF parts reach it through <see cref="PillionPackage.Instance"/>.
 /// </summary>
 internal sealed class AutocompleteFeature : IDisposable
@@ -28,6 +28,7 @@ internal sealed class AutocompleteFeature : IDisposable
     public AutocompleteFeature(IHostConnection connection, PillionLog log)
     {
         Log = log;
+        Connection = connection;
         Availability = new AutocompleteAvailability(connection, log);
         Engine = new AutocompleteEngine(connection, Availability, SystemClock.Instance, log);
         Reporter = new AutocompleteMetricsReporter(
@@ -36,6 +37,7 @@ internal sealed class AutocompleteFeature : IDisposable
             AutocompleteMetricsReporter.ParseInterval(Environment.GetEnvironmentVariable(AutocompleteMetricsReporter.IntervalVariable)));
         _statusNotifier = new CoalescingNotifier(SystemClock.Instance, StatusBarInterval, () => StatusChanged?.Invoke(this, EventArgs.Empty));
         Engine.Metrics.IndicatorChanged += (_, _) => _statusNotifier.Poke();
+        Coexistence = new CoexistenceFeature(this);
     }
 
     /// <summary>Raised on a pool thread, at most every two seconds, when the status bar indicator changed (a request is waiting for the model, or autocomplete became degraded or recovered).</summary>
@@ -43,6 +45,12 @@ internal sealed class AutocompleteFeature : IDisposable
 
     /// <summary>Gets the extension log.</summary>
     public PillionLog Log { get; }
+
+    /// <summary>Gets the connection to Pillion Host.</summary>
+    public IHostConnection Connection { get; }
+
+    /// <summary>Gets suggestion coexistence: the Copilot and IntelliCode detection, whose proposals were seen, and the info bar.</summary>
+    public CoexistenceFeature Coexistence { get; }
 
     /// <summary>Gets the feature flag and settings.</summary>
     public AutocompleteAvailability Availability { get; }

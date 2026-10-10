@@ -14,8 +14,9 @@ namespace Pillion.VisualStudio.Autocomplete;
 /// <summary>
 /// The MEF side of autocomplete, shared by the proposal source, the proposal manager and the command filter: it finds
 /// the package's <see cref="AutocompleteEngine"/> (loading the package in the background the first time an editor
-/// asks), keeps one <see cref="ViewAutocomplete"/> per text view, and turns the suggestion service's shown, accepted
-/// and rejected events into calls on the view they belong to, matched by Pillion's proposal ids.
+/// asks), keeps one <see cref="ViewAutocomplete"/> per text view, starts the coexistence detection with the first view,
+/// and turns the suggestion service's shown, accepted and rejected events (Pillion's, matched by its proposal ids, and
+/// other providers') into calls on the view they belong to.
 /// </summary>
 [Export(typeof(AutocompleteHost))]
 internal sealed class AutocompleteHost
@@ -69,8 +70,11 @@ internal sealed class AutocompleteHost
     /// <summary>Gets (creating on first use) the autocomplete state of a document view.</summary>
     /// <param name="view">The view.</param>
     /// <returns>The state.</returns>
-    public ViewAutocomplete GetOrCreate(ITextView view) =>
-        view.Properties.GetOrCreateSingletonProperty(typeof(ViewAutocomplete), () => new ViewAutocomplete(this, view, FilePathOf(view.TextBuffer)));
+    public ViewAutocomplete GetOrCreate(ITextView view)
+    {
+        Feature?.Coexistence.EnsureStarted(JoinableTaskFactory);
+        return view.Properties.GetOrCreateSingletonProperty(typeof(ViewAutocomplete), () => new ViewAutocomplete(this, view, FilePathOf(view.TextBuffer)));
+    }
 
     /// <summary>Gets the autocomplete state of a view, if it has one.</summary>
     /// <param name="view">The view.</param>
@@ -121,33 +125,69 @@ internal sealed class AutocompleteHost
 
     private void OnProposalDisplayed(object sender, ProposalDisplayedEventArgs e)
     {
-        if (PillionProposalId.IsPillion(e.OriginalProposal?.ProposalId) && TryGet(e.View, out var state))
+        if (e.OriginalProposal is not { } proposal || !TryGet(e.View, out var state))
         {
-            state.OnDisplayed(e.OriginalProposal!);
+            return;
+        }
+
+        if (PillionProposalId.IsPillion(proposal.ProposalId))
+        {
+            state.OnDisplayed(proposal);
+        }
+        else
+        {
+            state.OnCompetitorDisplayed(proposal);
         }
     }
 
     private void OnProposalRejected(object sender, ProposalRejectedEventArgs e)
     {
-        if (PillionProposalId.IsPillion(e.OriginalProposal?.ProposalId) && TryGet(e.View, out var state))
+        if (e.OriginalProposal is not { } proposal || !TryGet(e.View, out var state))
         {
-            state.OnRejected(e.OriginalProposal!, e.FinalProposal, e.Reason);
+            return;
+        }
+
+        if (PillionProposalId.IsPillion(proposal.ProposalId))
+        {
+            state.OnRejected(proposal, e.FinalProposal, e.Reason);
+        }
+        else if (((int)e.Reason & (int)ReasonForUpdate.Diverged) != 0)
+        {
+            state.OnCompetitorGone(proposal, "rejected " + e.Reason);
         }
     }
 
     private void OnSuggestionAccepted(object sender, SuggestionAcceptedEventArgs e)
     {
-        if (PillionProposalId.IsPillion(e.OriginalProposal?.ProposalId) && TryGet(e.View, out var state))
+        if (e.OriginalProposal is not { } proposal || !TryGet(e.View, out var state))
         {
-            state.OnAccepted(e.OriginalProposal!, e.Reason);
+            return;
+        }
+
+        if (PillionProposalId.IsPillion(proposal.ProposalId))
+        {
+            state.OnAccepted(proposal, e.Reason);
+        }
+        else
+        {
+            state.OnCompetitorGone(proposal, "accepted " + e.Reason);
         }
     }
 
     private void OnSuggestionDismissed(object sender, SuggestionDismissedEventArgs e)
     {
-        if (PillionProposalId.IsPillion(e.OriginalProposal?.ProposalId) && TryGet(e.View, out var state))
+        if (!TryGet(e.View, out var state))
+        {
+            return;
+        }
+
+        if (PillionProposalId.IsPillion(e.OriginalProposal?.ProposalId))
         {
             state.OnDismissed(e.OriginalProposal!, e.Reason);
+        }
+        else if (e.OriginalProposal is { } proposal)
+        {
+            state.OnCompetitorGone(proposal, "dismissed " + e.Reason);
         }
     }
 }
