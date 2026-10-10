@@ -92,6 +92,7 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
         var timeline = Stopwatch.StartNew();
         var interval = TimeSpan.FromMilliseconds(250);
         var window = TimeSpan.FromSeconds(15);
+        using var monitor = UiThreadMonitor.Start(Application.Current.Dispatcher, timeline, TimeSpan.FromMilliseconds(50));
         var heartbeat = BackgroundHeartbeat.RunAsync(timeline, window, interval, HangMitigatingCancellationToken);
         var probe = DispatcherProbe.RunAsync(Application.Current.Dispatcher, timeline, window, interval, HangMitigatingCancellationToken);
         var restart = PillionHostChecks.KillHostAndWaitForReadyAsync(TimeSpan.FromSeconds(15), HangMitigatingCancellationToken, timeline);
@@ -99,6 +100,7 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
         var background = await heartbeat;
         var report = await restart;
         var uiCpuUsed = uiCpu.Read() - uiCpuBefore;
+        var watched = monitor.Stop();
 
         Output.WriteLine($"Killed Pillion.Host.exe pid {report.KilledProcessId} at {report.KilledAt.TotalMilliseconds:0} ms on the probes' clock; left Ready after {report.LeftReadyAfter.TotalMilliseconds:0} ms; Ready again after {report.ReadyAgainAfter.TotalMilliseconds:0} ms with pid {report.NewProcessId}.");
         foreach (var transition in report.Transitions)
@@ -114,6 +116,13 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
         {
             Output.WriteLine(line);
         }
+
+        foreach (var line in watched.Format())
+        {
+            Output.WriteLine(line);
+        }
+
+        Output.WriteLine($"Pillion's own UI thread time within the longest gap: {watched.PillionTimeWithin(responsiveness.LongestGapStart, responsiveness.LongestGapEnd).TotalMilliseconds:0} ms of {responsiveness.LongestGap.TotalMilliseconds:0} ms.");
 
         var verdict = ResponsivenessVerdict.Judge(responsiveness.LongestGap, background.LongestGap, MaxUiGap);
         if (verdict.Warning is not null)
