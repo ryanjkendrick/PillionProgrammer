@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -35,8 +36,18 @@ public static class AutocompleteChecks
     /// <summary>The single-line completion the canned service streams (the fake host's).</summary>
     public const string CannedCompletion = "Calculator.Sum(numbers));";
 
+    private static int _cannedRequests;
+    private static int _lastCannedRequestTick;
+
+    /// <summary>Gets how many completion requests reached the canned service since <see cref="InstallCannedCompletions"/>: Pillion's source asking the model.</summary>
+    public static int CannedRequestCount => Volatile.Read(ref _cannedRequests);
+
     /// <summary>Makes autocomplete requests use the canned completion service.</summary>
-    public static void InstallCannedCompletions() => AutocompleteOverrides.ModelService = new CannedCompletionService();
+    public static void InstallCannedCompletions()
+    {
+        Volatile.Write(ref _cannedRequests, 0);
+        AutocompleteOverrides.ModelService = new CannedCompletionService();
+    }
 
     /// <summary>Restores Pillion Host's model service.</summary>
     public static void RemoveCannedCompletions() => AutocompleteOverrides.ModelService = null;
@@ -47,7 +58,7 @@ public static class AutocompleteChecks
     public static string? DisplayedProposalId(ITextView view)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
-        return Suggestions()?.GetDisplayedProposal(view)?.ProposalId;
+        return SuggestionService()?.GetDisplayedProposal(view)?.ProposalId;
     }
 
     /// <summary>Gets a value indicating whether the displayed proposal is Pillion's.</summary>
@@ -85,6 +96,52 @@ public static class AutocompleteChecks
         var items = session.GetComputedItems(CancellationToken.None);
         return items.SuggestionItemSelected || items.SelectedItem is null ? null : items.SelectedItem.DisplayText;
     }
+
+    /// <summary>
+    /// Describes what the editor and Pillion's adapter are doing in a view, for a failure message: whether Pillion's source
+    /// reached the model, what is displayed, the completion list and the caret line.
+    /// </summary>
+    /// <param name="view">The view.</param>
+    /// <returns>One line.</returns>
+    public static string DescribeState(IWpfTextView view)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var lastRequest = Volatile.Read(ref _cannedRequests) == 0
+            ? "none"
+            : (Environment.TickCount - Volatile.Read(ref _lastCannedRequestTick)).ToString(System.Globalization.CultureInfo.InvariantCulture) + " ms ago";
+        string? selected = null;
+        var active = false;
+        try
+        {
+            active = IsCompletionActive(view);
+            if (active)
+            {
+                var componentModel = (IComponentModel)Package.GetGlobalService(typeof(SComponentModel));
+                using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                var items = componentModel.GetService<IAsyncCompletionBroker>().GetSession(view)?.GetComputedItems(limit.Token);
+                selected = items is null ? null : items.SuggestionItemSelected ? "<suggestion mode>" : items.SelectedItem?.DisplayText;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            selected = "<computing>";
+        }
+
+        var caret = view.Caret.Position.BufferPosition;
+        return $"canned requests: {CannedRequestCount} (last {lastRequest}); displayed proposal: {DisplayedProposalId(view) ?? "none"}; "
+            + $"completion list: {(active ? "open" : "closed")}, selected {selected ?? "nothing"}; keyboard focus: {view.HasAggregateFocus}; "
+            + $"Pillion state on the view: {HasPillionViewState(view)}; model override set: {AutocompleteOverrides.ModelService is not null}; "
+            + $"caret line {caret.GetContainingLine().LineNumber}: \"{caret.GetContainingLine().GetText().Trim()}\"";
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether Pillion's adapter has created its state for a view, which it does the first time the
+    /// proposal broker asks Pillion's proposal source or manager provider about the view.
+    /// </summary>
+    /// <param name="view">The view.</param>
+    /// <returns><see langword="true"/> when the broker has reached Pillion for the view.</returns>
+    public static bool HasPillionViewState(ITextView view) =>
+        view.Properties.PropertyList.Any(p => p.Key is Type type && type.Name == "ViewAutocomplete");
 
     /// <summary>Types text one character at a time through the view's command chain.</summary>
     /// <param name="view">The view.</param>
@@ -164,7 +221,9 @@ public static class AutocompleteChecks
         return await signals.GetOutputPaneTextAsync("Pillion Programmer", 20000, cancellationToken).ConfigureAwait(false) ?? string.Empty;
     }
 
-    private static SuggestionServiceBase? Suggestions()
+    /// <summary>Gets Visual Studio's suggestion service (the proposal broker's front end), or <see langword="null"/> when there is none.</summary>
+    /// <returns>The service.</returns>
+    public static SuggestionServiceBase? SuggestionService()
     {
         var componentModel = (IComponentModel)Package.GetGlobalService(typeof(SComponentModel));
         return componentModel.DefaultExportProvider.GetExportedValueOrDefault<SuggestionServiceBase>();
@@ -190,6 +249,8 @@ public static class AutocompleteChecks
     {
         public async IAsyncEnumerable<CompletionChunk> CompleteAsync(CompletionRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
         {
+            _ = Interlocked.Increment(ref _cannedRequests);
+            Volatile.Write(ref _lastCannedRequestTick, Environment.TickCount);
             var text = CannedCompletion + "\n        Console.WriteLine(\"more\");";
             for (var i = 0; i < text.Length; i += 8)
             {

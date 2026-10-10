@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Xunit.Abstractions;
 
@@ -28,11 +29,16 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
     {
         await EnsurePackageLoadedAsync();
         var view = await OpenGhostDocumentAsync();
+        ProposalWatch? watch = null;
         try
         {
-            // Typed through the view's command chain, as from the keyboard: the broker asks Pillion's source on TypeChar.
-            var original = await TypeStatementPrefixAsync(view, line: 6);
-            await WaitForPillionProposalAsync(view, "Pillion's proposal after typing");
+            await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+            watch = ProposalWatch.Start(view);
+            Assert.True(watch is not null, "Visual Studio has no suggestion service in this instance.");
+            var original = view.TextBuffer.CurrentSnapshot.GetText();
+
+            // The last key goes through the view's command chain, as from the keyboard: the broker asks Pillion's source on TypeChar.
+            await WaitForPillionProposalAsync(view, watch!, "Pillion's proposal after typing", () => TypeStatementPrefix(view, line: 6));
 
             await AcceptSuggestionAsync(view);
             var accepted = view.TextBuffer.CurrentSnapshot.GetLineFromLineNumber(6).GetText();
@@ -41,8 +47,7 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
             Assert.NotEqual(original, view.TextBuffer.CurrentSnapshot.GetText());
 
             // Esc dismisses and leaves the buffer as it was.
-            await TypeStatementPrefixAsync(view, line: 7);
-            await WaitForPillionProposalAsync(view, "Pillion's proposal on the next line");
+            await WaitForPillionProposalAsync(view, watch!, "Pillion's proposal on the next line", () => TypeStatementPrefix(view, line: 7));
             await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
             var beforeEsc = view.TextBuffer.CurrentSnapshot.GetText();
             AutocompleteChecks.Exec(view, VSConstants.VSStd2KCmdID.CANCEL);
@@ -57,12 +62,13 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
             Assert.Equal(beforeEsc, view.TextBuffer.CurrentSnapshot.GetText());
 
             // "Pillion: Suggest" (work item 1.4) asks for one suggestion at the caret, whatever else is displayed.
-            AutocompleteChecks.Suggest(view);
-            await WaitForPillionProposalAsync(view, "Pillion: Suggest to show a proposal");
+            await WaitForPillionProposalAsync(view, watch!, "Pillion: Suggest to show a proposal", () => AutocompleteChecks.Suggest(view));
             Output.WriteLine("Typed, accepted with Tab, dismissed with Esc and asked again with Pillion: Suggest.");
         }
         finally
         {
+            await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+            watch?.Dispose();
             await CloseGhostDocumentAsync();
         }
     }
@@ -189,30 +195,60 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
         }
     }
 
-    private async Task<string> TypeStatementPrefixAsync(IWpfTextView view, int line)
+    /// <summary>
+    /// Puts "        var total = " at the end of a line, as typing would leave it, with the last key typed: the text before the
+    /// final space goes in as an edit and the space through the view's command chain. Typing the letters opens Roslyn's
+    /// completion list, and Pillion shows nothing while a list is open (see the next test), so how long the list lingered
+    /// on a loaded runner decided whether this test passed. A space opens no list; the proposal broker still sees a TypeChar.
+    /// </summary>
+    private static void TypeStatementPrefix(IWpfTextView view, int line)
     {
-        await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
-        view.Caret.MoveTo(view.TextSnapshot.GetLineFromLineNumber(line).End);
-        var original = view.TextBuffer.CurrentSnapshot.GetText();
-        AutocompleteChecks.Type(view, "        var total = ");
-        return original;
+        ThreadHelper.ThrowIfNotOnUIThread();
+        const string beforeTheLastKey = "        var total =";
+        var end = view.TextSnapshot.GetLineFromLineNumber(line).End.Position;
+        using (var edit = view.TextBuffer.CreateEdit())
+        {
+            _ = edit.Insert(end, beforeTheLastKey);
+            _ = edit.Apply();
+        }
+
+        view.Caret.MoveTo(new SnapshotPoint(view.TextSnapshot, end + beforeTheLastKey.Length));
+        AutocompleteChecks.Type(view, " ");
     }
 
-    private Task WaitForPillionProposalAsync(IWpfTextView view, string what) =>
-        WaitUntilAsync(
-            async () =>
+    /// <summary>
+    /// Runs <paramref name="keys"/> on the UI thread and waits for Pillion's proposal to be displayed in the view: for the
+    /// suggestion service's <c>ProposalDisplayed</c> event (or a Pillion proposal that is already displayed and still
+    /// matches). A timeout says what the editor and Pillion's adapter did instead: whether Pillion's source reached the
+    /// model, what is displayed, the completion list.
+    /// </summary>
+    private async Task WaitForPillionProposalAsync(IWpfTextView view, ProposalWatch watch, string what, Action keys)
+    {
+        var timeout = TimeSpan.FromSeconds(20);
+        await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+        var shown = watch.WhenNextPillionShownAsync();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        keys();
+        while (!shown.IsCompleted)
+        {
+            await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+            if (AutocompleteChecks.IsPillionDisplayed(view))
             {
-                await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
-                var id = AutocompleteChecks.DisplayedProposalId(view);
-                if (id is not null && !AutocompleteChecks.IsPillionDisplayed(view))
-                {
-                    Output.WriteLine($"Another provider's proposal is displayed: {id}");
-                }
+                break;
+            }
 
-                return AutocompleteChecks.IsPillionDisplayed(view);
-            },
-            TimeSpan.FromSeconds(20),
-            what);
+            if (clock.Elapsed > timeout)
+            {
+                throw new TimeoutException(
+                    $"Timed out after {timeout.TotalSeconds:0} s waiting for {what}. {AutocompleteChecks.DescribeState(view)}; {watch.Describe()}.");
+            }
+
+            _ = await Task.WhenAny(shown, Task.Delay(250, HangMitigatingCancellationToken)).ConfigureAwait(true);
+        }
+
+        await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+        Output.WriteLine($"{what}: displayed after {clock.ElapsedMilliseconds} ms ({AutocompleteChecks.CannedRequestCount} canned request(s) so far; {watch.Describe()}).");
+    }
 
     private async Task<IWpfTextView> OpenGhostDocumentAsync()
     {
