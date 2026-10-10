@@ -92,7 +92,7 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
         var timeline = Stopwatch.StartNew();
         var interval = TimeSpan.FromMilliseconds(250);
         var window = TimeSpan.FromSeconds(15);
-        using var monitor = UiThreadMonitor.Start(Application.Current.Dispatcher, timeline, TimeSpan.FromMilliseconds(50));
+        using var monitor = UiThreadMonitor.Start(Application.Current.Dispatcher, timeline, TimeSpan.Zero);
         var heartbeat = BackgroundHeartbeat.RunAsync(timeline, window, interval, HangMitigatingCancellationToken);
         var probe = DispatcherProbe.RunAsync(Application.Current.Dispatcher, timeline, window, interval, HangMitigatingCancellationToken);
         var restart = PillionHostChecks.KillHostAndWaitForReadyAsync(TimeSpan.FromSeconds(15), HangMitigatingCancellationToken, timeline);
@@ -117,14 +117,19 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
             Output.WriteLine(line);
         }
 
-        foreach (var line in watched.Format())
+        // Whose code held the UI thread: every dispatcher operation is timed and, in a stall, the stack is sampled. The
+        // samples printed are those of the longest gap; the gap's first 200 ms come before the sampler notices it.
+        foreach (var line in watched.Format(TimeSpan.FromMilliseconds(50), responsiveness.LongestGapStart, responsiveness.LongestGapEnd))
         {
             Output.WriteLine(line);
         }
 
-        Output.WriteLine($"Pillion's own UI thread time within the longest gap: {watched.PillionTimeWithin(responsiveness.LongestGapStart, responsiveness.LongestGapEnd).TotalMilliseconds:0} ms of {responsiveness.LongestGap.TotalMilliseconds:0} ms.");
+        var pillionShare = watched.PillionTimeWithin(responsiveness.LongestGapStart, responsiveness.LongestGapEnd);
+        Output.WriteLine(pillionShare is { } share
+            ? $"Pillion's own UI thread time within the longest gap: {share.TotalMilliseconds:0} ms of {responsiveness.LongestGap.TotalMilliseconds:0} ms."
+            : $"Pillion's own UI thread time within the longest gap: unknown (the monitor did not see enough of the {responsiveness.LongestGap.TotalMilliseconds:0} ms gap).");
 
-        var verdict = ResponsivenessVerdict.Judge(responsiveness.LongestGap, background.LongestGap, MaxUiGap);
+        var verdict = ResponsivenessVerdict.Judge(responsiveness.LongestGap, background.LongestGap, MaxUiGap, pillionShare);
         if (verdict.Warning is not null)
         {
             Output.WriteLine(verdict.Warning);

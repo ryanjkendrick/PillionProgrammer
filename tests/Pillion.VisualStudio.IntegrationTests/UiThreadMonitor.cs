@@ -33,6 +33,9 @@ public sealed record UiStackSample(TimeSpan At, IReadOnlyList<string> Frames)
 {
     /// <summary>Gets a value indicating whether a frame of Pillion's product code (not this test) is on the stack.</summary>
     public bool HasPillionFrame => Frames.Any(UiThreadMonitor.IsPillionProductText);
+
+    /// <summary>Gets a value indicating whether the stack could not be read.</summary>
+    public bool Failed => Frames.Count == 1 && Frames[0].StartsWith(UiThreadMonitor.FailedSamplePrefix, StringComparison.Ordinal);
 }
 
 /// <summary>What <see cref="UiThreadMonitor"/> saw.</summary>
@@ -44,26 +47,31 @@ public sealed record UiThreadMonitorResult(IReadOnlyList<UiOperationTiming> Oper
     /// <summary>
     /// Estimates how much of an interval Pillion's product code held the UI thread: the overlap of Pillion's dispatcher
     /// operations with it, plus one sample interval for every stack sample in it that has a Pillion frame and falls
-    /// outside those operations.
+    /// outside those operations. Returns <see langword="null"/> when the monitor did not see the interval well enough to
+    /// say (a stack sample in it failed, or operations and samples together cover less than half of it once the
+    /// sampler's 200 ms reaction time is taken off), so the caller never takes "not seen" for "not Pillion".
     /// </summary>
     /// <param name="from">The start of the interval, on the monitor's clock.</param>
     /// <param name="to">The end of the interval.</param>
-    /// <returns>The estimate.</returns>
-    public TimeSpan PillionTimeWithin(TimeSpan from, TimeSpan to)
+    /// <returns>The estimate, or <see langword="null"/>.</returns>
+    public TimeSpan? PillionTimeWithin(TimeSpan from, TimeSpan to)
     {
-        var pillionOperations = Operations.Where(o => o.IsPillion).ToList();
-        var total = TimeSpan.Zero;
-        foreach (var operation in pillionOperations)
+        var samples = Samples.Where(s => s.At >= from && s.At <= to).ToList();
+        if (samples.Any(s => s.Failed))
         {
-            var start = operation.Start > from ? operation.Start : from;
-            var end = operation.End < to ? operation.End : to;
-            if (end > start)
-            {
-                total += end - start;
-            }
+            return null;
         }
 
-        foreach (var sample in Samples.Where(s => s.At >= from && s.At <= to && s.HasPillionFrame))
+        var seen = Overlap(Operations, from, to) + TimeSpan.FromTicks(SampleInterval.Ticks * samples.Count);
+        var expected = to - from - UiThreadMonitor.StuckAfter;
+        if (expected > TimeSpan.Zero && seen.Ticks < expected.Ticks / 2)
+        {
+            return null;
+        }
+
+        var pillionOperations = Operations.Where(o => o.IsPillion).ToList();
+        var total = Overlap(pillionOperations, from, to);
+        foreach (var sample in samples.Where(s => s.HasPillionFrame))
         {
             if (!pillionOperations.Any(o => sample.At >= o.Start && sample.At <= o.End))
             {
@@ -74,36 +82,79 @@ public sealed record UiThreadMonitorResult(IReadOnlyList<UiOperationTiming> Oper
         return total;
     }
 
+    private static TimeSpan Overlap(IEnumerable<UiOperationTiming> operations, TimeSpan from, TimeSpan to)
+    {
+        var total = TimeSpan.Zero;
+        foreach (var operation in operations)
+        {
+            var start = operation.Start > from ? operation.Start : from;
+            var end = operation.End < to ? operation.End : to;
+            if (end > start)
+            {
+                total += end - start;
+            }
+        }
+
+        return total;
+    }
+
     /// <summary>Formats the operations and the stack samples (identical consecutive stacks are folded together).</summary>
+    /// <param name="listFrom">Operations at least this long are listed one by one.</param>
+    /// <param name="samplesFrom">The first time, on the monitor's clock, whose stack samples are printed.</param>
+    /// <param name="samplesTo">The last time whose stack samples are printed.</param>
     /// <param name="maxFrames">How many innermost frames to print per stack.</param>
     /// <returns>The lines.</returns>
-    public IEnumerable<string> Format(int maxFrames = 30)
+    public IEnumerable<string> Format(TimeSpan listFrom, TimeSpan samplesFrom, TimeSpan samplesTo, int maxFrames = 40)
     {
-        yield return Operations.Count == 0
-            ? "UI thread dispatcher operations over the threshold: none"
-            : "UI thread dispatcher operations over the threshold (start, duration, priority, what):";
-        foreach (var operation in Operations)
+        yield return FormattableString.Invariant(
+            $"UI thread dispatcher operations timed: {Operations.Count}, {Operations.Sum(o => o.Duration.TotalMilliseconds):0} ms in all");
+        foreach (var group in Operations.Where(o => !o.IsPillion).GroupBy(o => o.Description).OrderByDescending(g => g.Sum(o => o.Duration.Ticks)).Take(12))
+        {
+            yield return FormattableString.Invariant(
+                $"  {group.Count(),3} x, {group.Sum(o => o.Duration.TotalMilliseconds),7:0.0} ms in all, longest {group.Max(o => o.Duration.TotalMilliseconds),6:0.0} ms: {group.Key}");
+        }
+
+        var pillion = Operations.Where(o => o.IsPillion).ToList();
+        yield return pillion.Count == 0
+            ? "Pillion's dispatcher operations on the UI thread: none"
+            : FormattableString.Invariant(
+                $"Pillion's dispatcher operations on the UI thread: {pillion.Count}, {pillion.Sum(o => o.Duration.TotalMilliseconds):0} ms in all, longest {pillion.Max(o => o.Duration.TotalMilliseconds):0.0} ms:");
+        foreach (var group in pillion.GroupBy(o => o.Description).OrderByDescending(g => g.Sum(o => o.Duration.Ticks)))
+        {
+            yield return FormattableString.Invariant(
+                $"  {group.Count(),3} x, {group.Sum(o => o.Duration.TotalMilliseconds),7:0.0} ms in all, longest {group.Max(o => o.Duration.TotalMilliseconds),6:0.0} ms: {group.Key}");
+        }
+
+        var slow = Operations.Where(o => o.Duration >= listFrom).ToList();
+        yield return slow.Count == 0
+            ? FormattableString.Invariant($"UI thread dispatcher operations of {listFrom.TotalMilliseconds:0} ms or more: none")
+            : FormattableString.Invariant($"UI thread dispatcher operations of {listFrom.TotalMilliseconds:0} ms or more (start, duration, priority, what):");
+        foreach (var operation in slow)
         {
             yield return "  " + operation + (operation.IsPillion ? "  <-- Pillion" : string.Empty);
         }
 
-        if (Samples.Count == 0)
+        var inGap = Operations.Where(o => o.End > samplesFrom && o.Start < samplesTo).ToList();
+        yield return FormattableString.Invariant(
+            $"UI thread dispatcher operations from {samplesFrom.TotalMilliseconds:0} to {samplesTo.TotalMilliseconds:0} ms: {inGap.Count}, {Overlap(inGap, samplesFrom, samplesTo).TotalMilliseconds:0} ms in all{(inGap.Count > 0 ? " (longest first):" : string.Empty)}");
+        foreach (var operation in inGap.OrderByDescending(o => o.Duration).Take(15))
         {
-            yield return "UI thread stack samples: none (the UI thread never went 400 ms without running a dispatcher operation)";
-            yield break;
+            yield return "  " + operation + (operation.IsPillion ? "  <-- Pillion" : string.Empty);
         }
 
-        yield return "UI thread stack samples while it started or finished no dispatcher operation for 400 ms (innermost frame first):";
-        for (var i = 0; i < Samples.Count;)
+        var shown = Samples.Where(s => s.At >= samplesFrom && s.At <= samplesTo).ToList();
+        yield return FormattableString.Invariant(
+            $"UI thread stack samples (taken every {SampleInterval.TotalMilliseconds:0} ms while the UI thread started or finished no dispatcher operation for 200 ms): {Samples.Count} in all, {Samples.Count(s => s.HasPillionFrame)} with a Pillion frame; {shown.Count} from {samplesFrom.TotalMilliseconds:0} to {samplesTo.TotalMilliseconds:0} ms{(shown.Count > 0 ? " (innermost frame first):" : string.Empty)}");
+        for (var i = 0; i < shown.Count;)
         {
-            var first = Samples[i];
+            var first = shown[i];
             var j = i + 1;
-            while (j < Samples.Count && Samples[j].Frames.SequenceEqual(first.Frames))
+            while (j < shown.Count && shown[j].Frames.SequenceEqual(first.Frames))
             {
                 j++;
             }
 
-            var last = Samples[j - 1];
+            var last = shown[j - 1];
             yield return FormattableString.Invariant($"  {first.At.TotalMilliseconds:0}-{last.At.TotalMilliseconds:0} ms ({j - i} samples){(first.HasPillionFrame ? "  <-- Pillion frame" : string.Empty)}:");
             if (first.Frames.Count == 0)
             {
@@ -128,7 +179,7 @@ public sealed record UiThreadMonitorResult(IReadOnlyList<UiOperationTiming> Oper
 /// <summary>
 /// Watches Visual Studio's UI thread during a measurement: times every dispatcher operation through
 /// <see cref="Dispatcher.Hooks"/> (keeping those over a threshold, with the async method or delegate behind them), and
-/// when the UI thread has started or finished no operation for 400 ms, samples its managed stack from a background
+/// when the UI thread has started or finished no operation for 200 ms, samples its managed stack every 100 ms from a background
 /// thread. Together they say whose code held the UI thread in a gap: an operation of Pillion's, another component's, or
 /// none at all (native code, a modal COM wait, or a blocked thread).
 /// </summary>
@@ -138,7 +189,11 @@ public sealed record UiThreadMonitorResult(IReadOnlyList<UiOperationTiming> Oper
 /// </remarks>
 public sealed class UiThreadMonitor : IDisposable
 {
-    private static readonly TimeSpan StuckAfter = TimeSpan.FromMilliseconds(400);
+    /// <summary>How long the UI thread must start or finish no dispatcher operation before its stack is sampled.</summary>
+    public static readonly TimeSpan StuckAfter = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>The text a failed stack sample starts with.</summary>
+    public const string FailedSamplePrefix = "(could not sample";
 
     private readonly Dispatcher _dispatcher;
     private readonly Thread _uiThread;
@@ -146,9 +201,15 @@ public sealed class UiThreadMonitor : IDisposable
     private readonly TimeSpan _threshold;
     private readonly TimeSpan _sampleInterval = TimeSpan.FromMilliseconds(100);
     private readonly object _gate = new();
-    private readonly List<UiOperationTiming> _operations = [];
+    private static readonly FieldInfo? OperationMethodField = typeof(DispatcherOperation).GetField("_method", BindingFlags.Instance | BindingFlags.NonPublic);
+    private static readonly FieldInfo? OperationArgsField = typeof(DispatcherOperation).GetField("_args", BindingFlags.Instance | BindingFlags.NonPublic);
+    private static Type? protectorType;
+    private static FieldInfo? protectorDelegateField;
+    private static FieldInfo? protectorStateField;
+
+    private readonly List<(object?[] Payload, long Started, long Duration, DispatcherPriority Priority)> _operations = [];
     private readonly List<UiStackSample> _samples = [];
-    private readonly Stack<(DispatcherOperation Operation, long Started)> _running = new();
+    private readonly Stack<(DispatcherOperation Operation, object?[] Payload, long Started)> _running = new();
     private readonly Thread _sampler;
     private readonly ManualResetEventSlim _stop = new();
     private long _lastActivity;
@@ -171,7 +232,7 @@ public sealed class UiThreadMonitor : IDisposable
     /// <summary>Starts watching the calling thread, which must be the dispatcher's (the UI thread).</summary>
     /// <param name="dispatcher">The UI thread's dispatcher.</param>
     /// <param name="clock">The clock every time in the result is read from; share it with the probes.</param>
-    /// <param name="threshold">Operations shorter than this are not kept.</param>
+    /// <param name="threshold">Operations shorter than this are not kept (zero keeps them all).</param>
     /// <returns>The monitor; call <see cref="Stop"/> on the UI thread.</returns>
     public static UiThreadMonitor Start(Dispatcher dispatcher, Stopwatch clock, TimeSpan threshold)
     {
@@ -197,7 +258,8 @@ public sealed class UiThreadMonitor : IDisposable
         Dispose();
         lock (_gate)
         {
-            return new UiThreadMonitorResult(_operations.OrderBy(o => o.Start).ToList(), _samples.ToList(), _sampleInterval);
+            var operations = _operations.Select(o => new UiOperationTiming(TicksToTimeSpan(o.Started), TicksToTimeSpan(o.Duration), o.Priority, Describe(o.Payload)));
+            return new UiThreadMonitorResult(operations.OrderBy(o => o.Start).ToList(), _samples.ToList(), _sampleInterval);
         }
     }
 
@@ -217,15 +279,47 @@ public sealed class UiThreadMonitor : IDisposable
         _stop.Dispose();
     }
 
-    private static string Describe(DispatcherOperation operation)
+    /// <summary>
+    /// Reads what an operation will run before it runs: the delegate and argument, and when the argument is a
+    /// JoinableTaskFactory work item, the continuation inside it (the work item clears it once executed). Cheap: a few
+    /// cached field reads on the UI thread.
+    /// </summary>
+    private static object?[] CapturePayload(DispatcherOperation operation)
+    {
+        var method = OperationMethodField?.GetValue(operation);
+        var args = OperationArgsField?.GetValue(operation);
+        object? inner = null;
+        object? innerState = null;
+        if (args is not null)
+        {
+            var type = args.GetType();
+            if (protectorType is null && type.FullName == "Microsoft.VisualStudio.Threading.JoinableTaskFactory+SingleExecuteProtector")
+            {
+                protectorDelegateField = type.GetField("invokeDelegate", BindingFlags.Instance | BindingFlags.NonPublic);
+                protectorStateField = type.GetField("state", BindingFlags.Instance | BindingFlags.NonPublic);
+                protectorType = type;
+            }
+
+            if (type == protectorType)
+            {
+                inner = protectorDelegateField?.GetValue(args);
+                innerState = protectorStateField?.GetValue(args);
+            }
+        }
+
+        return [inner, innerState, method, args];
+    }
+
+    private static string Describe(object?[] payload)
     {
         try
         {
-            var method = GetField(operation, "_method") as Delegate;
-            var args = GetField(operation, "_args");
             var parts = new List<string>();
-            DescribeInto(method, parts, 0);
-            DescribeInto(args, parts, 0);
+            foreach (var item in payload)
+            {
+                DescribeInto(item, parts, 0);
+            }
+
             var interesting = parts.Where(p => !IsPlumbing(p)).Distinct().ToList();
             return interesting.Count > 0 ? string.Join(" / ", interesting.Take(3)) : string.Join(" / ", parts.Distinct().Take(3));
         }
@@ -290,9 +384,6 @@ public sealed class UiThreadMonitor : IDisposable
         || name.StartsWith("Microsoft.VisualStudio.Threading.", StringComparison.Ordinal)
         || name.StartsWith("MS.Internal.", StringComparison.Ordinal);
 
-    private static object? GetField(object target, string name) =>
-        target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(target);
-
     private static List<string> CaptureStack(Thread thread)
     {
         var frames = new List<string>();
@@ -313,7 +404,8 @@ public sealed class UiThreadMonitor : IDisposable
         catch (Exception ex)
 #pragma warning restore CA1031
         {
-            frames.Add("(could not sample: " + ex.GetType().Name + ": " + ex.Message + ")");
+            frames.Clear();
+            frames.Add(FailedSamplePrefix + ": " + ex.GetType().Name + ": " + ex.Message + ")");
         }
         finally
         {
@@ -331,7 +423,7 @@ public sealed class UiThreadMonitor : IDisposable
     {
         var now = _clock.ElapsedTicks;
         Interlocked.Exchange(ref _lastActivity, now);
-        _running.Push((e.Operation, now));
+        _running.Push((e.Operation, CapturePayload(e.Operation), now));
     }
 
     private void OnOperationCompleted(object? sender, DispatcherHookEventArgs e)
@@ -343,17 +435,16 @@ public sealed class UiThreadMonitor : IDisposable
             return;
         }
 
-        var (operation, started) = _running.Pop();
-        var duration = TicksToTimeSpan(now - started);
-        if (duration < _threshold)
+        // Described after the measurement (reflection is slow), so the UI thread only pays for a timestamp here.
+        var (operation, payload, started) = _running.Pop();
+        if (TicksToTimeSpan(now - started) < _threshold)
         {
             return;
         }
 
-        var timing = new UiOperationTiming(TicksToTimeSpan(started), duration, operation.Priority, Describe(operation));
         lock (_gate)
         {
-            _operations.Add(timing);
+            _operations.Add((payload, started, now - started, operation.Priority));
         }
     }
 
