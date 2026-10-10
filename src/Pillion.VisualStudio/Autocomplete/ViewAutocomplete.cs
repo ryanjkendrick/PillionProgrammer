@@ -135,6 +135,12 @@ internal sealed class ViewAutocomplete
             return null;
         }
 
+        feature.Log.Debug(
+            "autocomplete.requested",
+            "The proposal broker asked Pillion's source for a suggestion.",
+            ("scenario", scenario.ToString()),
+            ("completionList", completionState is not null),
+            ("ordering", feature.Engine.Settings.Ordering.ToString()));
         var session = EnsureSession(feature);
         var snapshot = caret.Position.Snapshot;
         var suppression = snapshot.TextBuffer != _view.TextBuffer
