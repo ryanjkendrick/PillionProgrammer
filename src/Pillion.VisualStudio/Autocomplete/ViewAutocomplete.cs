@@ -233,6 +233,12 @@ internal sealed class ViewAutocomplete
         #pragma warning restore VSTHRD003
         if (result is null || cancellationToken.IsCancellationRequested)
         {
+            feature.Log.Debug(
+                "autocomplete.request.nothing",
+                "The broker's request ended with no proposal.",
+                ("request", attempt.RequestId),
+                ("answered", result is not null),
+                ("brokerCancelled", cancellationToken.IsCancellationRequested));
             return null;
         }
 
