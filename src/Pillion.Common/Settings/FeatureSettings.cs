@@ -39,6 +39,12 @@ public static class FeatureNames
     /// <summary>Inline chat: the host's inline edit service (<c>IInlineEditService</c>).</summary>
     public const string InlineChat = "inlineChat";
 
+    /// <summary>The chat window's <c>@</c>-mentions: the picker and the context pins (work item 1.9).</summary>
+    public const string Mentions = "mentions";
+
+    /// <summary>The chat window's Context Inspector and Outbound log view (work item 1.13).</summary>
+    public const string OutboundLogView = "outboundLogView";
+
     /// <summary>Gets every feature flag name, in the order they are written to <c>settings.json</c>.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
@@ -54,6 +60,8 @@ public static class FeatureNames
         AzureOpenAIProvider,
         Autocomplete,
         InlineChat,
+        Mentions,
+        OutboundLogView,
     ];
 }
 
@@ -117,6 +125,8 @@ public sealed class FeatureSettings : SettingsNode
             "azureopenaiprovider" => AzureOpenAIProvider,
             "autocomplete" => Autocomplete,
             "inlinechat" => InlineChat,
+            "mentions" => Mentions,
+            "outboundlogview" => OutboundLogView,
             _ => true,
         };
     }
@@ -165,9 +175,21 @@ public sealed class FeatureSettings : SettingsNode
             case "inlinechat":
                 InlineChat = false;
                 break;
+            case "mentions":
+                Mentions = false;
+                break;
+            case "outboundlogview":
+                OutboundLogView = false;
+                break;
         }
     }
 
     /// <summary>Gets or sets a value indicating whether inline chat is available. When off, inline edit requests fail with a policy error.</summary>
     public bool InlineChat { get; set; } = true;
+
+    /// <summary>Gets or sets a value indicating whether the chat window offers <c>@</c>-mentions (the picker and the context pins).</summary>
+    public bool Mentions { get; set; } = true;
+
+    /// <summary>Gets or sets a value indicating whether the chat window shows the Context Inspector and the Outbound log, and the host answers their read methods.</summary>
+    public bool OutboundLogView { get; set; } = true;
 }
