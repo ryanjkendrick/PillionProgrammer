@@ -220,4 +220,320 @@
     <value>Reply text</value>
     <comment>Screen-reader name of the rendered content of a reply.</comment>
   </data>
+  <data name="MentionPickerName" xml:space="preserve">
+    <value>Mentions</value>
+    <comment>Screen-reader name of the mention picker that opens at the caret after @.</comment>
+  </data>
+  <data name="MentionPickerHint" xml:space="preserve">
+    <value>Pin context: pick a kind, or keep typing a file name</value>
+    <comment>Title of the mention picker right after @ is typed.</comment>
+  </data>
+  <data name="MentionPickerMatchesTitle" xml:space="preserve">
+    <value>Up and Down to move, Enter or Tab to pin, Esc to close</value>
+    <comment>Title of the mention picker while it lists matches.</comment>
+  </data>
+  <data name="MentionPickerFileHint" xml:space="preserve">
+    <value>Type part of a file name</value>
+    <comment>Title of the mention picker after @file: is typed.</comment>
+  </data>
+  <data name="MentionPickerFolderHint" xml:space="preserve">
+    <value>Type part of a folder name</value>
+    <comment>Title of the mention picker after @folder: is typed.</comment>
+  </data>
+  <data name="MentionPickerNoMatches" xml:space="preserve">
+    <value>No matches in the solution or folder</value>
+    <comment>Title of the mention picker when nothing matches.</comment>
+  </data>
+  <data name="MentionCandidatesTitleFormat" xml:space="preserve">
+    <value>{0} matches more than one file. Which one?</value>
+    <comment>Title of the sub-picker for an ambiguous mention; {0} is the mention.</comment>
+  </data>
+  <data name="MentionKindFile" xml:space="preserve">
+    <value>A file of the solution or folder</value>
+    <comment>Description of @file in the picker.</comment>
+  </data>
+  <data name="MentionKindFolder" xml:space="preserve">
+    <value>A folder outline</value>
+    <comment>Description of @folder in the picker.</comment>
+  </data>
+  <data name="MentionKindSelection" xml:space="preserve">
+    <value>The selection in the editor</value>
+    <comment>Description of @selection in the picker.</comment>
+  </data>
+  <data name="MentionKindErrors" xml:space="preserve">
+    <value>The errors and warnings in the Error List</value>
+    <comment>Description of @errors in the picker.</comment>
+  </data>
+  <data name="MentionKindClipboard" xml:space="preserve">
+    <value>The text on the clipboard</value>
+    <comment>Description of @clipboard in the picker.</comment>
+  </data>
+  <data name="MentionFailed" xml:space="preserve">
+    <value>The mention could not be resolved.</value>
+    <comment>Shown under the input when resolving a mention failed without a reason.</comment>
+  </data>
+  <data name="MentionUnresolvedFormat" xml:space="preserve">
+    <value>{0} did not match anything.</value>
+    <comment>Shown under the input when a mention did not resolve and the host gave no reason; {0} is the mention.</comment>
+  </data>
+  <data name="DismissNoticeName" xml:space="preserve">
+    <value>Dismiss</value>
+    <comment>Screen-reader name and tooltip of the button that hides the mention notice.</comment>
+  </data>
+  <data name="PinsListName" xml:space="preserve">
+    <value>Pinned context</value>
+    <comment>Screen-reader name of the row of pins above the input.</comment>
+  </data>
+  <data name="PinTokensFormat" xml:space="preserve">
+    <value>{0:N0} tokens</value>
+    <comment>Pin tooltip line; {0} is the token count.</comment>
+  </data>
+  <data name="PinTruncated" xml:space="preserve">
+    <value>Cut to fit the limit for one pin.</value>
+    <comment>Pin tooltip line for a pin whose content was cut.</comment>
+  </data>
+  <data name="PinSensitive" xml:space="preserve">
+    <value>Approved excluded or secret file: it is never sent to a cloud model.</value>
+    <comment>Pin tooltip line for a sensitive pin.</comment>
+  </data>
+  <data name="PinSensitiveShort" xml:space="preserve">
+    <value>sensitive</value>
+    <comment>Added to a sensitive pin's screen-reader name.</comment>
+  </data>
+  <data name="PinAutomationNameFormat" xml:space="preserve">
+    <value>Pinned {0}, {1:N0} tokens</value>
+    <comment>Screen-reader name of a pin; {0} is its name, {1} the token count.</comment>
+  </data>
+  <data name="RemovePinNameFormat" xml:space="preserve">
+    <value>Remove pin {0}</value>
+    <comment>Screen-reader name of a pin's remove button; {0} is its name.</comment>
+  </data>
+  <data name="RemovePinToolTip" xml:space="preserve">
+    <value>Remove this pin</value>
+    <comment>Tooltip of a pin's remove button.</comment>
+  </data>
+  <data name="SensitiveGlyphName" xml:space="preserve">
+    <value>Sensitive file</value>
+    <comment>Screen-reader name of the lock glyph on a sensitive pin.</comment>
+  </data>
+  <data name="PinApprovalPromptFormat" xml:space="preserve">
+    <value>{0}: This file looks like it holds secrets. Pin it anyway?</value>
+    <comment>Approval prompt for an excluded or secret file; {0} is the file name.</comment>
+  </data>
+  <data name="PinApproveButton" xml:space="preserve">
+    <value>_Pin anyway</value>
+    <comment>Button that pins the file waiting for approval.</comment>
+  </data>
+  <data name="PinDeclineButton" xml:space="preserve">
+    <value>Do_n't pin</value>
+    <comment>Button that leaves the file waiting for approval unpinned.</comment>
+  </data>
+  <data name="IncludeCurrentFileLabel" xml:space="preserve">
+    <value>Include current _file</value>
+    <comment>Check box: send the active document's path and region with each message.</comment>
+  </data>
+  <data name="IncludeCurrentFileHelp" xml:space="preserve">
+    <value>Sends the active document's selection, or the 60 lines around the caret, with each message. Ignored while @selection is pinned.</value>
+    <comment>Help text of the Include current file check box.</comment>
+  </data>
+  <data name="InspectContextButton" xml:space="preserve">
+    <value>_Inspect</value>
+    <comment>Button beside Send that opens the Context Inspector.</comment>
+  </data>
+  <data name="InspectContextName" xml:space="preserve">
+    <value>Inspect context</value>
+    <comment>Screen-reader name of the Inspect button.</comment>
+  </data>
+  <data name="InspectContextToolTip" xml:space="preserve">
+    <value>Show the context that would be sent with this message</value>
+    <comment>Tooltip of the Inspect button.</comment>
+  </data>
+  <data name="InspectorTitle" xml:space="preserve">
+    <value>Context Inspector</value>
+    <comment>Heading of the Context Inspector panel.</comment>
+  </data>
+  <data name="InspectorLoading" xml:space="preserve">
+    <value>Assembling the context...</value>
+    <comment>Shown while the Context Inspector waits for the preview.</comment>
+  </data>
+  <data name="InspectorSendButton" xml:space="preserve">
+    <value>Send</value>
+    <comment>Button in the Context Inspector that sends the message.</comment>
+  </data>
+  <data name="InspectorCloseButton" xml:space="preserve">
+    <value>Close</value>
+    <comment>Button that closes the Context Inspector.</comment>
+  </data>
+  <data name="InspectorListName" xml:space="preserve">
+    <value>Context items</value>
+    <comment>Screen-reader name of the Context Inspector's list.</comment>
+  </data>
+  <data name="InspectorFailed" xml:space="preserve">
+    <value>The context could not be previewed.</value>
+    <comment>Shown in the Context Inspector when the preview failed without a message.</comment>
+  </data>
+  <data name="InspectorSummaryFormat" xml:space="preserve">
+    <value>{0} via {1} ({2}): {3} of {4} tokens; {5} kept for the answer</value>
+    <comment>Context Inspector summary; {0} model, {1} provider, {2} local or cloud, {3} tokens used, {4} tokens available, {5} answer reserve.</comment>
+  </data>
+  <data name="InspectorPlainRequest" xml:space="preserve">
+    <value>Nothing is pinned and no current file goes with it, so the message is sent as it is.</value>
+    <comment>Context Inspector note for a request that is not assembled.</comment>
+  </data>
+  <data name="InspectorRedactionFormat" xml:space="preserve">
+    <value>{0} secret(s) will be replaced by placeholders before the request leaves this machine.</value>
+    <comment>Context Inspector redaction notice; {0} is the count.</comment>
+  </data>
+  <data name="InspectorRedactionNone" xml:space="preserve">
+    <value>Secrets are replaced by placeholders for this model; none were found.</value>
+    <comment>Context Inspector note when redaction applies but nothing was found.</comment>
+  </data>
+  <data name="InspectorItemRedactionFormat" xml:space="preserve">
+    <value>{0} secret(s) will be replaced</value>
+    <comment>Redaction notice on one Context Inspector line; {0} is the count.</comment>
+  </data>
+  <data name="InspectorTokensFormat" xml:space="preserve">
+    <value>{0:N0} tokens</value>
+    <comment>Token figure of a Context Inspector line; {0} is the count.</comment>
+  </data>
+  <data name="InspectorTruncatedTokensFormat" xml:space="preserve">
+    <value>{0:N0} of {1:N0} tokens</value>
+    <comment>Token figure of a cut Context Inspector line; {0} kept, {1} in full.</comment>
+  </data>
+  <data name="InspectorDroppedTokensFormat" xml:space="preserve">
+    <value>left out ({0:N0} tokens)</value>
+    <comment>Token figure of a dropped Context Inspector line; {0} is its full size.</comment>
+  </data>
+  <data name="InspectorTruncatedFormat" xml:space="preserve">
+    <value>Cut: {0}</value>
+    <comment>State of a cut Context Inspector line; {0} is the reason.</comment>
+  </data>
+  <data name="InspectorDroppedFormat" xml:space="preserve">
+    <value>Left out: {0}</value>
+    <comment>State of a dropped Context Inspector line; {0} is the reason.</comment>
+  </data>
+  <data name="InspectorKindSystem" xml:space="preserve">
+    <value>System prompt</value>
+    <comment>Kind of a Context Inspector line.</comment>
+  </data>
+  <data name="InspectorKindRules" xml:space="preserve">
+    <value>Project rules</value>
+    <comment>Kind of a Context Inspector line.</comment>
+  </data>
+  <data name="InspectorKindRepoMap" xml:space="preserve">
+    <value>Repository map</value>
+    <comment>Kind of a Context Inspector line.</comment>
+  </data>
+  <data name="InspectorKindPin" xml:space="preserve">
+    <value>Pin</value>
+    <comment>Kind of a Context Inspector line.</comment>
+  </data>
+  <data name="InspectorKindCurrentFile" xml:space="preserve">
+    <value>Current file</value>
+    <comment>Kind of a Context Inspector line.</comment>
+  </data>
+  <data name="InspectorKindRetrieved" xml:space="preserve">
+    <value>Retrieved</value>
+    <comment>Kind of a Context Inspector line.</comment>
+  </data>
+  <data name="InspectorKindSummary" xml:space="preserve">
+    <value>Summary</value>
+    <comment>Kind of a Context Inspector line.</comment>
+  </data>
+  <data name="InspectorKindHistory" xml:space="preserve">
+    <value>History</value>
+    <comment>Kind of a Context Inspector line.</comment>
+  </data>
+  <data name="InspectorKindQuery" xml:space="preserve">
+    <value>Message</value>
+    <comment>Kind of a Context Inspector line.</comment>
+  </data>
+  <data name="LocalityLocal" xml:space="preserve">
+    <value>local</value>
+    <comment>A model that runs on this machine.</comment>
+  </data>
+  <data name="LocalityCloud" xml:space="preserve">
+    <value>cloud</value>
+    <comment>A model that runs in the cloud.</comment>
+  </data>
+  <data name="OutboundLogHeader" xml:space="preserve">
+    <value>_Outbound log</value>
+    <comment>Header of the Outbound log expander.</comment>
+  </data>
+  <data name="OutboundListName" xml:space="preserve">
+    <value>Outbound requests, newest first</value>
+    <comment>Screen-reader name of the Outbound log list.</comment>
+  </data>
+  <data name="OutboundRefreshButton" xml:space="preserve">
+    <value>Refresh</value>
+    <comment>Button that reads the Outbound log again.</comment>
+  </data>
+  <data name="OutboundRefreshName" xml:space="preserve">
+    <value>Refresh the Outbound log</value>
+    <comment>Screen-reader name of the Outbound log's Refresh button.</comment>
+  </data>
+  <data name="OutboundCopyButton" xml:space="preserve">
+    <value>Copy</value>
+    <comment>Button that copies the Outbound log as text.</comment>
+  </data>
+  <data name="OutboundCopyName" xml:space="preserve">
+    <value>Copy the Outbound log as text</value>
+    <comment>Screen-reader name of the Outbound log's Copy button.</comment>
+  </data>
+  <data name="OutboundEmpty" xml:space="preserve">
+    <value>No requests yet</value>
+    <comment>Outbound log summary when it is empty.</comment>
+  </data>
+  <data name="OutboundCountFormat" xml:space="preserve">
+    <value>{0} requests</value>
+    <comment>Outbound log summary; {0} is the number of rows.</comment>
+  </data>
+  <data name="OutboundFailed" xml:space="preserve">
+    <value>The Outbound log could not be read.</value>
+    <comment>Shown when reading the Outbound log failed without a message.</comment>
+  </data>
+  <data name="OutboundCacheHit" xml:space="preserve">
+    <value>cache hit (nothing sent)</value>
+    <comment>Tokens column of an autocomplete request served from the cache.</comment>
+  </data>
+  <data name="OutboundTokensFormat" xml:space="preserve">
+    <value>{0} in, {1} out</value>
+    <comment>Tokens column; {0} prompt tokens, {1} completion tokens.</comment>
+  </data>
+  <data name="OutboundContextFormat" xml:space="preserve">
+    <value>{0} context items, {1} cut or left out</value>
+    <comment>Tooltip of an assembled chat request's row; {0} items, {1} trimmed.</comment>
+  </data>
+  <data name="OutboundColumnTime" xml:space="preserve">
+    <value>Time</value>
+    <comment>Outbound log column.</comment>
+  </data>
+  <data name="OutboundColumnTaskClass" xml:space="preserve">
+    <value>Task</value>
+    <comment>Outbound log column.</comment>
+  </data>
+  <data name="OutboundColumnModel" xml:space="preserve">
+    <value>Provider / model</value>
+    <comment>Outbound log column.</comment>
+  </data>
+  <data name="OutboundColumnLocality" xml:space="preserve">
+    <value>Where</value>
+    <comment>Outbound log column.</comment>
+  </data>
+  <data name="OutboundColumnTokens" xml:space="preserve">
+    <value>Tokens</value>
+    <comment>Outbound log column.</comment>
+  </data>
+  <data name="OutboundColumnRedactions" xml:space="preserve">
+    <value>Redactions</value>
+    <comment>Outbound log column.</comment>
+  </data>
+  <data name="OutboundColumnDuration" xml:space="preserve">
+    <value>Duration</value>
+    <comment>Outbound log column.</comment>
+  </data>
+  <data name="OutboundColumnOutcome" xml:space="preserve">
+    <value>Outcome</value>
+    <comment>Outbound log column.</comment>
+  </data>
 </root>

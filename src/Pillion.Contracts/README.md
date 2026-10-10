@@ -89,6 +89,19 @@ Additive only, batched with the other phase 1 contract additions into one minor 
   shape tests are unchanged, and a 1.1 client that registers no handler ignores it. See the host README.
 - Setting `routing.thinkHarder` (boolean, default `false`) in `settings.json`; it is read through
   `ISettingsService`, so no DTO changes.
+- **Context Inspector and Outbound log view (work item 1.13).** Two read methods on `IDiagnosticsService` and three new
+  DTOs; no existing member changes. A 1.1 host answers them with StreamJsonRpc's method-not-found error, which the Chat
+  window shows in the inspector and the log view.
+
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `IDiagnosticsService` | `GetOutboundRecordsAsync(int maxCount, CancellationToken)` | | The Outbound log's records, newest first; `maxCount` 0 or less means 200 |
+  | `IDiagnosticsService` | `PreviewContextAsync(ChatRequest, CancellationToken)` | | The context the request would be assembled into for the model it would be routed to, without calling a model |
+  | `OutboundRecordDto` (new) | `TimestampUtc`, `RequestId`, `ProviderId`, `ModelId`, `TaskClass`, `IsLocal`, `PromptTokens`, `CompletionTokens`, `RedactionCount`, `ContextItems`, `ContextTrimmed`, `DurationMs`, `Outcome`, `ErrorCode`, `CacheHit` | 0-14 | One request sent to a model, counts only; `Outcome` is `Succeeded`, `Failed`, `Cancelled`, `TimedOut` or `Dropped` (a string, so a new outcome needs no contract change); `ErrorCode` is `PillionErrorCode?` |
+  | `ContextReportDto` (new) | `ModelId`, `ProviderId`, `IsLocal`, `ContextWindow`, `OutputReserve`, `BudgetTokens`, `TotalTokens`, `Items`, `IsAssembled`, `Redacts`, `RedactionCount` | 0-10 | The preview: the routed model, the window, answer reserve and budget, the items in prompt order, whether sending assembles the request (pins, current file or rules), and the secrets redaction would replace for this model |
+  | `ContextReportItemDto` (new) | `Kind`, `Name`, `Tokens`, `OriginalTokens`, `Truncated`, `Dropped`, `Note`, `PinIndex`, `RedactionCount` | 0-8 | One item: `Kind` is `system`, `rules`, `repoMap`, `pin`, `currentFile`, `retrieved`, `summary`, `history` or `query` (a string); `PinIndex` is the pin's index in `ChatRequest.Pins` (-1 for other items) so the client can unpin it |
+
+  Both methods need the `outboundLogView` feature flag (the preview also `modelGateway`); see the host README, Diagnostics.
 - **Autocomplete telemetry (work item 1.5).** New service `IDiagnosticsService` (VSIX to host, read-only) with `GetAutocompleteCountersAsync`, returning the new DTO
   `AutocompleteHostCounters`: the gateway's autocomplete counters since the host started (requests, cache hits,
   type-through hits, misses, hit rate) and, over the Outbound log's last five minutes, the p50 and p95 time to first

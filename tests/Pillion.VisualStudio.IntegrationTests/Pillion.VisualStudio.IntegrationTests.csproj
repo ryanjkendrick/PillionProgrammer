@@ -54,4 +54,12 @@
     <ProjectReference Include="..\..\src\Pillion.Contracts\Pillion.Contracts.csproj" Private="false" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The mention test (PillionPackageTests.Mentions.cs) puts tests/Pillion.FakeHost behind the package; the full solution builds it. -->
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>FakeHostPath</_Parameter1>
+      <_Parameter2>$(MSBuildThisFileDirectory)..\Pillion.FakeHost\bin\$(Configuration)\net10.0\Pillion.FakeHost.exe</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
 </Project>

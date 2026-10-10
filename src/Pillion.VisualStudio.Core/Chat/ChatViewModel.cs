@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Threading;
 using Pillion.Contracts;
+using Pillion.VisualStudio.Core.Mentions;
 
 namespace Pillion.VisualStudio.Core;
 
@@ -38,12 +39,26 @@ public sealed class ChatViewModelOptions
     /// <see langword="null"/> deletes without asking.
     /// </summary>
     public Func<ChatConversation, bool>? ConfirmDelete { get; set; }
+
+    /// <summary>Gets or sets the solution or folder file list for <c>@file</c> and <c>@folder</c>; without it only exact paths resolve.</summary>
+    public IWorkspaceFiles? WorkspaceFiles { get; set; }
+
+    /// <summary>
+    /// Gets or sets the editor's selection, clipboard, diagnostics and current file. Without it <c>@selection</c>,
+    /// <c>@clipboard</c> and <c>@errors</c> have nothing to send and no current file goes with a message.
+    /// </summary>
+    public IChatEditorContext? EditorContext { get; set; }
+
+    /// <summary>Gets or sets the action that puts text on the clipboard (the Outbound log's Copy).</summary>
+    public Action<string>? CopyText { get; set; }
 }
 
 /// <summary>
 /// The Pillion Chat tool window's view model: the conversation list (New, Rename, Delete, Switch; in memory for the
-/// session), model picker, transcript, input, Send and Stop, Clear, Retry and the host status line. Driven by
-/// <see cref="IHostConnection"/>; has no Visual Studio dependencies.
+/// session), model picker, transcript, input, Send and Stop, Clear, Retry and the host status line; the <c>@</c>-mentions
+/// and the pins of each conversation (<see cref="Mentions"/>), the current file sent with a message
+/// (<see cref="IncludeCurrentFile"/>), the Context Inspector (<see cref="Inspector"/>) and the Outbound log
+/// (<see cref="OutboundLog"/>). Driven by <see cref="IHostConnection"/>; has no Visual Studio dependencies.
 /// </summary>
 /// <remarks>
 /// Threading (design doc section 13): public members and commands are used on the UI thread. Every RPC call is awaited
@@ -64,6 +79,7 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
     private readonly TimeSpan _flushInterval;
     private readonly Func<string> _newRequestId;
     private readonly ChatAvailability? _availability;
+    private readonly IChatEditorContext? _editor;
     private readonly CancellationTokenSource _disposal = new();
     private readonly object _gate = new();
 
@@ -84,6 +100,10 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
     private string _renameText = string.Empty;
     private bool _started;
     private bool _disposed;
+    private bool _includeCurrentFile = true;
+    private bool _isMentionsEnabled = true;
+    private bool _isOutboundLogEnabled = true;
+    private int _inspectVersion;
 
     /// <summary>Initializes a new instance of the <see cref="ChatViewModel"/> class. Call <see cref="Start"/> next.</summary>
     /// <param name="connection">The connection to Pillion Host.</param>
@@ -99,7 +119,10 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         _newRequestId = options?.NewRequestId ?? (() => Guid.NewGuid().ToString("N"));
         _availability = options?.Availability;
         ConfirmDelete = options?.ConfirmDelete;
+        _editor = options?.EditorContext;
         _isChatEnabled = _availability?.IsEnabled ?? true;
+        _isMentionsEnabled = _availability?.IsMentionsEnabled ?? true;
+        _isOutboundLogEnabled = _availability?.IsOutboundLogEnabled ?? true;
         _hostState = connection.State;
         _connectivity = connection.Connectivity;
         _statusText = FormatStatus(_hostState, 0, 0, reason: null, _connectivity);
@@ -120,7 +143,69 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         _currentConversation = new ChatConversation();
         Conversations.Add(_currentConversation);
         _currentConversation.Turns.CollectionChanged += OnTurnsChanged;
+
+        Mentions = new MentionsViewModel(connection, joinableTaskFactory, _currentConversation, options?.WorkspaceFiles, _editor, _log) { IsEnabled = _isMentionsEnabled };
+        Mentions.InputEditRequested += OnMentionInputEditEventArgs;
+        Inspector = new ContextInspectorViewModel(UnpinFromInspector, () => Run(SendFromInspectorAsync), CanSend);
+        OutboundLog = new OutboundLogViewModel(connection, joinableTaskFactory, options?.CopyText, _log, _disposal.Token);
+        InspectContextCommand = new DelegateCommand(() => Run(InspectAsync), () => CanSend() && IsOutboundLogEnabled);
     }
+
+    /// <summary>Raised on the UI thread after a picked mention changed <see cref="InputText"/>: the caret index the input should show.</summary>
+    public event EventHandler<int>? InputCaretRequested;
+
+    /// <summary>Gets the <c>@</c>-mentions: the picker, the pins of the current conversation, approvals and notices.</summary>
+    public MentionsViewModel Mentions { get; }
+
+    /// <summary>Gets the Context Inspector.</summary>
+    public ContextInspectorViewModel Inspector { get; }
+
+    /// <summary>Gets the Outbound log view.</summary>
+    public OutboundLogViewModel OutboundLog { get; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether a message carries the active document's path and region (the selection,
+    /// else 60 lines around the caret). Ignored while <c>@selection</c> is pinned. On by default.
+    /// </summary>
+    public bool IncludeCurrentFile
+    {
+        get => _includeCurrentFile;
+        set => SetProperty(ref _includeCurrentFile, value);
+    }
+
+    /// <summary>Gets a value indicating whether mentions and pins are available (the <c>mentions</c> flag, after policies).</summary>
+    public bool IsMentionsEnabled
+    {
+        get => _isMentionsEnabled;
+        private set
+        {
+            if (SetProperty(ref _isMentionsEnabled, value))
+            {
+                Mentions.IsEnabled = value;
+            }
+        }
+    }
+
+    /// <summary>Gets a value indicating whether the Context Inspector and the Outbound log are available (the <c>outboundLogView</c> flag).</summary>
+    public bool IsOutboundLogEnabled
+    {
+        get => _isOutboundLogEnabled;
+        private set
+        {
+            if (SetProperty(ref _isOutboundLogEnabled, value))
+            {
+                if (!value)
+                {
+                    Inspector.Close();
+                }
+
+                InspectContextCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>Gets the Inspect context command: previews the context of the message about to be sent.</summary>
+    public DelegateCommand InspectContextCommand { get; }
 
     /// <summary>Gets the model picker.</summary>
     public ModelPickerViewModel ModelPicker { get; } = new();
@@ -178,6 +263,8 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
             if (SetProperty(ref _inputText, value ?? string.Empty))
             {
                 SendCommand.RaiseCanExecuteChanged();
+                InspectContextCommand?.RaiseCanExecuteChanged();
+                Inspector?.UpdateCommands();
             }
         }
     }
@@ -299,6 +386,8 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         {
             _availability.Changed += OnAvailabilityChanged;
             IsChatEnabled = _availability.IsEnabled;
+            IsMentionsEnabled = _availability.IsMentionsEnabled;
+            IsOutboundLogEnabled = _availability.IsOutboundLogEnabled;
         }
 
         _connection.StateChanged += OnHostStateChanged;
@@ -309,6 +398,10 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         if (IsHostUsable)
         {
             Run(RefreshModelsAsync);
+            if (IsOutboundLogEnabled)
+            {
+                Run(OutboundLog.RefreshAsync);
+            }
         }
     }
 
@@ -323,9 +416,69 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
 
         var model = ModelPicker.SelectedModel!;
         var text = InputText.Trim();
+        var context = CaptureContext();
+        Inspector.Close();
+        Mentions.Picker.Close();
         Turns.Add(ChatTurnViewModel.ForUser(text));
         InputText = string.Empty;
-        return StreamReplyAsync(model);
+        return StreamReplyAsync(model, context);
+    }
+
+    /// <summary>
+    /// Previews the context of the message being typed (the Context Inspector): the request Send would make, assembled by
+    /// the host for the model it would route to, without calling a model. Call on the UI thread.
+    /// </summary>
+    /// <returns>A task that completes when the inspector shows the preview or the failure.</returns>
+    public async Task InspectAsync()
+    {
+        if (!CanSend() || !IsOutboundLogEnabled)
+        {
+            return;
+        }
+
+        var version = Interlocked.Increment(ref _inspectVersion);
+        var model = ModelPicker.SelectedModel!;
+        var context = CaptureContext();
+        var messages = BuildHistory();
+        messages.Add(new ChatMessage { Role = ChatRole.User, Content = InputText.Trim() });
+        Inspector.BeginLoading();
+
+        ContextReportDto? report = null;
+        RpcFailure? failure = null;
+        await TaskScheduler.Default;
+        try
+        {
+            var request = await BuildRequestAsync(_newRequestId(), messages, model, context, _disposal.Token).ConfigureAwait(false);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_disposal.Token);
+            timeout.CancelAfter(ListModelsTimeout);
+            report = await _connection.GetProxy<IDiagnosticsService>().PreviewContextAsync(request, timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_disposal.IsCancellationRequested)
+        {
+            return;
+        }
+#pragma warning disable CA1031 // Any failure is shown in the inspector.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            failure = RpcFailure.Describe(ex);
+            _log?.Warning("chat.inspect.failed", "Previewing the context failed.", ("error", ex.GetType().Name), ("code", failure.Code?.ToString()));
+        }
+
+        await _joinableTaskFactory.SwitchToMainThreadAsync(_disposal.Token);
+        if (version != Volatile.Read(ref _inspectVersion) || !Inspector.IsOpen)
+        {
+            return; // Closed, sent, or a newer preview is on its way.
+        }
+
+        if (report is not null)
+        {
+            Inspector.Show(report, context.Pins);
+        }
+        else
+        {
+            Inspector.ShowError(failure?.Message ?? string.Empty);
+        }
     }
 
     /// <summary>
@@ -351,6 +504,7 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
     {
         StopStreamingReply();
         Turns.Clear();
+        Inspector.Close();
         IsSending = false;
         UpdateCommands();
     }
@@ -383,9 +537,11 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         CancelRename();
         StopStreamingReply();
         IsSending = false;
+        Inspector.Close();
         _currentConversation.Turns.CollectionChanged -= OnTurnsChanged;
         _currentConversation = conversation;
         _currentConversation.Turns.CollectionChanged += OnTurnsChanged;
+        Mentions.SetConversation(conversation);
         OnPropertyChanged(nameof(CurrentConversation));
         OnPropertyChanged(nameof(Turns));
         UpdateRetry();
@@ -473,7 +629,7 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         }
 
         Turns.Remove(turn!);
-        return StreamReplyAsync(model);
+        return StreamReplyAsync(model, CaptureContext());
     }
 
     /// <summary>Lists the models and reads the privacy settings that grey cloud models out.</summary>
@@ -544,6 +700,8 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
         }
 
         _disposed = true;
+        Mentions.InputEditRequested -= OnMentionInputEditEventArgs;
+        Mentions.Dispose();
         _connection.StateChanged -= OnHostStateChanged;
         _connection.ConnectivityChanged -= OnConnectivityChanged;
         _connection.SettingsChanged -= OnSettingsChanged;
@@ -621,7 +779,7 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
     private bool CanRetry(ChatTurnViewModel? turn) =>
         !_disposed && turn is { CanRetry: true } && IsHostUsable && !IsSending && Turns.LastOrDefault() == turn;
 
-    private async Task StreamReplyAsync(ModelOption model)
+    private async Task StreamReplyAsync(ModelOption model, RequestContext context)
     {
         var messages = BuildHistory();
         var requestId = _newRequestId();
@@ -648,13 +806,7 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
             await TaskScheduler.Default;
             var token = flight.Token;
             token.ThrowIfCancellationRequested();
-            var request = new ChatRequest
-            {
-                RequestId = requestId,
-                Messages = messages,
-                ModelId = model.IsAuto ? null : model.Id, // Auto: no model id, so the host's router decides.
-                Profile = Profile.Auto,
-            };
+            var request = await BuildRequestAsync(requestId, messages, model, context, token).ConfigureAwait(false);
 
             var service = _connection.GetProxy<IModelService>();
             var sinceFlush = Stopwatch.StartNew();
@@ -785,6 +937,11 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
 
         UpdateRetry();
         UpdateCommands();
+        if (IsOutboundLogEnabled && !_disposed)
+        {
+            // The reply added a record (or a failed attempt did): show it.
+            Run(OutboundLog.RefreshAsync);
+        }
     }
 
     private Task CancelOnHostAsync(InFlight flight) => _joinableTaskFactory.RunAsync(async () =>
@@ -839,6 +996,77 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
             _log?.Warning("chat.settings.failed", "Reading the privacy settings for the model picker failed.", ("error", ex.GetType().Name));
             return ChatModelPolicy.Default;
         }
+    }
+
+    /// <summary>
+    /// Builds the request for a message: the conversation, the model (none for Auto), the conversation's pins, its id (the
+    /// key of the host's history summary) and, unless <c>@selection</c> is pinned or <see cref="IncludeCurrentFile"/> is off,
+    /// the active document's path and region. Runs off the UI thread.
+    /// </summary>
+    private async Task<ChatRequest> BuildRequestAsync(string requestId, List<ChatMessage> messages, ModelOption model, RequestContext context, CancellationToken cancellationToken)
+    {
+        var request = new ChatRequest
+        {
+            RequestId = requestId,
+            Messages = messages,
+            ModelId = model.IsAuto ? null : model.Id, // Auto: no model id, so the host's router decides.
+            Profile = Profile.Auto,
+            Pins = [.. context.Pins.Select(p => p.Resolution)],
+            ConversationId = context.ConversationId,
+        };
+
+        if (context.IncludeCurrentFile && _editor is not null)
+        {
+            try
+            {
+                if (await _editor.GetCurrentFileAsync(cancellationToken).ConfigureAwait(false) is { } current && current.Path.Length > 0)
+                {
+                    request.CurrentFile = current.Path;
+                    request.CurrentFileRegion = current.Region.Length > 0 ? current.Region : null;
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+#pragma warning disable CA1031 // Without the current file the message still goes.
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                _log?.Debug("chat.current_file.failed", "Reading the current file failed.", ("error", ex.GetType().Name));
+            }
+        }
+
+        return request;
+    }
+
+    /// <summary>Takes what a request carries from the window, on the UI thread: the pins, the conversation id and the current-file switch.</summary>
+    private RequestContext CaptureContext()
+    {
+        var pins = IsMentionsEnabled ? CurrentConversation.Pins.ToList() : [];
+        var includeCurrent = IsMentionsEnabled && IncludeCurrentFile && !pins.Any(p => p.Kind == MentionSyntax.Selection);
+        return new RequestContext(pins, CurrentConversation.Id, includeCurrent);
+    }
+
+    private void OnMentionInputEditEventArgs(object? sender, MentionInputEditEventArgs edit)
+    {
+        InputText = edit.Apply(InputText);
+        InputCaretRequested?.Invoke(this, Math.Min(edit.Caret, InputText.Length));
+    }
+
+    private void UnpinFromInspector(MentionPin pin)
+    {
+        Mentions.RemovePin(pin);
+        if (Inspector.IsOpen)
+        {
+            Run(InspectAsync);
+        }
+    }
+
+    private Task SendFromInspectorAsync()
+    {
+        Inspector.Close();
+        return SendAsync();
     }
 
     private List<ChatMessage> BuildHistory()
@@ -903,6 +1131,8 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
             if (!_disposed)
             {
                 IsChatEnabled = _availability!.IsEnabled;
+                IsMentionsEnabled = _availability.IsMentionsEnabled;
+                IsOutboundLogEnabled = _availability.IsOutboundLogEnabled;
             }
         });
 
@@ -1022,6 +1252,8 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
 
     private void UpdateCommands()
     {
+        Inspector.UpdateCommands();
+        InspectContextCommand.RaiseCanExecuteChanged();
         SendCommand.RaiseCanExecuteChanged();
         StopCommand.RaiseCanExecuteChanged();
         ClearCommand.RaiseCanExecuteChanged();
@@ -1050,6 +1282,16 @@ public sealed class ChatViewModel : ObservableObject, IDisposable
                 _log?.Error("chat.unexpected", "Unexpected chat window failure.", ("error", ex.GetType().Name), ("detail", ex.Message));
             }
         });
+    }
+
+    /// <summary>What a request carries from the window, taken on the UI thread when the message is sent.</summary>
+    private sealed class RequestContext(List<MentionPin> pins, string conversationId, bool includeCurrentFile)
+    {
+        public List<MentionPin> Pins { get; } = pins;
+
+        public string ConversationId { get; } = conversationId;
+
+        public bool IncludeCurrentFile { get; } = includeCurrentFile;
     }
 
     /// <summary>A reply in flight: its request id, its turn, its cancellation and how it ended.</summary>
