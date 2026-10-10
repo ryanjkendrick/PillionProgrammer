@@ -19,8 +19,8 @@ public static class ContractVersion
     /// context window and digest on <see cref="ModelDescriptor"/>, and <see cref="ConnectivityState"/>. 1.2 added the
     /// caret, declaration, open-document and edit context on <see cref="CompletionRequest"/>, <see cref="IInlineEditService"/>
     /// and its DTOs, mentions, pins and project rules for context assembly, <see cref="TaskClass.Summarise"/>,
-    /// <see cref="IDiagnosticsService"/> with <see cref="AutocompleteHostCounters"/> and the resident models, and the
-    /// <c>settingsChanged</c> notification (see the README).
+    /// <see cref="IDiagnosticsService"/> with <see cref="AutocompleteHostCounters"/> and the resident models, the Outbound log read and context preview
+    /// methods (<c>GetOutboundRecordsAsync</c>, <c>PreviewContextAsync</c>) and the <c>settingsChanged</c> notification (see the README).
     /// </summary>
     public const int Minor = 2;
 

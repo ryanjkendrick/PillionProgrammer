@@ -37,8 +37,8 @@ commit.
 Additive only, batched from the phase 1 work items into one minor bump (`ContractVersion` says 1.2). A 1.1 peer is still
 accepted by the handshake: it never calls the new services and methods, and ignores the new fields; a 1.2 peer reads their
 defaults from a 1.1 peer (`ContractV12Tests`, `ContextContractTests`, `ContractV12InlineEditTests` and, over the real pipe,
-`HandshakeCompatibilityTests` in the host tests). Each bullet below is its own work item's entry; append later phase 1
-additions (for example the Outbound log and context preview methods on `IDiagnosticsService`) to this list.
+`HandshakeCompatibilityTests` in the host tests). Each bullet below is its own work item's entry; a later phase 1 addition goes at the end of the list.
+The feature flags `mentions` and `outboundLogView` that gate the new calls are settings, not contract members.
 
 - **Autocomplete request context (PR 21, used by work item 1.2).** `CompletionRequest` grows the editor context the request pipeline
   captures; every member is optional and a 1.1 host ignores them.
