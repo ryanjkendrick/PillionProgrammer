@@ -247,6 +247,17 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
             },
             TimeSpan.FromSeconds(30),
             "the ghost-text document to open").ConfigureAwait(true);
+
+        // The broker serves the focused view: another test may have left a tool window (Pillion Chat) focused.
+        await WaitUntilAsync(
+            async () =>
+            {
+                await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+                _ = view!.VisualElement.Focus();
+                return view.HasAggregateFocus;
+            },
+            TimeSpan.FromSeconds(10),
+            "the ghost-text document to get keyboard focus").ConfigureAwait(true);
         Output.WriteLine($"Opened {_ghostPath}");
         return view!;
     }
