@@ -12,6 +12,10 @@
       <Group guid="guidPillionCommandSet" id="PillionViewOtherWindowsGroup" priority="0x0600">
         <Parent guid="guidSHLMainMenu" id="IDG_VS_WNDO_OTRWNDWS1" />
       </Group>
+      <!-- Inline chat in the code editor's context menu. -->
+      <Group guid="guidPillionCommandSet" id="PillionEditorContextGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_CODEWIN" />
+      </Group>
     </Groups>
 
     <Buttons>
@@ -19,6 +23,14 @@
         <Parent guid="guidPillionCommandSet" id="PillionToolsMenuGroup" />
         <Strings>
           <ButtonText>Pillion: Open Chat</ButtonText>
+        </Strings>
+      </Button>
+
+      <!-- Inline chat (work item 1.6): on the Tools menu here and in the editor context menu (CommandPlacements below). -->
+      <Button guid="guidPillionCommandSet" id="cmdidInlineChat" priority="0x0060" type="Button">
+        <Parent guid="guidPillionCommandSet" id="PillionToolsMenuGroup" />
+        <Strings>
+          <ButtonText>Pillion: Inline Chat</ButtonText>
         </Strings>
       </Button>
 
@@ -78,12 +90,20 @@
     </Buttons>
   </Commands>
 
+  <CommandPlacements>
+    <CommandPlacement guid="guidPillionCommandSet" id="cmdidInlineChat" priority="0x0100">
+      <Parent guid="guidPillionCommandSet" id="PillionEditorContextGroup" />
+    </CommandPlacement>
+  </CommandPlacements>
+
   <!--
     Design doc section 5, "Commands and default shortcuts": Open Pillion Chat is the prefix chord, then C. The prefix is
     provisional (Ctrl+Alt+Shift+P) until the shortcut audit confirms it.
   -->
   <KeyBindings>
     <KeyBinding guid="guidPillionCommandSet" id="cmdidOpenChat" editor="guidVSStd97" key1="P" mod1="Control Alt Shift" key2="C" />
+    <!-- Inline chat: the prefix chord, then I, in the Global scope like the chat chord (it acts on the active document). -->
+    <KeyBinding guid="guidPillionCommandSet" id="cmdidInlineChat" editor="guidVSStd97" key1="P" mod1="Control Alt Shift" key2="I" />
     <!-- Next and previous suggestion: Alt+] and Alt+[ in the text editor (design section 5). Word accept (Ctrl+Right) is
          Edit.WordNext, taken by the text view's command filter only while a Pillion suggestion is displayed. -->
     <KeyBinding guid="guidPillionCommandSet" id="cmdidNextSuggestion" editor="guidTextEditor" key1="VK_OEM_6" mod1="Alt" />
@@ -104,6 +124,8 @@
       <IDSymbol name="PillionViewOtherWindowsGroup" value="0x1021" />
       <IDSymbol name="cmdidNextSuggestion" value="0x0105" />
       <IDSymbol name="cmdidPreviousSuggestion" value="0x0106" />
+      <IDSymbol name="cmdidInlineChat" value="0x0300" />
+      <IDSymbol name="PillionEditorContextGroup" value="0x1030" />
     </GuidSymbol>
 
     <!-- The Text Editor key-binding scope (GUID_TextEditorFactory). -->
