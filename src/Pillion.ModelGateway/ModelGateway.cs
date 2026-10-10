@@ -78,6 +78,7 @@ public sealed partial class ModelGateway : IModelGateway
     private readonly AutocompleteCounters _counters;
     private readonly PromptEvaluationRates _rates;
     private readonly ContextAssembler _assembler;
+    private readonly LocalResidencyMap _residency;
     private int _gpuLogged;
 
     /// <summary>Initializes a new instance of the <see cref="ModelGateway"/> class.</summary>
@@ -101,6 +102,7 @@ public sealed partial class ModelGateway : IModelGateway
     /// <param name="counters">The autocomplete counters; a new instance when <see langword="null"/>.</param>
     /// <param name="rates">The measured prompt-evaluation rates; a new instance when <see langword="null"/>.</param>
     /// <param name="assembler">Assembles the prompt of chat requests that carry pins, a current file or project rules; a new instance over <paramref name="tokenCounter"/> when <see langword="null"/>.</param>
+    /// <param name="residency">The map of resident local models that local providers register with; a new, empty one when <see langword="null"/>.</param>
     public ModelGateway(
         IProviderRegistry registry,
         IModelRouter router,
@@ -121,7 +123,8 @@ public sealed partial class ModelGateway : IModelGateway
         IGpuTierDetector? gpuTierDetector = null,
         AutocompleteCounters? counters = null,
         PromptEvaluationRates? rates = null,
-        ContextAssembler? assembler = null)
+        ContextAssembler? assembler = null,
+        LocalResidencyMap? residency = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _router = router ?? throw new ArgumentNullException(nameof(router));
@@ -145,6 +148,7 @@ public sealed partial class ModelGateway : IModelGateway
         _counters.Attach(cache);
         _rates = rates ?? new PromptEvaluationRates();
         _assembler = assembler ?? new ContextAssembler(_tokens);
+        _residency = residency ?? new LocalResidencyMap();
     }
 
     /// <inheritdoc/>
@@ -242,7 +246,11 @@ public sealed partial class ModelGateway : IModelGateway
                 {
                     ModelId = candidate.ModelId,
                     Temperature = taskClass == TaskClass.InlineEdit ? _services.Options.InlineEditTemperature : null,
-                    AdditionalProperties = new AdditionalPropertiesDictionary { [GatewayOptionKeys.Profile] = candidate.Profile },
+                    AdditionalProperties = new AdditionalPropertiesDictionary
+                    {
+                        [GatewayOptionKeys.Profile] = candidate.Profile,
+                        [GatewayOptionKeys.RequestId] = request.RequestId,
+                    },
                 };
                 var currentSession = session;
                 attempt = new StreamAttempt<ChatResponseUpdate>(
@@ -366,6 +374,13 @@ public sealed partial class ModelGateway : IModelGateway
 
     /// <summary>Gets the autocomplete counters (requests, cache hits and misses, model requests, drops, failures).</summary>
     public AutocompleteCounters Counters => _counters;
+
+    /// <summary>
+    /// Gets the residency map: which local models are loaded, with their context size, GPU memory and keep-alive. The status
+    /// bar reads <see cref="LocalResidencyMap.GetSnapshot"/>; <see cref="LocalResidencyMap.RefreshAsync"/> asks the runtimes
+    /// (at most every 30 s unless forced).
+    /// </summary>
+    public LocalResidencyMap Residency => _residency;
 
     /// <summary>Gets the measured prompt-evaluation rates of the local completion models.</summary>
     public PromptEvaluationRates PromptEvaluationRates => _rates;
@@ -716,6 +731,7 @@ public sealed partial class ModelGateway : IModelGateway
             StopSequences = stops.Distinct(StringComparer.Ordinal).ToList(),
             Temperature = _templates.DefaultFimTemperature,
             Profile = candidate.Profile,
+            RequestId = request.RequestId,
         };
         return new FimPlan(fim, prompt, explicitFormat);
     }

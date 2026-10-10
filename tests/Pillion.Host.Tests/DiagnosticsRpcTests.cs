@@ -67,6 +67,35 @@ public sealed class DiagnosticsRpcTests : IDisposable
     }
 
     [Fact]
+    public async Task GetAutocompleteCountersAsync_ListsTheResidentLocalModels()
+    {
+        var map = new LocalResidencyMap();
+        map.Register(new FakeResidencySource(
+            new ResidentModel("ollama", "qwen2.5-coder:7b", 4096, 4_748_056_984, 4_748_056_984, "-1", null, IsPinned: true),
+            new ResidentModel("ollama", "gemma4:e2b", null, 1_700_000_000, 0, "28m", Now.AddMinutes(28), IsPinned: false)));
+        var service = new DiagnosticsRpcService(new AutocompleteCounters(), new FakeOutbound([]), new FixedTime(Now), map);
+
+        var report = await service.GetAutocompleteCountersAsync(CancellationToken.None);
+
+        Assert.Equal(2, report.ResidentModels.Length);
+        var coder = report.ResidentModels[0];
+        Assert.Equal(("ollama", "qwen2.5-coder:7b", 4096, 4_748_056_984, "-1", true), (coder.ProviderId, coder.ModelId, coder.ContextLength, coder.VramBytes, coder.KeepAlive, coder.IsPinned));
+        Assert.Null(report.ResidentModels[1].ContextLength);
+
+        var without = await new DiagnosticsRpcService(new AutocompleteCounters(), new FakeOutbound([]), new FixedTime(Now)).GetAutocompleteCountersAsync(CancellationToken.None);
+        Assert.Empty(without.ResidentModels);
+    }
+
+    private sealed class FakeResidencySource(params ResidentModel[] models) : ILocalResidencySource
+    {
+        public string ProviderId => "ollama";
+
+        public (DateTimeOffset? ObservedAt, Pillion.Common.Hardware.GpuTier? Tier, IReadOnlyList<ResidentModel> Models) GetLastKnown() => (Now, null, models);
+
+        public Task<IReadOnlyList<ResidentModel>> GetResidentAsync(bool force, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<ResidentModel>>(models);
+    }
+
+    [Fact]
     public async Task GetAutocompleteCountersAsync_WithNothingRecorded_ReportsZerosAndNoPercentiles()
     {
         await using var host = await StartAsync(new AutocompleteCounters(), new FakeOutbound([]));

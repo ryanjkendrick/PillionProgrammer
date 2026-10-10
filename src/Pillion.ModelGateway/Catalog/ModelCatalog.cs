@@ -2,10 +2,48 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Pillion.Common.Hardware;
 using Pillion.Common.Settings;
 using Pillion.Contracts;
 
 namespace Pillion.ModelGateway;
+
+/// <summary>
+/// What a local model costs in GPU memory and how much context it is recommended to keep resident per GPU tier
+/// (design section 6, Local model residency). The numbers are estimates for the default quantisation (Q4_K_M): the weights
+/// plus the runtime's fixed overhead, and the key/value cache per 1,024 tokens of context at the default f16 cache type.
+/// </summary>
+/// <param name="WeightsMiB">The memory a loaded instance takes before any context, in MiB.</param>
+/// <param name="KvMiBPer1kTokens">The key/value cache per 1,024 tokens of <c>num_ctx</c>, in MiB.</param>
+/// <param name="RecommendedContext">The largest <c>num_ctx</c> to keep resident per tier when the model is shared between autocomplete and chat.</param>
+public sealed record ModelResidencyEstimate(int WeightsMiB, double KvMiBPer1kTokens, IReadOnlyDictionary<GpuTier, int> RecommendedContext)
+{
+    /// <summary>Estimates the memory one instance takes at a context size.</summary>
+    /// <param name="contextTokens">The <c>num_ctx</c>.</param>
+    /// <returns>The estimate in MiB.</returns>
+    public int EstimateMiB(int contextTokens) => WeightsMiB + (int)Math.Ceiling(KvMiBPer1kTokens * contextTokens / 1024.0);
+
+    /// <summary>Gets the largest context one instance can have within a memory budget.</summary>
+    /// <param name="budgetMiB">The memory available to the instance.</param>
+    /// <returns>The context size in tokens (0 when the weights alone do not fit; <see cref="int.MaxValue"/> when the cache costs nothing).</returns>
+    public int MaxContextWithin(int budgetMiB)
+    {
+        var room = budgetMiB - WeightsMiB;
+        if (room <= 0)
+        {
+            return 0;
+        }
+
+        return KvMiBPer1kTokens <= 0 ? int.MaxValue : (int)Math.Min(int.MaxValue, room / KvMiBPer1kTokens * 1024.0);
+    }
+
+    /// <summary>Gets the recommended resident context for a tier.</summary>
+    /// <param name="tier">The tier.</param>
+    /// <param name="fallback">The size to return when the catalog names none for the tier.</param>
+    /// <returns>The size in tokens.</returns>
+    public int RecommendedContextFor(GpuTier tier, int fallback) =>
+        RecommendedContext.TryGetValue(tier, out var tokens) ? tokens : fallback;
+}
 
 /// <summary>
 /// The model catalog (design section 6): the default model id for each profile per provider kind, and capability
@@ -25,9 +63,9 @@ public sealed class ModelCatalog
     };
 
     private readonly Dictionary<ProviderKind, Dictionary<Profile, string>> _profiles;
-    private readonly List<(Regex Pattern, string Match, ModelCapabilityDescriptor Descriptor)> _families;
+    private readonly List<(Regex Pattern, string Match, ModelCapabilityDescriptor Descriptor, ModelResidencyEstimate? Residency)> _families;
 
-    private ModelCatalog(Dictionary<ProviderKind, Dictionary<Profile, string>> profiles, List<(Regex, string, ModelCapabilityDescriptor)> families)
+    private ModelCatalog(Dictionary<ProviderKind, Dictionary<Profile, string>> profiles, List<(Regex, string, ModelCapabilityDescriptor, ModelResidencyEstimate?)> families)
     {
         _profiles = profiles;
         _families = families;
@@ -83,7 +121,7 @@ public sealed class ModelCatalog
             profiles[kind] = byProfile;
         }
 
-        var families = new List<(Regex, string, ModelCapabilityDescriptor)>();
+        var families = new List<(Regex, string, ModelCapabilityDescriptor, ModelResidencyEstimate?)>();
         foreach (var family in document.Families ?? [])
         {
             if (string.IsNullOrWhiteSpace(family.Match))
@@ -91,7 +129,7 @@ public sealed class ModelCatalog
                 throw new FormatException("Every model family in the catalog needs a 'match' pattern.");
             }
 
-            families.Add((ToRegex(family.Match), family.Match, family.ToDescriptor()));
+            families.Add((ToRegex(family.Match), family.Match, family.ToDescriptor(), family.Residency?.ToEstimate(family.Match)));
         }
 
         if (families.Count == 0 || families[^1].Item2 != "*")
@@ -124,7 +162,7 @@ public sealed class ModelCatalog
             name = name[(slash + 1)..];
         }
 
-        foreach (var (pattern, _, descriptor) in _families)
+        foreach (var (pattern, _, descriptor, _) in _families)
         {
             if (pattern.IsMatch(name))
             {
@@ -135,6 +173,31 @@ public sealed class ModelCatalog
         }
 
         return ModelCapabilityDescriptor.Unknown with { IsLocal = isLocal };
+    }
+
+    /// <summary>Gets the memory estimate of the first family whose pattern matches the model id.</summary>
+    /// <param name="modelId">The provider's model id.</param>
+    /// <returns>The estimate, or <see langword="null"/> when the matching family has none (the estimate is only known for the local coder families).</returns>
+    public ModelResidencyEstimate? GetResidency(string modelId)
+    {
+        ArgumentNullException.ThrowIfNull(modelId);
+
+        var name = modelId;
+        var slash = name.LastIndexOf('/');
+        if (slash >= 0)
+        {
+            name = name[(slash + 1)..];
+        }
+
+        foreach (var (pattern, _, _, residency) in _families)
+        {
+            if (pattern.IsMatch(name))
+            {
+                return residency;
+            }
+        }
+
+        return null;
     }
 
     private static ModelCatalog LoadEmbedded()
@@ -155,6 +218,50 @@ public sealed class ModelCatalog
         public Dictionary<string, Dictionary<string, string>?>? Profiles { get; set; }
 
         public List<FamilyEntry>? Families { get; set; }
+    }
+
+    private sealed class ResidencyEntry
+    {
+        public int VramMiB { get; set; }
+
+        public double KvMiBPer1kTokens { get; set; }
+
+        public Dictionary<string, int>? RecommendedContext { get; set; }
+
+        public ModelResidencyEstimate ToEstimate(string family)
+        {
+            if (VramMiB <= 0 || KvMiBPer1kTokens < 0)
+            {
+                throw new FormatException($"The residency of model family '{family}' needs a positive vramMiB and a kvMiBPer1kTokens of 0 or more.");
+            }
+
+            var byTier = new Dictionary<GpuTier, int>();
+            foreach (var (name, tokens) in RecommendedContext ?? [])
+            {
+                if (!TryParseTier(name, out var tier) || tokens <= 0)
+                {
+                    throw new FormatException($"The residency of model family '{family}' has an invalid recommendedContext entry '{name}': {tokens}.");
+                }
+
+                byTier[tier] = tokens;
+            }
+
+            return new ModelResidencyEstimate(VramMiB, KvMiBPer1kTokens, byTier);
+        }
+
+        private static bool TryParseTier(string name, out GpuTier tier)
+        {
+            tier = name.ToLowerInvariant() switch
+            {
+                "cpu" => GpuTier.CpuOnly,
+                "8gb" => GpuTier.Gpu8GB,
+                "12gb" => GpuTier.Gpu12GB,
+                "16gb" => GpuTier.Gpu16GB,
+                "24gb" => GpuTier.Gpu24GBPlus,
+                _ => (GpuTier)(-1),
+            };
+            return (int)tier >= 0;
+        }
     }
 
     private sealed class FamilyEntry
@@ -180,6 +287,8 @@ public sealed class ModelCatalog
         public bool ReasoningEffort { get; set; }
 
         public ToolCallingSupport ToolCalling { get; set; }
+
+        public ResidencyEntry? Residency { get; set; }
 
         public decimal InputCostPerMillionTokens { get; set; }
 

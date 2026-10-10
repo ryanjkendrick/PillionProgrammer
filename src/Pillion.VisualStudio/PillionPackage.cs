@@ -12,7 +12,9 @@ using Pillion.Contracts;
 using Pillion.VisualStudio.Autocomplete;
 using Pillion.VisualStudio.Core;
 using Pillion.VisualStudio.Core.Autocomplete;
+using Pillion.VisualStudio.Core.Signals;
 using Pillion.VisualStudio.Options;
+using Pillion.VisualStudio.Signals;
 using Pillion.VisualStudio.ToolWindows;
 using Task = System.Threading.Tasks.Task;
 
@@ -30,6 +32,7 @@ namespace Pillion.VisualStudio;
 [ProvideAutoLoad(VSConstants.UICONTEXT.SolutionExists_string, PackageAutoLoadFlags.BackgroundLoad)]
 [ProvideAutoLoad(VSConstants.UICONTEXT.FolderOpened_string, PackageAutoLoadFlags.BackgroundLoad)]
 [ProvideService(typeof(IHostConnection), IsAsyncQueryable = true)]
+[ProvideService(typeof(IIdeSignals), IsAsyncQueryable = true)]
 [ProvideToolWindow(typeof(ChatToolWindow), Style = VsDockStyle.Tabbed, Window = SolutionExplorerWindow, Orientation = ToolWindowOrientation.Right)]
 [ProvideOptionPage(typeof(ProvidersOptionPage), ProductName, "Providers and keys", 0, 0, supportsAutomation: false)]
 [ProvideOptionPage(typeof(PrivacyOptionPage), ProductName, "Privacy", 0, 0, supportsAutomation: false)]
@@ -51,6 +54,7 @@ public sealed class PillionPackage : AsyncPackage
     private OutputPaneWriter? _output;
     private IVsStatusbar? _statusBar;
     private AutocompleteFeature? _autocomplete;
+    private IdeSignalsFeature? _signals;
     private IntelliCodeStatus _intelliCodeReported = IntelliCodeStatus.NotRequired;
     private int _intelliCodeCheckRunning;
 
@@ -65,6 +69,9 @@ public sealed class PillionPackage : AsyncPackage
 
     /// <summary>Gets the extension log, once initialization has created it.</summary>
     internal PillionLog? Log => _log;
+
+    /// <summary>Gets the IDE signals (builds, documents, diagnostics, Output panes) service, once initialization has created it.</summary>
+    internal IIdeSignals? IdeSignals => _signals?.Hub;
 
     /// <summary>Gets ghost-text autocomplete (engine, settings, IntelliCode state), once initialization has created it.</summary>
     internal AutocompleteFeature? Autocomplete => _autocomplete;
@@ -84,6 +91,9 @@ public sealed class PillionPackage : AsyncPackage
         var autocomplete = new AutocompleteFeature(supervisor, log);
         _autocomplete = autocomplete;
         AddService(typeof(IHostConnection), (container, token, type) => Task.FromResult<object?>(supervisor), promote: true);
+        var signals = new IdeSignalsFeature(JoinableTaskFactory, log);
+        _signals = signals;
+        AddService(typeof(IIdeSignals), (container, token, type) => Task.FromResult<object?>(signals.Hub), promote: true);
         Instance = this;
 
         // The COM output window, status bar and command service must be used on the UI thread.
@@ -120,6 +130,7 @@ public sealed class PillionPackage : AsyncPackage
         // host's effective feature flags: it reads them whenever the host becomes ready.
         chatAvailability.Start();
         autocomplete.Start();
+        _ = JoinableTaskFactory.RunAsync(() => signals.StartAsync(this, DisposalToken));
         _ = JoinableTaskFactory.RunAsync(() => CheckIntelliCodeAsync(DisposalToken));
         supervisor.Start();
     }
@@ -163,6 +174,8 @@ public sealed class PillionPackage : AsyncPackage
             _chatAvailability = null;
             _autocomplete?.Dispose();
             _autocomplete = null;
+            _signals?.Dispose();
+            _signals = null;
         }
 
         if (disposing && _supervisor is { } supervisor)
@@ -308,6 +321,11 @@ public sealed class PillionPackage : AsyncPackage
             {
                 host += Environment.NewLine + Environment.NewLine + autocompleteText;
                 _output?.WriteLine(autocompleteText);
+            }
+
+            if (_signals is { } signals)
+            {
+                host += Environment.NewLine + Environment.NewLine + signals.Hub.StatusText;
             }
 
             VsShellUtilities.ShowMessageBox(
