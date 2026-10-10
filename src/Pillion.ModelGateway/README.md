@@ -208,6 +208,33 @@ record keeps the item count and the number truncated or dropped (`ContextItems`,
 assembly takes a median of about 45 ms and p95 of about 215 ms with the exact o200k tokenizer, and 12 ms and 17 ms with
 the calibrated estimate (`Context/ContextAssemblyBenchmarkTests`). The Gate 1 row is p50 150 ms, p95 400 ms.
 
+## Edit blocks (`Editing/`)
+
+Provider-independent pieces of inline edits (work item 1.8); Pillion Host's `InlineEdit/` drives them (see
+`src/Pillion.Host/README.md`, Inline edits).
+
+- `EditBlockParser` reads the `<<<<<<< SEARCH` / `=======` / `>>>>>>> REPLACE` format: markers are whole lines (5 to 9
+  characters, the words optional and case-insensitive), CRLF and LF parse the same, fences around blocks are ignored and
+  fences inside them are content, `N| ` line numbers copied from the prompt are stripped when every line has one, and
+  while a reply streams an open block is reported as `Partial` with its finished lines. A second `=======` closes a
+  block when a fence, the next block or the end of the reply follows it (qwen2.5-coder:7b sometimes ends blocks that
+  way), and when SEARCH was numbered, numbered REPLACE lines are stripped one by one. `FencedCodeParser` extracts
+  fenced code (for `/test`).
+- `WholeScopeParser` reads the other answer format, used for scopes of at most `inlineEdit.wholeScopeMaxLines` lines
+  (default 80): the whole scope rewritten as plain code. It unwraps a Markdown fence (prose around it becomes the
+  explanation; a scope that has fences of its own is not unwrapped), strips `N| ` line numbers when every line has
+  one, reads CRLF and LF alike, drops blank lines at the edges, gives the result the trailing newline of the code it
+  replaces, and rejects a reply in block format. `Preview` gives the complete lines of a reply still streaming.
+  `InlineEditPromptInput.WholeScope` switches the builder to `system.editWhole` and the closing `wholeReply` /
+  `wholeRevised` section, and `DocOnly`, `Syntax` and `Placeholders` take `wholeScope` for their whole-scope wording.
+- `EditBlockApplier` applies blocks in order to LF text: exact, then trailing-whitespace-insensitive, then
+  indentation-insensitive (re-indenting the replacement); a level with several matches is `Ambiguous`.
+- `InlineEditTemplates` loads `Templates/inline-edit.json` (system prompts per command, sections, corrective messages;
+  `{name}` placeholders filled in one pass) and `InlineEditPromptBuilder` builds the messages.
+- `ChatAsync` with `TaskClass.InlineEdit` sends `ModelGatewayOptions.InlineEditTemperature` (0.2); at the providers'
+  default (about 0.8 for Ollama) qwen2.5-coder:7b often dropped half of an "extract method" edit.
+- `EditText.FindIntroducedPlaceholders` finds `<redacted:...>` tokens in a restored result that are not in the code.
+
 ## Providers
 
 `ProviderRegistry` builds one `IModelProvider` per enabled `providers` entry with the `IModelProviderFactory` for its

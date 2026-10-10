@@ -14,6 +14,8 @@ public class InterfaceShapeTests
         [typeof(IAgentService)] = ["StartSessionAsync", "ApproveAsync", "DenyAsync", "StopAsync", "RevertAsync"],
         [typeof(ISettingsService)] = ["GetAsync", "SetAsync", "TestProviderAsync"],
         [typeof(IHostLifecycleService)] = ["HandshakeAsync", "GetStateAsync", "ShutdownAsync"],
+        [typeof(IInlineEditService)] = ["EditAsync", "CancelEditAsync"],
+        [typeof(IDiagnosticsService)] = ["GetAutocompleteCountersAsync"],
 
         // Host to VSIX.
         [typeof(IEditorService)] = ["ApplyChangesetAsync", "ShowPreviewAsync", "GetOpenDocumentsAsync"],
@@ -117,6 +119,12 @@ public class InterfaceShapeTests
     public void TaskClass_HasExpectedMembers()
     {
         Assert.Equal(["Autocomplete", "InlineEdit", "Chat", "Agent", "Embedding", "Vision", "Summarise"], Enum.GetNames<TaskClass>());
+    }
+
+    [Fact]
+    public void InlineEditCommand_HasExpectedMembers()
+    {
+        Assert.Equal(["None", "Doc", "Test", "Fix", "Explain"], Enum.GetNames<InlineEditCommand>());
     }
 
     [Fact]

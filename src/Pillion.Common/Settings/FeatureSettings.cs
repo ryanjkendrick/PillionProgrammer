@@ -36,6 +36,9 @@ public static class FeatureNames
     /// <summary>Ghost-text autocomplete: the host's completion service (<c>IModelService.CompleteAsync</c>).</summary>
     public const string Autocomplete = "autocomplete";
 
+    /// <summary>Inline chat: the host's inline edit service (<c>IInlineEditService</c>).</summary>
+    public const string InlineChat = "inlineChat";
+
     /// <summary>Gets every feature flag name, in the order they are written to <c>settings.json</c>.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
@@ -50,6 +53,7 @@ public static class FeatureNames
         MistralProvider,
         AzureOpenAIProvider,
         Autocomplete,
+        InlineChat,
     ];
 }
 
@@ -112,6 +116,7 @@ public sealed class FeatureSettings : SettingsNode
             "mistralprovider" => MistralProvider,
             "azureopenaiprovider" => AzureOpenAIProvider,
             "autocomplete" => Autocomplete,
+            "inlinechat" => InlineChat,
             _ => true,
         };
     }
@@ -157,6 +162,12 @@ public sealed class FeatureSettings : SettingsNode
             case "autocomplete":
                 Autocomplete = false;
                 break;
+            case "inlinechat":
+                InlineChat = false;
+                break;
         }
     }
+
+    /// <summary>Gets or sets a value indicating whether inline chat is available. When off, inline edit requests fail with a policy error.</summary>
+    public bool InlineChat { get; set; } = true;
 }

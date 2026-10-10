@@ -241,6 +241,7 @@ public sealed partial class ModelGateway : IModelGateway
                 var options = new ChatOptions
                 {
                     ModelId = candidate.ModelId,
+                    Temperature = taskClass == TaskClass.InlineEdit ? _services.Options.InlineEditTemperature : null,
                     AdditionalProperties = new AdditionalPropertiesDictionary { [GatewayOptionKeys.Profile] = candidate.Profile },
                 };
                 var currentSession = session;
