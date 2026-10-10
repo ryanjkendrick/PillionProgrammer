@@ -12,7 +12,14 @@ using Pillion.ModelGateway.Providers.OpenAICompatible;
 
 namespace Pillion.ModelGateway.Tests.Providers.OpenAICompatible;
 
-/// <summary>A throwaway PKI: a root, an intermediate and a server certificate for 127.0.0.1 and localhost.</summary>
+/// <summary>
+/// A throwaway PKI: a root, an intermediate and a server certificate for 127.0.0.1 and localhost. Every PKI has names of its
+/// own (a random suffix), and disposing it removes the intermediate that serving it over TLS leaves behind: on Windows,
+/// <c>SslStreamCertificateContext.Create</c> writes the intermediates it is given into the current user's
+/// <c>CA</c> store, and they stay there. With fixed names those leftovers accumulated (93 on one development machine)
+/// and every later chain build for a new PKI under the same names then failed with "An unknown chain building error
+/// occurred" (the three CaBundle tests; CI runs on a fresh machine and never saw it).
+/// </summary>
 internal sealed class TestPki : IDisposable
 {
     private TestPki(X509Certificate2 root, X509Certificate2 intermediate, X509Certificate2 leaf)
@@ -43,6 +50,7 @@ internal sealed class TestPki : IDisposable
     public static TestPki Create(string commonName = "Pillion Test", bool expiredLeaf = false)
     {
         var now = DateTimeOffset.UtcNow;
+        commonName += " " + Guid.NewGuid().ToString("N")[..8];
         var root = CreateCa($"CN={commonName} Root", issuer: null, now.AddDays(-60));
         var intermediate = CreateCa($"CN={commonName} Intermediate", root, now.AddDays(-40));
 
@@ -68,9 +76,33 @@ internal sealed class TestPki : IDisposable
 
     public void Dispose()
     {
+        RemoveIntermediateFromTheUserStore();
         Root.Dispose();
         Intermediate.Dispose();
         Leaf.Dispose();
+    }
+
+    private void RemoveIntermediateFromTheUserStore()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            using var store = new X509Store(StoreName.CertificateAuthority, StoreLocation.CurrentUser);
+            store.Open(OpenFlags.ReadWrite | OpenFlags.OpenExistingOnly);
+            foreach (var leftover in store.Certificates.Find(X509FindType.FindByThumbprint, Intermediate.Thumbprint, validOnly: false))
+            {
+                store.Remove(leftover);
+                leftover.Dispose();
+            }
+        }
+        catch (Exception ex) when (ex is CryptographicException or InvalidOperationException)
+        {
+            // The store is not available (a service account without a profile): nothing was left there either.
+        }
     }
 
     /// <summary>Builds the chain the platform would have built for <see cref="LeafPublic"/> (which fails to trust it), with the intermediate the server sent.</summary>

@@ -570,6 +570,24 @@ public sealed class AutocompleteMetricsOutputTests : IDisposable
     private readonly ManualClock _clock = new();
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "pillion-metrics-" + Guid.NewGuid().ToString("N"));
 
+    /// <summary>
+    /// Reads the lines of a file that the metrics writer may be appending to. <see cref="File.ReadAllLines(string)"/> opens
+    /// with <see cref="FileShare.Read"/>, which an open write handle of a concurrent writer refuses ("being used by another
+    /// process"); sharing writes and deletes lets the reader coexist with the writer, as a person tailing the file would.
+    /// </summary>
+    private static string[] ReadLines(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        var lines = new List<string>();
+        while (reader.ReadLine() is { } line)
+        {
+            lines.Add(line);
+        }
+
+        return [.. lines];
+    }
+
     public void Dispose()
     {
         try
@@ -679,7 +697,7 @@ public sealed class AutocompleteMetricsOutputTests : IDisposable
 
         var path = Path.Combine(_directory, "metrics-20261009.jsonl");
         Assert.Equal("metrics-20261009.jsonl", AutocompleteMetricsLogWriter.FileNameFor(_clock.UtcNow));
-        Assert.Equal(["{\"a\":1}", "{\"a\":2}"], File.ReadAllLines(path));
+        Assert.Equal(["{\"a\":1}", "{\"a\":2}"], ReadLines(path));
         Assert.False(File.ReadAllBytes(path).Take(3).SequenceEqual(new byte[] { 0xEF, 0xBB, 0xBF }));
     }
 
@@ -762,15 +780,15 @@ public sealed class AutocompleteMetricsOutputTests : IDisposable
         Record(engine, shown: true);
         _clock.Advance(AutocompleteMetricsReporter.DefaultInterval);
         var path = Path.Combine(_directory, AutocompleteMetricsLogWriter.FileNameFor(_clock.UtcNow));
-        await Wait.UntilAsync(() => File.Exists(path) && File.ReadAllLines(path).Length == 1, "the first window was written");
+        await Wait.UntilAsync(() => File.Exists(path) && ReadLines(path).Length == 1, "the first window was written");
 
         // A window with no autocomplete activity writes nothing.
         await _clock.WhenWaitingAsync(AutocompleteMetricsReporter.DefaultInterval);
         _clock.Advance(AutocompleteMetricsReporter.DefaultInterval);
         await _clock.WhenWaitingAsync(AutocompleteMetricsReporter.DefaultInterval);
-        Assert.Single(File.ReadAllLines(path));
+        Assert.Single(ReadLines(path));
 
-        var json = JObject.Parse(File.ReadAllLines(path)[0]);
+        var json = JObject.Parse(ReadLines(path)[0]);
         Assert.Equal(2, (long)json["requests"]!);
         Assert.Equal(2, (long)json["shown"]!);
         Assert.Equal(300, (int)json["seconds"]!);
@@ -802,7 +820,7 @@ public sealed class AutocompleteMetricsOutputTests : IDisposable
         Assert.True(await reporter.ReportAsync(CancellationToken.None).WithTimeout(Timeout));
 
         var path = Path.Combine(_directory, AutocompleteMetricsLogWriter.FileNameFor(_clock.UtcNow));
-        var json = JObject.Parse(File.ReadAllLines(path)[0]);
+        var json = JObject.Parse(ReadLines(path)[0]);
         Assert.Equal(JTokenType.Null, json["host"]!.Type);
         Assert.Equal(30, (int)json["seconds"]!);
     }

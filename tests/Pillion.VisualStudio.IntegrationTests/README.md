@@ -117,7 +117,7 @@ Other Visual Studio instances, including Experimental Instances with another roo
    Activity Log saved after every test (`ActivityLog-VS18.xml`), the framework's installer log and failure
    screenshots, and the Pillion logs written during the run. `-TestCaseFilter "FullyQualifiedName~KillingTheHost"`
    runs a subset. It backs up `%LOCALAPPDATA%\PillionProgrammer\settings.json` and restores it byte for byte, and
-   checks that no Experimental Instance or `Pillion.Host.exe` from the run is left (it stops any and fails the run).
+   checks that no Experimental Instance or `Pillion.Host.exe` from the run is left (it stops any and fails the run). A host is the run's own only when its parent process is an Experimental Instance the run started; another run's host, or one whose parent cannot be determined, is logged and left alone.
 
 A run takes one to two minutes per version; most of it is the framework preparing the instance (`/clearcache`,
 `/updateconfiguration`, `/resetsettings`, which resets the Experimental Instance's settings to General).

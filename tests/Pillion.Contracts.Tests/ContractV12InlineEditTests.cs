@@ -6,7 +6,7 @@ using MessagePack.Resolvers;
 namespace Pillion.Contracts.Tests;
 
 /// <summary>
-/// Contract 1.2 (pending): the inline edit service and its DTOs. Additive only, so a 1.1 peer is still compatible; a 1.1
+/// Contract 1.2: the inline edit service and its DTOs. Additive only, so a 1.1 peer is still compatible; a 1.1
 /// VSIX simply never calls <see cref="IInlineEditService"/>.
 /// </summary>
 public class ContractV12InlineEditTests

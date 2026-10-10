@@ -76,6 +76,20 @@ function Get-PillionHostProcess {
     @(Get-CimInstance Win32_Process -Filter "Name='Pillion.Host.exe'" | Select-Object ProcessId, ParentProcessId, ExecutablePath)
 }
 
+function Get-AncestorProcessId {
+    <# The process ids above a process, nearest first (parent, grandparent, ...), as far as the processes still exist. #>
+    param([Parameter(Mandatory)][int]$ProcessId)
+    $ids = [Collections.Generic.List[int]]::new()
+    $current = $ProcessId
+    for ($depth = 0; $depth -lt 8; $depth++) {
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId=$current" -ErrorAction SilentlyContinue
+        if (-not $process -or -not $process.ParentProcessId -or $process.ParentProcessId -eq $current) { break }
+        $ids.Add([int]$process.ParentProcessId)
+        $current = [int]$process.ParentProcessId
+    }
+    $ids.ToArray()
+}
+
 function Get-VsixIdentity {
     <# The Identity element (Id, Version) of a .vsix's extension.vsixmanifest. #>
     param([Parameter(Mandatory)][string]$VsixPath)
@@ -127,4 +141,4 @@ function Restore-PillionSettings {
     }
 }
 
-Export-ModuleMember -Function Find-TargetVisualStudio, Get-ExpInstanceProcess, Get-PillionHostProcess, Get-VsixIdentity, Find-DeployedPillion, Backup-PillionSettings, Restore-PillionSettings -Variable ExtensionId
+Export-ModuleMember -Function Find-TargetVisualStudio, Get-ExpInstanceProcess, Get-PillionHostProcess, Get-AncestorProcessId, Get-VsixIdentity, Find-DeployedPillion, Backup-PillionSettings, Restore-PillionSettings -Variable ExtensionId
