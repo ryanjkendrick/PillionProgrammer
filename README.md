@@ -193,7 +193,7 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
 | `mistralProvider` | Providers of kind `mistral` (chat and Codestral fill-in-the-middle) are not built or routed to. |
 | `azureOpenAIProvider` | Providers of kind `azure-openai` are not built or routed to. |
 | `autocomplete` | `IModelService.CompleteAsync` (ghost-text autocomplete) fails with `PolicyDenied` and a message that names the flag; chat and model listing are unaffected. The extension stops asking for suggestions (it reads the flag when Pillion Host becomes ready and when the Tools menu opens; an absent flag means on). |
-| `inlineChat` | `IInlineEditService.EditAsync` (inline chat edits, `/doc`, `/test`, `/fix`, `/explain`) fails with `PolicyDenied` and a message that names the flag. Chat, autocomplete and model listing are unaffected. |
+| `inlineChat` | `IInlineEditService.EditAsync` (inline chat edits, `/doc`, `/test`, `/fix`, `/explain`) fails with `PolicyDenied` and a message that names the flag, and **Pillion: Inline Chat** is disabled (an open adornment says "Inline chat is disabled by settings or policy" and cannot send). Chat, autocomplete and model listing are unaffected. |
 
 A repository can switch flags off for everyone who opens it with `disabledFeatures` in `.pillion/policy.json`, next to
 `localOnly`, `disabledTools`, `exclude` and `denyCommands`:
@@ -247,6 +247,32 @@ switches that off.
 missing the status bar and the Pillion Output pane say "Inline suggestions need IntelliCode's automatic code completions
 on Visual Studio 2022"; the check runs when the extension loads and again whenever the Tools menu opens. Visual Studio
 2026 needs nothing extra.
+
+## Inline chat
+
+**Tools > Pillion: Inline Chat** (default shortcut Ctrl+Alt+Shift+P, then I; also on the code editor's context menu)
+opens a prompt above the code it is about: the selection extended to whole lines; with nothing selected, the member the
+caret is in (method, constructor, property, event or field, with its doc comment; Roslyn, for C# and Visual Basic);
+otherwise the caret's line. The scope is highlighted while the prompt is open. The editor makes room for the prompt
+(a line transform adds space above the scope's first line), so nothing is drawn over the code and the document is not
+touched.
+
+Type an instruction ("extract the validation into a method") and press Enter, or type `/` for the shortcuts: `/doc`
+(documentation comments only), `/test` (new test code, offered as **Insert at cursor** or **Copy** instead of a
+replacement, with where it belongs), `/fix` (the errors and warnings on the scope's lines from the Error List and Roslyn
+are sent with the request) and `/explain` (an explanation, nothing to apply). The model picker defaults to Auto (the
+host routes by the InlineEdit task class) and remembers your choice; **Recent** and Up and Down in the prompt recall the
+last ten prompts of the Visual Studio session. The status line says "Thinking..." with the model once it is known, the
+elapsed time, **Stop** and, after a failure, the error and **Retry**.
+
+The proposal streams into an inline difference view (the theme's difference colours plus + and - line markers) while the
+document stays as it was, so Roslyn, the file watcher and Live Unit Testing never see partial code. **Enter** (with an
+empty prompt) applies it as one edit after the file is checked out through source control, undone with one Undo
+("Pillion inline edit"); **Esc** discards it and leaves nothing to undo; typing another instruction refines the proposal
+in place. A warning from the host (for example "no change proposed") is shown above the difference view. The prompt
+closes when you apply or discard, when the document closes, or when the caret moves further from the scope than the
+editor shows lines. Every control is in the tab order with a screen-reader name; while the prompt has focus, keys the
+editor would otherwise take (typing, Backspace, arrows, Ctrl+A/C/V/X/Z, Enter, Esc, Tab) go to the prompt.
 
 ## IDE signals
 
