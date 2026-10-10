@@ -11,6 +11,7 @@ using Microsoft.VisualStudio.Settings;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Threading;
+using Pillion.VisualStudio.Core;
 using Pillion.VisualStudio.Core.Autocomplete;
 
 namespace Pillion.VisualStudio.Autocomplete;
@@ -107,9 +108,13 @@ internal sealed class CoexistenceFeature
         try
         {
             await joinableTaskFactory.SwitchToMainThreadAsync();
-            _detection = Detect();
-            _feature.Log.Info("autocomplete.coexistence.detected", "Suggestion coexistence: " + _detection.Describe() + ".", ("mode", Mode.ToString()));
-            CoexistenceTrace.Write("detected", _detection.Describe());
+            using (UiThreadTimings.Measure("coexistence.detect"))
+            {
+                _detection = Detect();
+                _feature.Log.Info("autocomplete.coexistence.detected", "Suggestion coexistence: " + _detection.Describe() + ".", ("mode", Mode.ToString()));
+                CoexistenceTrace.Write("detected", _detection.Describe());
+            }
+
             await MaybePromptAsync(joinableTaskFactory).ConfigureAwait(true);
         }
 #pragma warning disable CA1031 // Detection must never break autocomplete; ghost text works without it.
@@ -198,6 +203,7 @@ internal sealed class CoexistenceFeature
         }
 
         await joinableTaskFactory.SwitchToMainThreadAsync();
+        using var timing = UiThreadTimings.Measure("coexistence.prompt");
         var competitors = CoexistencePrompt.ToPrompt(_feature.Availability.Settings, _detection, Observed, Volatile.Read(ref _promptShown) != 0);
         if (competitors == CompetitorKind.None || Interlocked.Exchange(ref _promptShown, 1) != 0)
         {

@@ -108,7 +108,7 @@ try {
             [xml]$trx = Get-Content -LiteralPath $trxPath -Raw
             foreach ($result in @($trx.TestRun.Results.UnitTestResult | Where-Object { $_.testName -like '*KillingTheHost*' })) {
                 Write-Host "Output of $($result.testName) ($($result.outcome)):"
-                $lines = @($result.Output.StdOut -split "`r?`n" | Where-Object { $_ -match '^(Killed|\s+\d+ ms: |UI thread|Background thread|WARNING)' })
+                $lines = @($result.Output.StdOut -split "`r?`n" | Where-Object { $_ -match '^(Killed|\s+\d+ ms: |UI thread|Background thread|Pillion''s own|WARNING)' })
                 $lines | ForEach-Object { Write-Host "  $_" }
                 if ($env:GITHUB_ACTIONS -eq 'true') {
                     foreach ($line in @($lines | Where-Object { $_ -like 'WARNING*' })) { Write-Host "::warning title=Host kill test::$line" }

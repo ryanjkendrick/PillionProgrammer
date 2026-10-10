@@ -6,6 +6,7 @@ using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Threading;
+using Pillion.VisualStudio.Core;
 using Pillion.VisualStudio.Core.Signals;
 
 namespace Pillion.VisualStudio.Signals;
@@ -22,6 +23,7 @@ internal sealed class OutputPaneSource(IVsOutputWindow outputWindow, DTE dte, Jo
     public async Task<string?> ReadTailAsync(string paneName, int maxChars, CancellationToken cancellationToken)
     {
         await joinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        using var timing = UiThreadTimings.Measure("signals.outputpane.read");
         var name = ResolveName(paneName);
         var pane = FindPane(name);
         if (pane is null)

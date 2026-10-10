@@ -68,17 +68,32 @@ The test output shows:
 - every posted operation with its post and run times, and `<-- slow` on those that waited 500 ms or more, so a failure
   shows where in the window (before or after the kill, the restart and Ready) the gap fell. The kill and each state
   change are listed above with their times.
+- whose code held the UI thread (`UiThreadMonitor`): every dispatcher operation of the window is timed through
+  `Dispatcher.Hooks` (with the async method or delegate behind it), grouped by what ran; `Pillion's own timed UI thread
+  work:` lists the stretches the product's `UiThreadTimings` debug switch timed (status bar updates, Output pane flushes,
+  command status queries, ...), which the test switches on for the window; for the longest gap, the operations and
+  Pillion's stretches inside it; and the UI thread's managed stack, sampled every 100 ms once it has started or finished
+  no dispatcher operation for 200 ms (`(no managed frames: native code only)` means it was in Visual Studio's native
+  code). `Pillion's own UI thread time within the longest gap:` is the union of Pillion's operations, Pillion's timed
+  stretches and the samples with a Pillion frame, or `unknown` when the monitor did not watch the whole gap.
 
-`Invoke-IdeTests.ps1` prints the kill, state change, `UI thread:`, `Background thread:` and `WARNING:` lines from the TRX
-file after every run (the console logger shows a passing test's output only in the TRX), and under GitHub Actions turns
-a `WARNING:` line into a workflow warning annotation. The per-operation lines are in the TRX
-(`ide-test-results-vs18` artifact).
+`Invoke-IdeTests.ps1` prints the kill, state change, `UI thread`, `Background thread:`, `Pillion's own` and `WARNING:`
+lines from the TRX file after every run (the console logger shows a passing test's output only in the TRX), and under
+GitHub Actions turns a `WARNING:` line into a workflow warning annotation. The per-operation lines, operation groups and
+stack samples are in the TRX (`ide-test-results-vs18` and `ide-test-results-vs2022` artifacts).
 
-The verdict (`ResponsivenessVerdict`): the test fails when the UI gap is over 5 s, when the UI gap exceeds the background
-gap by 2 s or more, or when the UI gap reaches 2 s while the background gap is under 500 ms. When the UI gap reaches
-2 s but the background thread stalled about as long, the machine stalled and the test cannot attribute that to Pillion's
-code: it passes with a `WARNING:` line in the output. Posted and answered operations must still match, and Ready must
-return within 15 s.
+The verdict (`ResponsivenessVerdict`): the UI gap is a failure when it is over 5 s, when it exceeds the background gap
+by 2 s or more, or when it reaches 2 s while the background gap is under 500 ms; such a gap passes with a `WARNING:`
+line instead when the monitor watched it and Pillion's own code held the UI thread for 500 ms of it or less (another
+component stalled it), and fails when Pillion's share was more or could not be measured. When the UI gap reaches 2 s
+but the background thread stalled about as long, the machine stalled: it passes with a `WARNING:` line. Posted and
+answered operations must still match, and Ready must return within 15 s.
+
+On the GitHub-hosted runners the probe's `Background`-priority operations can wait seconds while the UI thread is idle:
+Visual Studio's `MainWindow.OnTierChanged` runs at `Render` priority 130 to 190 times a second there (WPF's render tier
+keeps changing on a runner without a GPU), and WPF does not run `Background` work while a posted message is waiting
+(`Dispatcher.IsInputPending` counts `QS_POSTMESSAGE`). The operation groups of such a gap show hundreds of
+`OnTierChanged` operations taking a few milliseconds in all, and Pillion's stretches under a millisecond.
 
 ### Tests that use the fake host
 

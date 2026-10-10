@@ -61,6 +61,7 @@ internal sealed class InlineChatFeature : IDisposable
         command.BeforeQueryStatus += (sender, args) =>
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+            using var timing = UiThreadTimings.Measure("inlinechat.querystatus");
             if (sender is OleMenuCommand menuCommand)
             {
                 menuCommand.Visible = true;
