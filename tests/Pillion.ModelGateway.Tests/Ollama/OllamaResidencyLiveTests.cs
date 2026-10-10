@@ -72,6 +72,11 @@ public sealed class OllamaResidencyLiveTests(ITestOutputHelper output)
     public async Task ChatAtLocalStrong_BesideThePinnedCoder_SharesTheRunner_AndCompletesWithinAMinute()
     {
         using var live = await LiveRig.StartAsync(output);
+        if (live is null)
+        {
+            return;
+        }
+
         await live.PinAsync(4096);
 
         var watch = Stopwatch.StartNew();
@@ -93,6 +98,11 @@ public sealed class OllamaResidencyLiveTests(ITestOutputHelper output)
     public async Task ChatThatNeeds8192_ReloadsTheCoderOnce_AndAutocompleteStillWorks()
     {
         using var live = await LiveRig.StartAsync(output);
+        if (live is null)
+        {
+            return;
+        }
+
         await live.PinAsync(4096);
 
         var watch = Stopwatch.StartNew();
@@ -133,7 +143,7 @@ public sealed class OllamaResidencyLiveTests(ITestOutputHelper output)
     private sealed class LiveRig : IDisposable
     {
         private readonly ITestOutputHelper _output;
-        private readonly HttpClient _http = new() { BaseAddress = new Uri(LiveOllama.Endpoint), Timeout = TimeSpan.FromMinutes(3) };
+        private readonly HttpClient _http = new() { BaseAddress = new Uri(LiveOllama.Endpoint), Timeout = TimeSpan.FromSeconds(90) };
         private readonly RecordingProgressSink _progress = new();
         private readonly (int? Context, string KeepAlive)? _before;
         private OllamaProvider? _provider;
@@ -146,11 +156,23 @@ public sealed class OllamaResidencyLiveTests(ITestOutputHelper output)
 
         public IReadOnlyList<string> Messages => [.. _progress.Reports.Select(p => p.Message)];
 
-        public static async Task<LiveRig> StartAsync(ITestOutputHelper output)
+        /// <summary>
+        /// Starts a rig, or returns <see langword="null"/> (and says so in the output) when another model has become resident since
+        /// discovery: the 7B cannot be reloaded beside it on this GPU, and evicting somebody else's model is not the test's call.
+        /// </summary>
+        public static async Task<LiveRig?> StartAsync(ITestOutputHelper output)
         {
             var probe = new HttpClient { BaseAddress = new Uri(LiveOllama.Endpoint), Timeout = TimeSpan.FromSeconds(10) };
             using (probe)
             {
+                using var all = JsonDocument.Parse(await probe.GetStringAsync("api/ps"));
+                var others = all.RootElement.GetProperty("models").EnumerateArray().Select(m => m.GetProperty("name").GetString()!).Where(n => !string.Equals(n, Coder, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (others.Count > 0)
+                {
+                    output.WriteLine($"NOT RUN: {string.Join(", ", others)} became resident; this test needs the GPU to itself. Run it again when Ollama is idle.");
+                    return null;
+                }
+
                 var resident = await ReadAsync(probe, Coder);
                 var rig = new LiveRig(output, resident.Count > 0 ? (resident[0].Context, resident[0].Pinned ? "-1" : "30m") : null);
                 output.WriteLine(resident.Count > 0
