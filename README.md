@@ -243,7 +243,7 @@ whose first lines say they are auto-generated), in files over 1 MB, while a comp
 languages switched off in `settings.json` (identifiers as in `src/Pillion.VisualStudio.Core/Rpc/DocumentLanguage.cs`):
 
 ```json
-{ "autocomplete": { "disabledLanguages": [ "python" ], "announceSuggestions": true } }
+{ "autocomplete": { "disabledLanguages": [ "python" ], "announceSuggestions": true, "ordering": "pillionFirst" } }
 ```
 
 A new suggestion is announced to screen readers with a UI Automation notification; `announceSuggestions: false`
@@ -254,6 +254,46 @@ switches that off.
 missing the status bar and the Pillion Output pane say "Inline suggestions need IntelliCode's automatic code completions
 on Visual Studio 2022"; the check runs when the extension loads and again whenever the Tools menu opens. Visual Studio
 2026 needs nothing extra.
+
+### When Copilot or IntelliCode also suggest
+
+GitHub Copilot (built into Visual Studio 2026) and IntelliCode's whole-line completions draw their proposals in the same
+ghost-text slot as Pillion. **Tools > Options > Pillion Programmer > Autocomplete** sets who gets it
+(`autocomplete.ordering` in `settings.json`):
+
+| Ordering | What happens |
+| --- | --- |
+| **Pillion first** (`pillionFirst`, the default) | Pillion asks for a suggestion on every keystroke. When another provider's proposal takes the slot and Pillion has a suggestion for the same caret, Pillion's replaces it (rules below). When Pillion has nothing, the other proposal stays. |
+| **Other provider first** (`competitorFirst`) | While Copilot or IntelliCode is present, Pillion's proposal manager defers to theirs and Pillion's source answers the editor with nothing; a Pillion suggestion fills in only when nothing else is displayed a second after the request. |
+| **Pillion on demand only** (`onDemand`) | No automatic Pillion suggestions. **Pillion: Suggest** (Ctrl+Alt+Shift+P, then S; Alt+\ is Go To Member in Visual Studio 2026) asks for one at the caret and shows it in place of whatever is displayed. The command works in the other modes too. |
+
+The first time a document opens with another provider active, an info bar asks once per machine: "Copilot (or
+IntelliCode) inline suggestions are also on. Choose: Pillion first, Copilot first, Pillion on demand only, or keep both as
+they are", with a link to that product's own settings (Pillion never changes them) and "Don't show again". IntelliCode on
+Visual Studio 2022 counts as active at start-up (its whole-line completions are local and on whenever Pillion's ghost text
+can show); Copilot, and IntelliCode on Visual Studio 2026, count once one of their proposals has been displayed, because
+Copilot's sign-in state has no public API. Answering writes `autocomplete.ordering` and
+`autocomplete.coexistencePromptDone`; closing the bar shows it again at the next start. The Autocomplete page's "Ask again"
+check box clears the flag.
+
+The rules under Pillion first (work item 1.4; measurements in `spikes/ProposalsSpike/FINDINGS.md`, "Coexistence
+countermeasure"):
+
+- Visual Studio's broker waits about 0.8 s for a source ordered ahead of another before it shows the later one, and
+  keeps the other sources' proposals queued. When Pillion's proposal stops matching what is typed, a competitor's queued
+  one takes over 8 to 40 ms later, and while it still matches no source is asked again.
+- When a competitor's proposal is displayed (taking over, or because Pillion answered after the broker's wait), Pillion
+  asks for its own at that caret outside the broker: the type-through cache first, then the pipeline (with the normal
+  debounce, again on every keystroke while the competitor's proposal is typed through).
+- Only when Pillion has a suggestion for exactly that caret and text does it take the slot: it keeps the suggestion,
+  dismisses the displayed proposal and makes the editor ask every source again (an explicit invocation), which Pillion's
+  source answers at once. The dismissal uses the user-Escape reason because it is the only one that clears the broker's
+  queue, so the other product records that proposal as dismissed by Escape.
+- At most one takeover per caret position; none while a completion list is open, while the user has cycled to the other
+  proposal with Alt+. (until the text changes), or when Pillion has nothing (the competitor is never left without a
+  proposal because of Pillion).
+- Pillion never takes Tab: Tab accepts whichever proposal is displayed. A Pillion suggestion replaced by another
+  provider's is counted as `displaced` in the autocomplete metrics (Show Status and the `metrics-*.jsonl` lines).
 
 ## Inline chat
 

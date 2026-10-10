@@ -71,6 +71,22 @@ public sealed class CoexistenceTests : IDisposable
         Assert.Equal(2, changes);
     }
 
+    [Fact]
+    public async Task Availability_KnowsWhenTheHostHasAnswered_SoThePromptFlagIsNotReadFromDefaults()
+    {
+        var settings = new InMemorySettingsService();
+        settings.Values["autocomplete"] = "{\"coexistencePromptDone\":true}";
+        using var availability = new AutocompleteAvailability(new FakeHostConnection().With<ISettingsService>(settings));
+
+        Assert.False(availability.HasHostAnswer);
+        Assert.False(availability.Settings.CoexistencePromptDone); // The defaults, before the host answered.
+
+        await availability.RefreshAsync();
+
+        Assert.True(availability.HasHostAnswer);
+        Assert.True(availability.Settings.CoexistencePromptDone);
+    }
+
     [Theory]
     [InlineData(AutocompleteOrdering.PillionFirst, false, false, true, SourceAnswer.Request)]
     [InlineData(AutocompleteOrdering.PillionFirst, true, false, true, SourceAnswer.Request)]

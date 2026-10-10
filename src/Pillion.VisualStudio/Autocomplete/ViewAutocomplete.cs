@@ -36,7 +36,11 @@ internal sealed class ViewAutocomplete
     private int _acceptPending;
     private (int Version, SuppressionReason Reason, AutocompleteSettings Settings)? _suppression;
     private bool _closed;
+    /// <summary>How long a push waits after the decision, so it never runs inside the suggestion service's own event handling.</summary>
+    private static readonly TimeSpan PushSettle = TimeSpan.FromMilliseconds(150);
+
     private Kept? _kept;
+    private CaretKey? _retriedAt;
     private long _following;
     private int _textChangePosted;
 
@@ -104,7 +108,13 @@ internal sealed class ViewAutocomplete
             return false;
         }
 
-        return CoexistencePolicy.ManagerProposes(feature.Engine.Settings.Ordering, CompetitorPresent(feature), IsKeptFor(KeyOf(caret.Position)));
+        var proposes = CoexistencePolicy.ManagerProposes(feature.Engine.Settings.Ordering, CompetitorPresent(feature), IsKeptFor(KeyOf(caret.Position)));
+        if (CoexistenceTrace.IsOn && (_kept is not null || !proposes))
+        {
+            CoexistenceTrace.Write("manager", "at=" + KeyOf(caret.Position) + " kept=" + (_kept?.Key.ToString() ?? "none") + " proposes=" + proposes);
+        }
+
+        return proposes;
     }
 
     /// <summary>Handles a proposal request from the broker (on a thread-pool thread).</summary>
@@ -149,6 +159,10 @@ internal sealed class ViewAutocomplete
         var key = KeyOf(caret.Position);
         var kept = TakeKept(key);
         var answer = CoexistencePolicy.Source(feature.Engine.Settings.Ordering, CompetitorPresent(feature), kept is not null);
+        if (CoexistenceTrace.IsOn && scenario == ProposalScenario.ExplicitInvocation)
+        {
+            CoexistenceTrace.Write("source.explicit", "at=" + key + " answer=" + answer);
+        }
         if (answer == SourceAnswer.FromKept && kept is not null && ProposalFactory.CreateInsertion(caret, kept.Text, PillionProposalId.Create(kept.Attempt, 0)) is { } keptProposal)
         {
             session.CancelPending();
@@ -490,6 +504,8 @@ internal sealed class ViewAutocomplete
 
     private async Task OnCompetitorDisplayedAsync(ProposalBase proposal)
     {
+        // Leave the suggestion service's event handler first; everything below may dismiss or invoke commands.
+        await Task.Yield();
         await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
         if (_closed || _host.Feature is not { } feature)
         {
@@ -500,6 +516,23 @@ internal sealed class ViewAutocomplete
         feature.Coexistence.CompetitorSeen(kind == CompetitorKind.None ? CompetitorKind.Other : kind, _host.JoinableTaskFactory);
         SyncTimeline(feature);
         var key = CurrentKey();
+        if (IsKeptFor(key) && _retriedAt != key && _host.Suggestions is { } suggestions)
+        {
+            // A push's explicit invocation re-showed a competitor proposal the broker still had queued, without asking
+            // any source (seen on 18.10 after the user pressed Esc). Clear the queue the only way that works and ask again once.
+            _retriedAt = key;
+            CoexistenceTrace.Write("push.retry", "id=" + proposal.ProposalId + " at=" + key);
+            await Task.Delay(PushSettle).ConfigureAwait(false);
+            await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
+            await suggestions.DismissProposalAsync(_view, ReasonForDismiss.DismissedAfterUserEscape, CancellationToken.None).ConfigureAwait(true);
+            await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
+            if (CurrentKey() == key && IsKeptFor(key))
+            {
+                InvokeExplicitRequest(feature);
+                return;
+            }
+        }
+
         var decision = Timeline.CompetitorShown(kind, key);
         CoexistenceTrace.Write("competitor.shown", "kind=" + kind + " id=" + proposal.ProposalId + " at=" + key + " displaced=" + decision.DisplacedAttempt + " actions=" + decision.Actions);
         Execute(feature, decision, key);
@@ -698,7 +731,15 @@ internal sealed class ViewAutocomplete
         }
         else if (decision.Has(CoexistenceActions.RequestAll))
         {
-            InvokeExplicitRequest(feature);
+            _host.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await Task.Delay(PushSettle + PushSettle).ConfigureAwait(false);
+                await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
+                if (!_closed && CurrentKey() == current && DisplayedPillionProposal() is null)
+                {
+                    InvokeExplicitRequest(feature);
+                }
+            }).FileAndForget("pillion/autocomplete/coexistencerequestall");
         }
     }
 
@@ -711,9 +752,18 @@ internal sealed class ViewAutocomplete
     {
         try
         {
+            // Never from inside the suggestion service's own display: dismissing and invoking re-entrantly, within a few
+            // milliseconds of a competitor's proposal being shown, left IntelliCode's broker on 17.14 asking no source again.
+            await Task.Delay(PushSettle).ConfigureAwait(false);
             await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
+            if (_closed || CurrentKey() != key)
+            {
+                return;
+            }
+
             if (IsCompletionActive() || DisplayedPillionProposal() is not null)
             {
+                CoexistenceTrace.Write("push.skipped", "attempt=" + attempt + " completionList=" + IsCompletionActive());
                 return;
             }
 
@@ -754,7 +804,12 @@ internal sealed class ViewAutocomplete
         }
 
         CoexistenceTrace.Write("dismiss", why);
-        _host.JoinableTaskFactory.RunAsync(() => suggestions.DismissProposalAsync(_view, ReasonForDismiss.DismissedAfterUserEscape, CancellationToken.None))
+        _host.JoinableTaskFactory.RunAsync(async () =>
+        {
+            await Task.Delay(PushSettle).ConfigureAwait(false);
+            await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
+            await suggestions.DismissProposalAsync(_view, ReasonForDismiss.DismissedAfterUserEscape, CancellationToken.None).ConfigureAwait(true);
+        })
             .FileAndForget("pillion/autocomplete/coexistencedismiss");
     }
 
@@ -769,7 +824,8 @@ internal sealed class ViewAutocomplete
         }
 
         var group = AutocompleteCommandFilter.InlineSuggestionCommands;
-        _ = commands.Exec(ref group, AutocompleteCommandFilter.NextSuggestion, 0, IntPtr.Zero, IntPtr.Zero);
+        var hr = commands.Exec(ref group, AutocompleteCommandFilter.NextSuggestion, 0, IntPtr.Zero, IntPtr.Zero);
+        CoexistenceTrace.Write("explicit", "hr=0x" + hr.ToString("X8", System.Globalization.CultureInfo.InvariantCulture));
     }
 
     private static string LanguageFromContentType(string contentType) => contentType switch

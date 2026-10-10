@@ -19,6 +19,7 @@ public sealed class AutocompleteAvailability : IDisposable
     private int _version;
     private AutocompleteSettings _settings = AutocompleteSettings.Default;
     private bool _started;
+    private volatile bool _hostAnswered;
     private bool _disposed;
 
     /// <summary>Initializes a new instance of the <see cref="AutocompleteAvailability"/> class. Call <see cref="Start"/> next.</summary>
@@ -32,6 +33,12 @@ public sealed class AutocompleteAvailability : IDisposable
 
     /// <summary>Raised, on any thread, when <see cref="Settings"/> changed.</summary>
     public event EventHandler? Changed;
+
+    /// <summary>
+    /// Gets a value indicating whether the settings have been read from the host at least once (until then
+    /// <see cref="Settings"/> holds the defaults, which must not be mistaken for the user's answers).
+    /// </summary>
+    public bool HasHostAnswer => _hostAnswered;
 
     /// <summary>Gets the current settings. Safe to read on any thread.</summary>
     public AutocompleteSettings Settings => Volatile.Read(ref _settings);
@@ -89,6 +96,7 @@ public sealed class AutocompleteAvailability : IDisposable
             return; // A newer read is on its way.
         }
 
+        _hostAnswered = true;
         Apply(settings);
     }
 

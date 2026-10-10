@@ -186,6 +186,17 @@ internal sealed class CoexistenceFeature
 
     private async Task MaybePromptAsync(JoinableTaskFactory joinableTaskFactory)
     {
+        // The once-per-machine flag lives in the host's settings: never decide on the defaults read before the host answered.
+        for (var waited = 0; !_feature.Availability.HasHostAnswer && waited < 120; waited++)
+        {
+            await Task.Delay(500).ConfigureAwait(false);
+        }
+
+        if (!_feature.Availability.HasHostAnswer)
+        {
+            return;
+        }
+
         await joinableTaskFactory.SwitchToMainThreadAsync();
         var competitors = CoexistencePrompt.ToPrompt(_feature.Availability.Settings, _detection, Observed, Volatile.Read(ref _promptShown) != 0);
         if (competitors == CompetitorKind.None || Interlocked.Exchange(ref _promptShown, 1) != 0)
