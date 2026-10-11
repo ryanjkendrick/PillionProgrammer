@@ -39,7 +39,8 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
             var original = view.TextBuffer.CurrentSnapshot.GetText();
 
             // The last key goes through the view's command chain, as from the keyboard: the broker asks Pillion's source on TypeChar.
-            await WaitForPillionProposalAsync(view, watch!, "Pillion's proposal after typing", () => TypeStatementPrefix(view, line: 6), () => TypeTheLastKeyAgain(view));
+            await InsertStatementPrefixAsync(view, watch!, line: 6);
+            await WaitForPillionProposalAsync(view, watch!, "Pillion's proposal after typing", () => AutocompleteChecks.Type(view, " "), () => TypeTheLastKeyAgain(view));
 
             await AcceptSuggestionAsync(view);
             var accepted = view.TextBuffer.CurrentSnapshot.GetLineFromLineNumber(6).GetText();
@@ -48,7 +49,8 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
             Assert.NotEqual(original, view.TextBuffer.CurrentSnapshot.GetText());
 
             // Esc dismisses and leaves the buffer as it was.
-            await WaitForPillionProposalAsync(view, watch!, "Pillion's proposal on the next line", () => TypeStatementPrefix(view, line: 7), () => TypeTheLastKeyAgain(view));
+            await InsertStatementPrefixAsync(view, watch!, line: 7);
+            await WaitForPillionProposalAsync(view, watch!, "Pillion's proposal on the next line", () => AutocompleteChecks.Type(view, " "), () => TypeTheLastKeyAgain(view));
             await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
             var beforeEsc = view.TextBuffer.CurrentSnapshot.GetText();
             AutocompleteChecks.Exec(view, VSConstants.VSStd2KCmdID.CANCEL);
@@ -208,12 +210,13 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
     private async Task SettleViewAsync(IWpfTextView view, ProposalWatch watch)
     {
         var clock = System.Diagnostics.Stopwatch.StartNew();
-        while (AutocompleteChecks.CannedRequestCount == 0 && clock.Elapsed < TimeSpan.FromSeconds(3))
+        var before = AutocompleteChecks.CannedRequestCount;
+        while (AutocompleteChecks.CannedRequestCount == before && clock.Elapsed < TimeSpan.FromSeconds(3))
         {
             await Task.Delay(50, HangMitigatingCancellationToken).ConfigureAwait(true);
         }
 
-        var asked = AutocompleteChecks.CannedRequestCount > 0;
+        var asked = AutocompleteChecks.CannedRequestCount > before;
         await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
         while (asked && !AutocompleteChecks.IsPillionDisplayed(view) && clock.Elapsed < TimeSpan.FromSeconds(5))
         {
@@ -240,13 +243,15 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
     }
 
     /// <summary>
-    /// Puts "        var total = " at the end of a line, as typing would leave it, with the last key typed: the text before the
-    /// final space goes in as an edit and the space through the view's command chain, so the proposal broker sees a
-    /// TypeChar. (Typing the letters would open Roslyn's completion list, and Pillion shows nothing while a list is open.)
+    /// Puts "        var total =" at the end of a line, as typing would leave it but for the last key (a space, which the test
+    /// then types through the view's command chain so the broker sees a TypeChar; typing the letters would open Roslyn's
+    /// completion list, and Pillion shows nothing while a list is open). The edit moves the caret, which makes the broker
+    /// ask Pillion's source as well; the test lets that request finish before the last key, for the reason given at
+    /// <see cref="SettleViewAsync"/>: a key typed while a request is in flight cancels it and produces none of its own.
     /// </summary>
-    private static void TypeStatementPrefix(IWpfTextView view, int line)
+    private async Task InsertStatementPrefixAsync(IWpfTextView view, ProposalWatch watch, int line)
     {
-        ThreadHelper.ThrowIfNotOnUIThread();
+        await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
         const string beforeTheLastKey = "        var total =";
         var end = view.TextSnapshot.GetLineFromLineNumber(line).End.Position;
         using (var edit = view.TextBuffer.CreateEdit())
@@ -256,7 +261,7 @@ public sealed partial class AutocompleteAndInlineEditTests(ITestOutputHelper out
         }
 
         view.Caret.MoveTo(new SnapshotPoint(view.TextSnapshot, end + beforeTheLastKey.Length));
-        AutocompleteChecks.Type(view, " ");
+        await SettleViewAsync(view, watch).ConfigureAwait(true);
     }
 
     /// <summary>Deletes the last typed character and types it again: the same text, and the broker sees a new keystroke.</summary>
