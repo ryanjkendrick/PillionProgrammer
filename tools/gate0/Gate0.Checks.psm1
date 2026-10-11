@@ -1,12 +1,16 @@
 #Requires -Version 7.5
 <#
 .SYNOPSIS
-    Shared helpers and checks for the Gate 0 evidence scripts (Invoke-Gate0.ps1 and Invoke-OfflineRun.ps1).
+    Shared helpers and checks for the gate evidence scripts: tools/gate0 (Invoke-Gate0.ps1, Invoke-OfflineRun.ps1) and
+    tools/gate1 (Invoke-Gate1.ps1, which imports this module for its run folder, logging, results, settings backup,
+    Visual Studio discovery and VSIX installation).
 
 .DESCRIPTION
     Everything here acts only on the Visual Studio Experimental Instance that Start-ExpInstance launched: UI
     Automation queries are rooted at that process's main window, and process queries filter on its process id. No
-    other window or process is touched.
+    other window or process is touched. The root suffix is Exp unless Find-VisualStudio (or Assert-Gate0Prerequisites)
+    is given another one with -RootSuffix (for example PillionG1, a private hive no IDE test run uses); launches,
+    installations and hive lookups then use that suffix.
 
     Settings: the scripts back up %LOCALAPPDATA%\PillionProgrammer\settings.json byte for byte and restore it in a
     finally block. settings.json never holds an API key (keys live in the Windows Credential Manager); these scripts
@@ -88,6 +92,7 @@ $script:Gate0 = [ordered]@{
     ChatElement = $null
     HostPids    = [System.Collections.Generic.HashSet[int]]::new()
     VsMajor     = $null
+    RootSuffix  = 'Exp'
     LaunchedAt  = $null
     SettingsBackup = $null
 }
@@ -99,13 +104,14 @@ $script:LogDir = Join-Path $script:PillionDataDir 'logs'
 #region Logging, steps and results
 
 function Initialize-Gate0Run {
-    <# Creates tools/gate0/out/<timestamp>/ (or the given folder) and starts the run log. Returns the folder. #>
+    <# Creates <OutRoot>/<timestamp>-<Label>/ (OutRoot defaults to tools/gate0/out) and starts the run log. Returns the folder. #>
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
-        [string]$Label = 'gate0'
+        [string]$Label = 'gate0',
+        [string]$OutRoot = 'tools/gate0/out'
     )
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $dir = Join-Path $RepoRoot "tools/gate0/out/$stamp-$Label"
+    $dir = Join-Path $RepoRoot "$OutRoot/$stamp-$Label"
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $script:Gate0.RunDir = (Resolve-Path $dir).Path
     $script:Gate0.LogFile = Join-Path $script:Gate0.RunDir 'run.log'
@@ -156,18 +162,23 @@ function Invoke-Gate0Step {
 }
 
 function Write-Gate0Results {
-    <# Writes gate0-results.json and gate0-summary.md into the run folder. #>
+    <#
+    Writes <FilePrefix>-results.json and <FilePrefix>-summary.md (gate0 by default) into the run folder. -Preamble is
+    Markdown placed after the header (Gate 1 puts its criteria table there).
+    #>
     param(
         [Parameter(Mandatory)][System.Collections.IDictionary]$Run,
         [Parameter(Mandatory)][object[]]$Steps,
-        [string]$Title = 'Gate 0 evidence run'
+        [string]$Title = 'Gate 0 evidence run',
+        [string]$FilePrefix = 'gate0',
+        [string]$Preamble
     )
     $Run['steps'] = $Steps
     $failed = @($Steps | Where-Object status -EQ 'Fail')
     $Run['overall'] = if ($failed.Count -gt 0) { 'Fail' } else { 'Pass' }
     $Run['finishedAt'] = (Get-Date).ToString('o')
-    $jsonPath = Join-Path $script:Gate0.RunDir 'gate0-results.json'
-    $Run | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $jsonPath -Encoding utf8
+    $jsonPath = Join-Path $script:Gate0.RunDir "$FilePrefix-results.json"
+    $Run | ConvertTo-Json -Depth 14 | Set-Content -LiteralPath $jsonPath -Encoding utf8
 
     $md = [System.Text.StringBuilder]::new()
     [void]$md.AppendLine("# $Title")
@@ -175,6 +186,10 @@ function Write-Gate0Results {
     [void]$md.AppendLine("Run folder: ``$($script:Gate0.RunDir)``  ")
     [void]$md.AppendLine("Started $($Run['startedAt']), finished $($Run['finishedAt']). Overall: **$($Run['overall'])** (Pending items are not failures).")
     [void]$md.AppendLine()
+    if ($Preamble) {
+        [void]$md.AppendLine($Preamble)
+        [void]$md.AppendLine()
+    }
     if ($Run.Contains('versions')) {
         [void]$md.AppendLine('## Versions')
         [void]$md.AppendLine()
@@ -201,7 +216,7 @@ function Write-Gate0Results {
         [void]$md.AppendLine(($s.details | ConvertTo-Json -Depth 8))
         [void]$md.AppendLine('```')
     }
-    $mdPath = Join-Path $script:Gate0.RunDir 'gate0-summary.md'
+    $mdPath = Join-Path $script:Gate0.RunDir "$FilePrefix-summary.md"
     Set-Content -LiteralPath $mdPath -Value $md.ToString() -Encoding utf8
     Write-Gate0Log "Results: $jsonPath"
     Write-Gate0Log "Summary: $mdPath"
@@ -218,9 +233,11 @@ function Find-VisualStudio {
     The build always uses the newest Visual Studio's MSBuild (the .NET 10 SDK needs MSBuild 18). The instance that is
     launched and driven is the newest one too, unless -DevEnvPath names another devenv.exe (for example Visual Studio
     2022's). When the two differ, DeployByBuild is false: the build cannot deploy into the other version's
-    Experimental Instance, so the caller installs the VSIX with the driven version's VSIXInstaller instead.
+    Experimental Instance, so the caller installs the VSIX with the driven version's VSIXInstaller instead. With a
+    -RootSuffix other than Exp, DeployByBuild is false too (the build deploys only to Exp) and ExpHive is that suffix's
+    hive.
     #>
-    param([string]$DevEnvPath)
+    param([string]$DevEnvPath, [string]$RootSuffix = 'Exp')
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
     if (-not (Test-Path $vswhere)) { throw "Visual Studio not found: vswhere.exe is missing ($vswhere). Install Visual Studio 2026 with the extension development workload." }
     # Pick the newest Visual Studio by version (not by install date): with Visual Studio 2022 installed beside 2026,
@@ -243,6 +260,7 @@ function Find-VisualStudio {
     if (-not (Test-Path $devenv)) { throw "Visual Studio found at $($vs.installationPath) but devenv.exe is missing." }
     $major = ($vs.installationVersion -split '\.')[0]
     $script:Gate0.VsMajor = $major
+    $script:Gate0.RootSuffix = $RootSuffix
     [pscustomobject]@{
         DisplayName = $vs.displayName
         Version     = $vs.catalog.productDisplayVersion
@@ -255,8 +273,9 @@ function Find-VisualStudio {
         MSBuild     = $msbuild
         BuildDisplayName = "$($build.displayName) $($build.catalog.productDisplayVersion)"
         BuildMajor  = ($build.installationVersion -split '\.')[0]
-        DeployByBuild = $vs.instanceId -eq $build.instanceId
-        ExpHive     = Join-Path $env:LOCALAPPDATA "Microsoft\VisualStudio\$major.0_$($vs.instanceId)Exp"
+        DeployByBuild = $vs.instanceId -eq $build.instanceId -and $RootSuffix -eq 'Exp'
+        RootSuffix  = $RootSuffix
+        ExpHive     = Join-Path $env:LOCALAPPDATA "Microsoft\VisualStudio\$major.0_$($vs.instanceId)$RootSuffix"
     }
 }
 
@@ -272,20 +291,20 @@ function Get-OllamaStatus {
 }
 
 function Assert-Gate0Prerequisites {
-    <# Checks PowerShell, Windows, Visual Studio, Ollama and the model, and that no Experimental Instance is running. #>
-    param([Parameter(Mandatory)][string]$Model, [string]$OllamaEndpoint = 'http://localhost:11434', [string]$DevEnvPath)
+    <# Checks PowerShell, Windows, Visual Studio, Ollama and the model, and that no instance with the root suffix is running. #>
+    param([Parameter(Mandatory)][string]$Model, [string]$OllamaEndpoint = 'http://localhost:11434', [string]$DevEnvPath, [string]$RootSuffix = 'Exp')
     if ($PSVersionTable.PSVersion.Major -lt 7 -or ($PSVersionTable.PSVersion.Major -eq 7 -and $PSVersionTable.PSVersion.Minor -lt 5)) { throw 'PowerShell 7.5 or later is required (run pwsh).' }
     if (-not $IsWindows) { throw 'These scripts run on Windows only.' }
-    $vs = Find-VisualStudio -DevEnvPath $DevEnvPath
+    $vs = Find-VisualStudio -DevEnvPath $DevEnvPath -RootSuffix $RootSuffix
     if ([int]$vs.BuildMajor -lt 18) { Write-Gate0Log "Building with $($vs.BuildDisplayName); the full solution needs MSBuild 18 (Visual Studio 2026)." -Level warn }
     if (-not $vs.DeployByBuild) {
-        if (-not (Test-Path $vs.VsixInstaller)) { throw "VSIXInstaller.exe not found at $($vs.VsixInstaller); it installs the VSIX into the $($vs.DisplayName) Experimental Instance." }
-        Write-Gate0Log "Driving $($vs.DisplayName) $($vs.Version) ($($vs.DevEnv)); building with $($vs.BuildDisplayName); the VSIX is installed with $($vs.VsixInstaller) /rootSuffix:Exp."
+        if (-not (Test-Path $vs.VsixInstaller)) { throw "VSIXInstaller.exe not found at $($vs.VsixInstaller); it installs the VSIX into the $($vs.DisplayName) instance /rootsuffix $RootSuffix." }
+        Write-Gate0Log "Driving $($vs.DisplayName) $($vs.Version) ($($vs.DevEnv)) /rootsuffix $RootSuffix; building with $($vs.BuildDisplayName); the VSIX is installed with $($vs.VsixInstaller) /rootSuffix:$RootSuffix."
     }
     $ollama = Get-OllamaStatus -Endpoint $OllamaEndpoint -Model $Model
     if (-not $ollama.ModelPulled) { throw "The model '$Model' is not pulled in Ollama (installed: $($ollama.Models -join ', ')). Run: ollama pull $Model" }
-    $exp = @(Get-CimInstance Win32_Process -Filter "Name='devenv.exe'" | Where-Object { $_.CommandLine -match '/rootsuffix\s+Exp\b' })
-    if ($exp.Count -gt 0) { throw "An Experimental Instance is already running (pid $($exp.ProcessId -join ', ')). Close it first; these scripts only drive an instance they launch." }
+    $exp = @(Get-CimInstance Win32_Process -Filter "Name='devenv.exe'" | Where-Object { $_.CommandLine -match "/rootsuffix\s+`"?$([regex]::Escape($RootSuffix))\b" })
+    if ($exp.Count -gt 0) { throw "An instance with /rootsuffix $RootSuffix is already running (pid $($exp.ProcessId -join ', ')). Close it first; these scripts only drive an instance they launch." }
     $others = @(Get-Process -Name 'Pillion.Host' -ErrorAction SilentlyContinue)
     if ($others.Count -gt 0) { Write-Gate0Log "Other Pillion.Host processes are running (pid $($others.Id -join ', ')); their lines may appear in the shared host log. They are not touched." -Level warn }
     [pscustomobject]@{ VisualStudio = $vs; Ollama = $ollama }
@@ -318,29 +337,38 @@ function Install-VsixToExp {
     Used when the build's own deployment cannot reach that instance (for example building with Visual Studio 2026's
     MSBuild and driving Visual Studio 2022). Returns what was done.
     #>
-    param([Parameter(Mandatory)]$VisualStudio, [Parameter(Mandatory)][string]$VsixPath)
+    param([Parameter(Mandatory)]$VisualStudio, [Parameter(Mandatory)][string]$VsixPath, [string]$RootSuffix)
+    if (-not $RootSuffix) { $RootSuffix = Get-VsRootSuffix $VisualStudio }
     $identity = Get-VsixManifestIdentity -VsixPath $VsixPath
-    $un =Start-Process -FilePath $VisualStudio.VsixInstaller -ArgumentList @('/quiet', '/rootSuffix:Exp', "/uninstall:$($identity.Id)") -PassThru -Wait
-    $in = Start-Process -FilePath $VisualStudio.VsixInstaller -ArgumentList @('/quiet', '/rootSuffix:Exp', "`"$VsixPath`"") -PassThru -Wait
-    Write-Gate0Log ("VSIXInstaller: uninstall {0} exit {1}; install exit {2} ({3})" -f $identity.Id, $un.ExitCode, $in.ExitCode, $VisualStudio.VsixInstaller)
-    if ($in.ExitCode -ne 0) { throw "VSIXInstaller failed to install $VsixPath into $($VisualStudio.ExpHive) (exit code $($in.ExitCode)); see the newest %TEMP%\dd_VSIXInstaller_*.log." }
+    $un =Start-Process -FilePath $VisualStudio.VsixInstaller -ArgumentList @('/quiet', "/rootSuffix:$RootSuffix", "/uninstall:$($identity.Id)") -PassThru -Wait
+    $in = Start-Process -FilePath $VisualStudio.VsixInstaller -ArgumentList @('/quiet', "/rootSuffix:$RootSuffix", "`"$VsixPath`"") -PassThru -Wait
+    Write-Gate0Log ("VSIXInstaller /rootSuffix:{4}: uninstall {0} exit {1}; install exit {2} ({3})" -f $identity.Id, $un.ExitCode, $in.ExitCode, $VisualStudio.VsixInstaller, $RootSuffix)
+    if ($in.ExitCode -ne 0) { throw "VSIXInstaller failed to install $VsixPath into /rootSuffix:$RootSuffix (exit code $($in.ExitCode)); see the newest %TEMP%\dd_VSIXInstaller_*.log." }
     # On Visual Studio 2022 17.14 the reinstall did not mark the Experimental Instance's configuration as changed, so
     # devenv kept its cached pkgdef configuration and never loaded the package (no Pillion commands on the Tools menu).
     # Rebuilding the configuration explicitly fixes that.
-    $cfg = Start-Process -FilePath $VisualStudio.DevEnv -ArgumentList @('/rootsuffix', 'Exp', '/updateconfiguration') -PassThru -Wait
-    Write-Gate0Log "devenv /rootsuffix Exp /updateconfiguration exit $($cfg.ExitCode)"
-    [ordered]@{ method = "$($VisualStudio.VsixInstaller) /quiet /rootSuffix:Exp, then devenv /rootsuffix Exp /updateconfiguration"; extensionId = $identity.Id; uninstallExitCode = $un.ExitCode; installExitCode = $in.ExitCode; updateConfigurationExitCode = $cfg.ExitCode }
+    $cfg = Start-Process -FilePath $VisualStudio.DevEnv -ArgumentList @('/rootsuffix', $RootSuffix, '/updateconfiguration') -PassThru -Wait
+    Write-Gate0Log "devenv /rootsuffix $RootSuffix /updateconfiguration exit $($cfg.ExitCode)"
+    [ordered]@{ method = "$($VisualStudio.VsixInstaller) /quiet /rootSuffix:$RootSuffix, then devenv /rootsuffix $RootSuffix /updateconfiguration"; extensionId = $identity.Id; uninstallExitCode = $un.ExitCode; installExitCode = $in.ExitCode; updateConfigurationExitCode = $cfg.ExitCode }
 }
 
 function Uninstall-VsixFromExp {
-    <# Removes the extension (by its VSIX identity) from the driven Visual Studio's Experimental Instance. #>
-    param([Parameter(Mandatory)]$VisualStudio, [Parameter(Mandatory)][string]$ExtensionId)
-    $un = Start-Process -FilePath $VisualStudio.VsixInstaller -ArgumentList @('/quiet', '/rootSuffix:Exp', "/uninstall:$ExtensionId") -PassThru -Wait
-    Write-Gate0Log "VSIXInstaller: uninstall $ExtensionId from $($VisualStudio.ExpHive) exit $($un.ExitCode)"
+    <# Removes the extension (by its VSIX identity) from the driven Visual Studio's instance with the root suffix (default: the one Find-VisualStudio used). #>
+    param([Parameter(Mandatory)]$VisualStudio, [Parameter(Mandatory)][string]$ExtensionId, [string]$RootSuffix)
+    if (-not $RootSuffix) { $RootSuffix = Get-VsRootSuffix $VisualStudio }
+    $un = Start-Process -FilePath $VisualStudio.VsixInstaller -ArgumentList @('/quiet', "/rootSuffix:$RootSuffix", "/uninstall:$ExtensionId") -PassThru -Wait
+    Write-Gate0Log "VSIXInstaller: uninstall $ExtensionId from /rootSuffix:$RootSuffix exit $($un.ExitCode)"
     # Drop the package from the cached configuration as well (see Install-VsixToExp).
-    $cfg = Start-Process -FilePath $VisualStudio.DevEnv -ArgumentList @('/rootsuffix', 'Exp', '/updateconfiguration') -PassThru -Wait
-    Write-Gate0Log "devenv /rootsuffix Exp /updateconfiguration exit $($cfg.ExitCode)"
+    $cfg = Start-Process -FilePath $VisualStudio.DevEnv -ArgumentList @('/rootsuffix', $RootSuffix, '/updateconfiguration') -PassThru -Wait
+    Write-Gate0Log "devenv /rootsuffix $RootSuffix /updateconfiguration exit $($cfg.ExitCode)"
     return $un.ExitCode
+}
+
+function Get-VsRootSuffix {
+    <# The root suffix of a Find-VisualStudio result (Exp for objects made before the property existed). #>
+    param([Parameter(Mandatory)]$VisualStudio)
+    if ($VisualStudio.PSObject.Properties.Name -contains 'RootSuffix' -and $VisualStudio.RootSuffix) { return $VisualStudio.RootSuffix }
+    return 'Exp'
 }
 
 function Find-DeployedExtension {
@@ -521,6 +549,7 @@ function Start-ExpInstance {
     rounds show in the host log.
     #>
     param([Parameter(Mandatory)][string]$DevEnv, [Parameter(Mandatory)][string]$Folder, [int]$TimeoutSec = 180)
+    $suffix = $script:Gate0.RootSuffix
     New-Item -ItemType Directory -Force -Path $Folder | Out-Null
     $readme = Join-Path $Folder 'hello.txt'
     if (-not (Test-Path $readme)) { 'Scratch folder for the Pillion Gate 0 run.' | Set-Content -LiteralPath $readme -Encoding utf8 }
@@ -528,7 +557,7 @@ function Start-ExpInstance {
     $envName = 'Logging__LogLevel__Pillion.Common.Connectivity'
     $previous = [Environment]::GetEnvironmentVariable($envName)
     [Environment]::SetEnvironmentVariable($envName, 'Debug')
-    try { $proc = Start-Process -FilePath $DevEnv -ArgumentList @('/rootsuffix', 'Exp', "`"$Folder`"") -PassThru }
+    try { $proc = Start-Process -FilePath $DevEnv -ArgumentList @('/rootsuffix', $suffix, "`"$Folder`"") -PassThru }
     finally { [Environment]::SetEnvironmentVariable($envName, $previous) }
 
     $script:Gate0.ExpPid = $proc.Id
@@ -537,13 +566,16 @@ function Start-ExpInstance {
     $script:Gate0.ChatElement = $null
     $script:Gate0.MainElement = $null
     $script:Gate0.HostPids.Clear()
-    Write-Gate0Log "Launched the Experimental Instance: pid $($proc.Id), folder $Folder"
+    Write-Gate0Log "Launched the Experimental Instance (/rootsuffix $suffix): pid $($proc.Id), folder $Folder"
 
+    # The main window (not the splash screen) carries the instance's name in its title: "Experimental Instance" for Exp,
+    # the root suffix itself for another hive.
+    $titlePattern = if ($suffix -eq 'Exp') { 'Experimental Instance' } else { "Experimental Instance|$([regex]::Escape($suffix))" }
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         $proc.Refresh()
         if ($proc.HasExited) { throw "The Experimental Instance exited during start-up (exit code $($proc.ExitCode))." }
-        if ($proc.MainWindowHandle -ne [IntPtr]::Zero -and $proc.MainWindowTitle -match 'Experimental Instance') {
+        if ($proc.MainWindowHandle -ne [IntPtr]::Zero -and $proc.MainWindowTitle -match $titlePattern) {
             $script:Gate0.MainHwnd = $proc.MainWindowHandle
             $script:Gate0.MainElement = $script:AE::FromHandle($proc.MainWindowHandle)
             Write-Gate0Log "Main window ready: '$($proc.MainWindowTitle)'"

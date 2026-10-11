@@ -438,3 +438,6 @@ TestResults/
 
 # Gate 0 evidence run output (logs, TRX files, screenshots, settings backups)
 tools/gate0/out/
+
+# Gate 1 evidence run output (logs, TRX files, scenario JSON, settings backups)
+tools/gate1/out/

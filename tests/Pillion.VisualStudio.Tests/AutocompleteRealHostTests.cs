@@ -96,6 +96,59 @@ public sealed class AutocompleteRealHostTests : IDisposable
         Assert.Equal(0, engine.Latency.Snapshot().Count);
     }
 
+    /// <summary>
+    /// Gate 1 row "Degradation" (design section 13, Degradation strategy) end to end over the real pipe: with the fake host
+    /// streaming a chunk every 1.6 s, twenty suggestions each take over 1.5 s, so the p95 of the five-minute window passes
+    /// 1.5 s; the next request waits the 350 ms debounce and is single-line. Once the slow samples are older than the
+    /// window (the clock is moved on five minutes), the rule recovers: 200 ms debounce and multi-line again.
+    /// </summary>
+    [Fact]
+    public async Task SlowHost_DegradesToTheLongerDebounceAndSingleLine_AndRecoversWhenTheSlowSamplesAge()
+    {
+        Environment.SetEnvironmentVariable(ChunkDelayVariable, "1600");
+        using var supervisor = await StartAsync();
+        var clock = new ShiftableClock();
+        var engine = new AutocompleteEngine(supervisor, availability: null, clock, _log);
+
+        // Twenty slow suggestions, one session each so they run side by side.
+        var slow = Enumerable.Range(0, LatencyWindow.MinimumSamples).Select(_ => engine.CreateSession()).ToList();
+        foreach (var session in slow)
+        {
+            _ = session.Start(InputAfterSignature(), CancellationToken.None);
+        }
+
+        await Wait.UntilAsync(() => engine.Latency.Snapshot().Count >= LatencyWindow.MinimumSamples, "twenty slow suggestions", timeoutMs: 60000);
+        slow.ForEach(s => s.CancelPending());
+        var degraded = engine.Metrics.Snapshot();
+        Assert.True(degraded.IsDegraded, "p95 " + degraded.Recent.TimeToSuggestion.P95);
+        Assert.True(degraded.Recent.TimeToSuggestion.P95 > LatencyWindow.DegradeAbove);
+        Assert.Equal(LatencyWindow.MinimumSamples, degraded.Recent.MultiLine);
+        Assert.Contains("degraded since", AutocompleteMetricsText.Describe(degraded, host: null), StringComparison.Ordinal);
+
+        // The next request: 350 ms debounce, single-line.
+        clock.ClearDelays();
+        var next = engine.CreateSession();
+        _ = next.Start(InputAfterSignature(), CancellationToken.None);
+        await Wait.UntilAsync(() => engine.Metrics.Snapshot().Recent.DegradedRequests == 1, "the degraded request to be sent");
+        next.CancelPending();
+        Assert.Contains(LatencyWindow.DegradedDebounce, clock.Delays);
+        Assert.Equal(LatencyWindow.MinimumSamples, engine.Metrics.Snapshot().Recent.MultiLine);
+
+        // Five minutes later the slow samples have left the window: 200 ms and multi-line again.
+        clock.Shift(LatencyWindow.Window + TimeSpan.FromSeconds(1));
+        Assert.False(engine.Latency.IsDegraded);
+        clock.ClearDelays();
+        var recovered = engine.CreateSession();
+        _ = recovered.Start(InputAfterSignature(), CancellationToken.None);
+        await Wait.UntilAsync(() => engine.Metrics.Snapshot().Recent.Requests >= 1, "the request after recovery to be sent");
+        recovered.CancelPending();
+        Assert.Contains(LatencyWindow.NormalDebounce, clock.Delays);
+        var after = engine.Metrics.Snapshot();
+        Assert.False(after.IsDegraded);
+        Assert.Equal(1, after.Recent.MultiLine);
+        Assert.Equal(0, after.Recent.DegradedRequests);
+    }
+
     private static CompletionInput InputAfterSignature() => new()
     {
         DocumentKey = "Calculator.cs",
@@ -128,6 +181,27 @@ public sealed class AutocompleteRealHostTests : IDisposable
                     Thread.Sleep(10);
                 }
             }
+        }
+    }
+
+    /// <summary>The system clock, moved on by <see cref="Shift"/>, which records every delay asked of it.</summary>
+    private sealed class ShiftableClock : ISupervisorClock
+    {
+        private long _offsetTicks;
+        private System.Collections.Concurrent.ConcurrentQueue<TimeSpan> _delays = new();
+
+        public System.Collections.Concurrent.ConcurrentQueue<TimeSpan> Delays => Volatile.Read(ref _delays);
+
+        public DateTimeOffset UtcNow => DateTimeOffset.UtcNow + TimeSpan.FromTicks(Interlocked.Read(ref _offsetTicks));
+
+        public void Shift(TimeSpan by) => Interlocked.Add(ref _offsetTicks, by.Ticks);
+
+        public void ClearDelays() => Volatile.Write(ref _delays, new System.Collections.Concurrent.ConcurrentQueue<TimeSpan>());
+
+        public Task DelayAsync(TimeSpan delay, CancellationToken cancellationToken)
+        {
+            Delays.Enqueue(delay);
+            return Task.Delay(delay, cancellationToken);
         }
     }
 

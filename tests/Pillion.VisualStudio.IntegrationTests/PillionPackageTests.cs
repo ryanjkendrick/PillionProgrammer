@@ -25,6 +25,12 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
     /// <summary>A posted operation that waited this long for the UI thread is marked in the output.</summary>
     private static readonly TimeSpan SlowOperation = TimeSpan.FromMilliseconds(500);
 
+    /// <summary>The generous limit of <see cref="PackageLoad_UsesLittleUiThreadCpu"/> (the design budget is 50 ms).</summary>
+    private static readonly TimeSpan MaxPackageLoadUiCpu = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>Gets or sets what the first folder open of the run measured (the tests of a run share one instance).</summary>
+    private static PackageLoadCpuReport? PackageLoadMeasurement { get; set; }
+
     [IdeFact]
     [TestOrder(0)]
     public async Task VisualStudio_IsAtLeast17_14()
@@ -42,14 +48,9 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
             await IsPackageLoadedAsync(),
             "The Pillion package was already loaded before any folder was opened: either another test ran first (check the test order) or something else loads it.");
 
-        await OpenScratchFolderAsync();
-        var took = await WaitForPackageLoadedAsync(TimeSpan.FromSeconds(60));
-        Output.WriteLine($"Package loaded {took.TotalMilliseconds:0} ms after the folder opened.");
-
-        // Initialization continues on a background thread after the package object exists; let it finish.
-        await PillionHostChecks.WaitForReadyAsync(TimeSpan.FromSeconds(30), HangMitigatingCancellationToken);
-
-        var log = await GetActivityLogAsync();
+        // Opens the folder, waits for the package and Ready, and samples the UI thread's CPU time on the way (reported
+        // by PackageLoad_UsesLittleUiThreadCpu).
+        var log = await OpenFolderAndMeasurePackageLoadAsync();
         Assert.True(log.RawText.Length > 0, "The in-memory Activity Log is empty (was Visual Studio started with /log?).");
         var about = log.EntriesAbout(PackageGuid).ToList();
         foreach (var entry in about)
@@ -59,6 +60,33 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
 
         var errors = about.Where(e => e.IsError).ToList();
         Assert.True(errors.Count == 0, "Activity Log errors about Pillion:" + Environment.NewLine + string.Join(Environment.NewLine, errors));
+    }
+
+    /// <summary>
+    /// Gate 1 row "VSIX cost in devenv.exe" (design section 13: 0 ms blocking at start-up, under 50 ms total UI-thread
+    /// CPU). This reports the UI thread's total CPU time from the Activity Log's "Begin package load" of the Pillion
+    /// package to the host's Ready, which also holds whatever else Visual Studio ran on that thread meanwhile (the folder
+    /// open finishing, other packages), next to an idle baseline of the same length, and, when PILLION_UI_THREAD_TIMINGS=1
+    /// was set at start-up, the sum of Pillion's own timed UI-thread stretches (which do not cover the package's
+    /// initialization). The assertion is deliberately generous (500 ms); the figure against the 50 ms
+    /// budget is in the Gate 1 report, with the extension-on against extension-off launches of tools/gate1.
+    /// </summary>
+    [IdeFact]
+    [TestOrder(2)]
+    public async Task PackageLoad_UsesLittleUiThreadCpu()
+    {
+        if (PackageLoadMeasurement is null)
+        {
+            // Run on its own (a test filter): measure here, if the package has not loaded yet.
+            Assert.False(await IsPackageLoadedAsync(), "The package is already loaded and Package_LoadsOnFolderOpen_WithNoActivityLogErrors did not measure its load; run both together.");
+            _ = await OpenFolderAndMeasurePackageLoadAsync();
+        }
+
+        var measured = PackageLoadMeasurement!;
+        Output.WriteLine(measured.ToString());
+        Assert.True(
+            measured.UiCpuLoadToReady <= MaxPackageLoadUiCpu,
+            $"The UI thread used {measured.UiCpuLoadToReady.TotalMilliseconds:0} ms of CPU between the package load and Ready (limit {MaxPackageLoadUiCpu.TotalMilliseconds:0} ms). {measured}");
     }
 
     [IdeFact]
@@ -171,6 +199,64 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
         Assert.Equal("Pillion Chat", caption as string);
 
         ErrorHandler.ThrowOnFailure(frame.CloseFrame((uint)__FRAMECLOSE.FRAMECLOSE_NoSave));
+    }
+
+    /// <summary>
+    /// Opens a scratch folder, waits for the package to load by itself and for Ready, sampling the UI thread's CPU time
+    /// every 10 ms from a background thread on the way, then samples an idle stretch of the same length as the load for a
+    /// baseline. Stores the result in <see cref="PackageLoadMeasurement"/> and returns the Activity Log.
+    /// </summary>
+    private async Task<ActivityLog> OpenFolderAndMeasurePackageLoadAsync()
+    {
+        await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
+        using var sampler = UiThreadCpuSampler.Start(ThreadCpuMeter.CurrentThreadId, TimeSpan.FromMilliseconds(10));
+        var folderOpening = sampler.Mark();
+        var folderOpeningTimestamp = Stopwatch.GetTimestamp();
+
+        await OpenScratchFolderAsync();
+        var took = await WaitForPackageLoadedAsync(TimeSpan.FromSeconds(60));
+        var loadedSeen = sampler.Mark();
+        Output.WriteLine($"Package loaded {took.TotalMilliseconds:0} ms after the folder opened.");
+
+        // Initialization continues on a background thread after the package object exists; let it finish.
+        await PillionHostChecks.WaitForReadyAsync(TimeSpan.FromSeconds(30), HangMitigatingCancellationToken);
+        var ready = sampler.Mark();
+        var readyTimestamp = Stopwatch.GetTimestamp();
+
+        // Pillion's own timed UI-thread work in the same window (only with PILLION_UI_THREAD_TIMINGS=1 from the start).
+        var timed = PillionHostChecks.PillionUiThreadWorkBetween(folderOpeningTimestamp, readyTimestamp);
+
+        var log = await GetActivityLogAsync();
+        var begin = log.EntriesAbout(PackageGuid)
+            .Where(e => e.Time is not null && e.Description.StartsWith("Begin package load", StringComparison.OrdinalIgnoreCase))
+            .Select(e => e.Time)
+            .FirstOrDefault();
+        var loadStart = begin is { } beginUtc && beginUtc >= folderOpening.AddSeconds(-1) ? beginUtc : loadedSeen;
+
+        // An idle stretch as long as the load, with the test's own awaits leaving the UI thread free.
+        var idleLength = ready - loadStart;
+        if (idleLength < TimeSpan.FromSeconds(1))
+        {
+            idleLength = TimeSpan.FromSeconds(1);
+        }
+
+        var idleStart = sampler.Mark();
+        await Task.Delay(idleLength, HangMitigatingCancellationToken);
+        var idleEnd = sampler.Mark();
+
+        PackageLoadMeasurement = new PackageLoadCpuReport(
+            LoadStartSource: begin is null ? "package seen loaded (no \"Begin package load\" entry with a time in the Activity Log)" : "Activity Log \"Begin package load\"",
+            FolderOpenToReady: ready - folderOpening,
+            LoadToReady: ready - loadStart,
+            UiCpuFolderOpenToReady: sampler.CpuBetween(folderOpening, ready),
+            UiCpuLoadToReady: sampler.CpuBetween(loadStart, ready),
+            UiCpuIdleBaseline: sampler.CpuBetween(idleStart, idleEnd),
+            IdleLength: idleEnd - idleStart,
+            Samples: sampler.Count)
+        {
+            PillionTimed = timed.Enabled ? $"{timed.Total.TotalMilliseconds:0.0} ms in {timed.Count} timed stretches ({(timed.Names.Length == 0 ? "none" : timed.Names)})" : "not recorded (PILLION_UI_THREAD_TIMINGS was not 1 when Visual Studio started)",
+        };
+        return log;
     }
 
     private async Task<IVsWindowFrame?> FindChatWindowAsync()

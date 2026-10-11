@@ -13,7 +13,8 @@ namespace Pillion.VisualStudio.IntegrationTests;
 /// <param name="Source">The component that wrote the entry.</param>
 /// <param name="Description">The message.</param>
 /// <param name="ComponentGuid">The package or component GUID, when the entry has one.</param>
-public sealed record ActivityLogEntry(string Type, string Source, string Description, string ComponentGuid)
+/// <param name="Time">When the entry was written (UTC), when the entry has a readable time.</param>
+public sealed record ActivityLogEntry(string Type, string Source, string Description, string ComponentGuid, DateTime? Time = null)
 {
     /// <summary>Gets a value indicating whether the entry is an error.</summary>
     public bool IsError => string.Equals(Type, "Error", StringComparison.OrdinalIgnoreCase);
@@ -79,7 +80,8 @@ public sealed class ActivityLog
                     (string?)e.Element("type") ?? string.Empty,
                     (string?)e.Element("source") ?? string.Empty,
                     (string?)e.Element("description") ?? string.Empty,
-                    (string?)e.Element("guid") ?? string.Empty))
+                    (string?)e.Element("guid") ?? string.Empty,
+                    ParseTime((string?)e.Element("time"))))
                 .ToList();
             return new ActivityLog(xml, entries);
         }
@@ -88,6 +90,17 @@ public sealed class ActivityLog
             throw new InvalidOperationException("The Activity Log buffer is not valid XML: " + ex.Message, ex);
         }
     }
+
+    /// <summary>Reads an entry's time, which Visual Studio writes in UTC as <c>2026/10/10 18:30:12.345</c>.</summary>
+    private static DateTime? ParseTime(string? text) =>
+        DateTime.TryParseExact(
+            text?.Trim(),
+            ["yyyy/MM/dd HH:mm:ss.fff", "yyyy/MM/dd HH:mm:ss.ff", "yyyy/MM/dd HH:mm:ss.f", "yyyy/MM/dd HH:mm:ss"],
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+            out var time)
+            ? time
+            : null;
 }
 
 /// <summary>
