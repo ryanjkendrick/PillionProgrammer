@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -35,8 +36,18 @@ public static class AutocompleteChecks
     /// <summary>The single-line completion the canned service streams (the fake host's).</summary>
     public const string CannedCompletion = "Calculator.Sum(numbers));";
 
+    private static int _cannedRequests;
+    private static int _lastCannedRequestTick;
+
+    /// <summary>Gets how many completion requests reached the canned service since <see cref="InstallCannedCompletions"/>: Pillion's source asking the model.</summary>
+    public static int CannedRequestCount => Volatile.Read(ref _cannedRequests);
+
     /// <summary>Makes autocomplete requests use the canned completion service.</summary>
-    public static void InstallCannedCompletions() => AutocompleteOverrides.ModelService = new CannedCompletionService();
+    public static void InstallCannedCompletions()
+    {
+        Volatile.Write(ref _cannedRequests, 0);
+        AutocompleteOverrides.ModelService = new CannedCompletionService();
+    }
 
     /// <summary>Restores Pillion Host's model service.</summary>
     public static void RemoveCannedCompletions() => AutocompleteOverrides.ModelService = null;
@@ -47,7 +58,7 @@ public static class AutocompleteChecks
     public static string? DisplayedProposalId(ITextView view)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
-        return Suggestions()?.GetDisplayedProposal(view)?.ProposalId;
+        return SuggestionService()?.GetDisplayedProposal(view)?.ProposalId;
     }
 
     /// <summary>Gets a value indicating whether the displayed proposal is Pillion's.</summary>
@@ -85,6 +96,172 @@ public static class AutocompleteChecks
         var items = session.GetComputedItems(CancellationToken.None);
         return items.SuggestionItemSelected || items.SelectedItem is null ? null : items.SelectedItem.DisplayText;
     }
+
+    /// <summary>
+    /// Describes what the editor and Pillion's adapter are doing in a view, for a failure message: whether Pillion's source
+    /// reached the model, what is displayed, the completion list and the caret line.
+    /// </summary>
+    /// <param name="view">The view.</param>
+    /// <returns>One line.</returns>
+    public static string DescribeState(IWpfTextView view)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var lastRequest = Volatile.Read(ref _cannedRequests) == 0
+            ? "none"
+            : (Environment.TickCount - Volatile.Read(ref _lastCannedRequestTick)).ToString(System.Globalization.CultureInfo.InvariantCulture) + " ms ago";
+        string? selected = null;
+        var active = false;
+        try
+        {
+            active = IsCompletionActive(view);
+            if (active)
+            {
+                var componentModel = (IComponentModel)Package.GetGlobalService(typeof(SComponentModel));
+                using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                var items = componentModel.GetService<IAsyncCompletionBroker>().GetSession(view)?.GetComputedItems(limit.Token);
+                selected = items is null ? null : items.SuggestionItemSelected ? "<suggestion mode>" : items.SelectedItem?.DisplayText;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            selected = "<computing>";
+        }
+
+        var caret = view.Caret.Position.BufferPosition;
+        return $"canned requests: {CannedRequestCount} (last {lastRequest}); displayed proposal: {DisplayedProposalId(view) ?? "none"}; "
+            + $"completion list: {(active ? "open" : "closed")}, selected {selected ?? "nothing"}; keyboard focus: {view.HasAggregateFocus}; "
+            + $"Pillion state on the view: {HasPillionViewState(view)}; model override set: {AutocompleteOverrides.ModelService is not null}; "
+            + $"caret line {caret.GetContainingLine().LineNumber}: \"{caret.GetContainingLine().GetText().Trim()}\"";
+    }
+
+    /// <summary>
+    /// Asks the view's proposal broker directly, for a failure message: whether any source is registered, whether the
+    /// proposal managers (Pillion's among them) say a proposal may be generated at the caret, and which source answers an
+    /// explicit invocation and a typed character, and after how long. It makes every source run again, Pillion's included.
+    /// </summary>
+    /// <param name="view">The view.</param>
+    /// <param name="timeout">How long to wait for the sources.</param>
+    /// <param name="cancellationToken">Cancels the probe.</param>
+    /// <returns>One line.</returns>
+    public static async Task<string> ProbeBrokerAsync(IWpfTextView view, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        var componentModel = (IComponentModel)Package.GetGlobalService(typeof(SComponentModel));
+        var provider = componentModel.DefaultExportProvider.GetExportedValueOrDefault<Microsoft.VisualStudio.Language.Proposals.ProposalBrokerProviderBase>();
+        if (provider is null)
+        {
+            return "broker: no proposal broker provider";
+        }
+
+        var broker = provider.GetProposalBroker(view);
+        var caret = view.Caret.Position.VirtualBufferPosition;
+        var text = new System.Text.StringBuilder("broker: sources registered ")
+            .Append(broker.AnyProposalSources)
+            .Append(", managers allow a proposal at the caret ")
+            .Append(broker.ShouldGenerateProposal(caret, Microsoft.VisualStudio.Language.Proposals.ProposalScenario.TypeChar, ' '));
+        foreach (var scenario in new[] { Microsoft.VisualStudio.Language.Proposals.ProposalScenario.ExplicitInvocation, Microsoft.VisualStudio.Language.Proposals.ProposalScenario.TypeChar })
+        {
+            _ = text.Append("; ").Append(scenario).Append(':');
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            limit.CancelAfter(timeout);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var requestsBefore = CannedRequestCount;
+            try
+            {
+                var queue = broker.RequestProposals(caret, null!, scenario, scenario == Microsoft.VisualStudio.Language.Proposals.ProposalScenario.TypeChar ? ' ' : '\0', TimeSpan.Zero, limit.Token);
+                while (true)
+                {
+                    var collection = await queue.DequeueAsync(limit.Token).ConfigureAwait(true);
+                    _ = text.Append(' ').Append(collection.SourceName).Append(" answered after ").Append(clock.ElapsedMilliseconds).Append(" ms with ").Append(collection.Proposals.Count).Append(" proposal(s),");
+                }
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                _ = text.Append(" no further answer within ").Append(timeout.TotalSeconds.ToString("0", System.Globalization.CultureInfo.InvariantCulture)).Append(" s,");
+            }
+            catch (InvalidOperationException)
+            {
+                _ = text.Append(" every source has answered,");
+            }
+
+            _ = text.Append(" canned requests it caused: ").Append(CannedRequestCount - requestsBefore);
+        }
+
+        return text.ToString();
+    }
+
+    /// <summary>
+    /// Asks every other proposal source provider's source for a proposal at the caret directly, for a failure message: which
+    /// of Copilot's and IntelliCode's sources answer, and after how long, and which never do within the timeout. (A source
+    /// that does not answer holds up the proposal broker's request for the view, and with it Pillion's.)
+    /// </summary>
+    /// <param name="view">The view.</param>
+    /// <param name="timeout">How long to wait for each source (they are asked at the same time).</param>
+    /// <param name="cancellationToken">Cancels the probe.</param>
+    /// <returns>One line.</returns>
+    public static async Task<string> ProbeSourcesAsync(IWpfTextView view, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        var componentModel = (IComponentModel)Package.GetGlobalService(typeof(SComponentModel));
+        var caret = view.Caret.Position.VirtualBufferPosition;
+        var probes = new List<Task<string>>();
+        foreach (var export in componentModel.DefaultExportProvider.GetExports<Microsoft.VisualStudio.Language.Proposals.ProposalSourceProviderBase, IDictionary<string, object>>())
+        {
+            var name = export.Metadata.TryGetValue("Name", out var value) ? value as string ?? "<unnamed>" : "<unnamed>";
+            if (PillionProposalId.IsPillion(name) || name.StartsWith("PillionProgrammer", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var provider = export.Value;
+            probes.Add(ProbeSourceAsync(name, provider, view, caret, timeout, cancellationToken));
+        }
+
+        return "sources: " + (probes.Count == 0 ? "no other source" : string.Join("; ", await Task.WhenAll(probes).ConfigureAwait(true)));
+    }
+
+    private static async Task<string> ProbeSourceAsync(
+        string name,
+        Microsoft.VisualStudio.Language.Proposals.ProposalSourceProviderBase provider,
+        IWpfTextView view,
+        Microsoft.VisualStudio.Text.VirtualSnapshotPoint caret,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        limit.CancelAfter(timeout);
+        try
+        {
+            var source = await provider.GetProposalSourceAsync(view, limit.Token).ConfigureAwait(true);
+            if (source is null)
+            {
+                return $"{name}: no source for the view after {clock.ElapsedMilliseconds} ms";
+            }
+
+            var collection = await source.RequestProposalsAsync(caret, null!, Microsoft.VisualStudio.Language.Proposals.ProposalScenario.ExplicitInvocation, '\0', limit.Token).ConfigureAwait(true);
+            return $"{name}: answered after {clock.ElapsedMilliseconds} ms with {collection?.Proposals.Count ?? 0} proposal(s)";
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return $"{name}: no answer within {timeout.TotalSeconds:0} s ({clock.ElapsedMilliseconds} ms)";
+        }
+#pragma warning disable CA1031 // A diagnostic: whatever a source throws is the answer.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            return $"{name}: {ex.GetType().Name} after {clock.ElapsedMilliseconds} ms";
+        }
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether Pillion's adapter has created its state for a view, which it does the first time the
+    /// proposal broker asks Pillion's proposal source or manager provider about the view.
+    /// </summary>
+    /// <param name="view">The view.</param>
+    /// <returns><see langword="true"/> when the broker has reached Pillion for the view.</returns>
+    public static bool HasPillionViewState(ITextView view) =>
+        view.Properties.PropertyList.Any(p => p.Key is Type type && type.Name == "ViewAutocomplete");
 
     /// <summary>Types text one character at a time through the view's command chain.</summary>
     /// <param name="view">The view.</param>
@@ -164,7 +341,9 @@ public static class AutocompleteChecks
         return await signals.GetOutputPaneTextAsync("Pillion Programmer", 20000, cancellationToken).ConfigureAwait(false) ?? string.Empty;
     }
 
-    private static SuggestionServiceBase? Suggestions()
+    /// <summary>Gets Visual Studio's suggestion service (the proposal broker's front end), or <see langword="null"/> when there is none.</summary>
+    /// <returns>The service.</returns>
+    public static SuggestionServiceBase? SuggestionService()
     {
         var componentModel = (IComponentModel)Package.GetGlobalService(typeof(SComponentModel));
         return componentModel.DefaultExportProvider.GetExportedValueOrDefault<SuggestionServiceBase>();
@@ -190,6 +369,8 @@ public static class AutocompleteChecks
     {
         public async IAsyncEnumerable<CompletionChunk> CompleteAsync(CompletionRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
         {
+            _ = Interlocked.Increment(ref _cannedRequests);
+            Volatile.Write(ref _lastCannedRequestTick, Environment.TickCount);
             var text = CannedCompletion + "\n        Console.WriteLine(\"more\");";
             for (var i = 0; i < text.Length; i += 8)
             {
