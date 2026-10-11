@@ -7,12 +7,14 @@ measured and lists what only the product owner can do. Work item 1.18.
 Date: 2026-10-10. Machine: the reference machine (Ryzen 7 3700X, 8 cores and 16 threads, 32 GB, RTX 2080 SUPER 8 GB,
 driver 617.42, Windows 11 Pro 26300); Visual Studio 2026 18.10.3 and Visual Studio 2022 17.14.41 with IntelliCode; Ollama
 0.40.1 with `qwen2.5-coder:7b` (digest `dae161e27b0e`, 7.6B, Q4_K_M), `qwen2.5-coder:1.5b` (`d7372fd82851`, Q4_K_M) and
-`gemma4:e2b`. Code: branch `feature/gate1-evidence`, which is `develop` at `4845f06` (every phase 1 work item through
-PR 39) plus the scripts and tests of this work item. VSIX 0.1.0, Pillion Host 0.1.0, contract 1.2. No provider key is
+`gemma4:e2b`. Code: branch `feature/gate1-evidence`: `develop` at `4845f06` (every phase 1 work item through PR 39) plus
+the scripts and tests of this work item for runs 1 to 5, and after merging `develop` at `f6b6796` (PR 40, Pillion's own
+UI-thread timings) for runs 6 and 7. VSIX 0.1.0, Pillion Host 0.1.0, contract 1.2. No provider key is
 stored on this machine (`cmdkey /list:PillionProgrammer/*` lists only two `test-probe-*` credentials left by tests), so the
 cloud rows are pending.
 
-**Summary.** Of the 17 criteria, 9 pass on the measured version(s), 4 fail and 4 are pending the product owner. The
+**Summary.** Of the 17 criteria, 9 pass (keystroke latency only borderline on 17.14), 4 fail and 4 are pending the
+product owner. The
 failures are the 7B autocomplete p50 (about 0.4 to 0.56 s against 300 ms in the IDE), the CPU-only 1.5B p50 (about 1.0 s
 against 600 ms, expected), the prefix cache hit rate in the IDE (2 to 3% against 70%) and the VSIX's UI-thread CPU (not
 shown to be under 50 ms; the upper bound measured is 78 to 266 ms). Behind the first and third is a finding that matters
@@ -59,6 +61,8 @@ private hives `PillionG1` and `PillionG1Off`.
 | `20261010-232940-gate1` | 18.10.3 | 2790/0/0 | 21/0/17 | 20/0/0 | Pass | **Pass**, 1 pending |
 | `20261010-234936-gate1` | 17.14.41 (`-DevEnvPath`) | 2790/0/0 | 18/1/19: `InlineEditLiveTests.Gemma_ExtractsTheValidation...` (open issue 8) | 20/0/0 | Pass | 1 failed (that live test), 1 pending |
 | `20261011-000922-gate1` | 18.10.3 | 2790/0/0 | 18/1/19: the same Gemma live test | 20/0/0 | Pass | 1 failed (that live test), 1 pending |
+| `20261011-003242-gate1` (after merging `develop`) | 18.10.3 | 2811/0/0 | 21/0/17 | 20/0/0 | Pass | **Pass**, 1 pending |
+| `20261011-005306-gate1` (after merging, `-SkipTests -SkipCost`) | 17.14.41 | skipped | skipped | 20/0/0 | skipped | **Pass**, 1 pending |
 
 The skipped live tests are the cloud adapters' (no keys). In every run `settings.json` came back with its original hash
 (`562D8573...A9A4CFE`), no `devenv.exe` or `Pillion.Host.exe` of the run was left, the extension was uninstalled from
@@ -67,19 +71,20 @@ fixed in the script.
 
 ## Gate 1 criteria
 
-18.10 figures are from runs `20261010-202116`, `20261010-232940` and `20261011-000922` ("runs 1, 3 and 5"; run 2's typing
-passes did not finish), 17.14 figures from `20261010-234936`; the evidence paths are relative to those run folders.
+18.10 figures are from runs `20261010-202116`, `20261010-232940`, `20261011-000922` and `20261011-003242` ("runs 1, 3, 5
+and 6"; run 2's typing passes did not finish), 17.14 figures from `20261010-234936` and `20261011-005306` ("runs 4 and 7");
+the evidence paths are relative to those run folders.
 
 | Criterion | Target | Status | Measured: 18.10 | Measured: 17.14 | How measured | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | Ghost text works on 17.14 (IntelliCode on) and 18.x for C#, TypeScript and Python | Multi-line and single-line, Tab, Esc, word accept, next/previous; none while a completion item is selected; Tab never taken from another provider | **Pass (C#)**; TypeScript and Python **Pending product owner** (by hand) | `ProposalSource_ShowsGhostText_WithTheCompetitorEnabled` and `ProposalSource_NoProposal_WhileACompletionListItemIsSelected` passed with Copilot on, every run; real model: a Pillion proposal at 24 to 27 of 40 line-break pauses (show rate 68 to 81%) | Same two tests passed with IntelliCode on; a Pillion proposal at 34 and 35 of 40 pauses | IDE integration tests (canned completions); the typing scenario on the real host | `ide-VS18/ide-VS18.trx`, `ide-VS17/ide-VS2022.trx`, `scenarios/autocomplete-*-VS*.json` |
 | IntelliCode run-time check on 17.x | Status bar and Output pane report it; nothing crashes | **Pass** | n/a | `IntelliCodeCheck_ReportsWhenAutomaticCompletionsAreOff` passed | IDE integration test with the option off | `ide-VS17/ide-VS2022.trx` |
 | Autocomplete latency, 1.5B on the CPU | p50 600 ms, p95 1,500 ms, prompt within 1,024 tokens | **Fail** (p50) | First token p50 1,025 / 940 ms, p95 1,057 / 1,037 ms (runs 3 / 5); 1,123 / 13,825 ms in run 2 with live classes in parallel; prompt 991 to 993 estimated tokens | 980 / 1,008 ms | `AutocompleteLiveTests.Latency_Small_OnTheCpu_Direct` (the gateway's 1,024-token prompt posted with `num_gpu` 0). Not measured in the IDE: an Ollama provider entry has no `num_gpu` setting, so the host cannot force the CPU | `tests-live/*.trx` |
-| Autocomplete latency, 7B on the GPU | p50 300 ms, p95 800 ms, prompt within 2,048 tokens with a cached prefix | **Fail** (p50) | IDE time to suggestion p50 434 / 557 / 420 ms, p95 776 / 760 / 730 ms (runs 1 / 3 / 5, 27 to 30 suggestions each); first chunk p50 57 to 171 ms; visible after the line break (200 ms debounce included) p50 641 to 662 ms; largest prompt 286 tokens. Live, gateway only: first token p50 278 to 281 ms, p95 289 to 321 ms; total p50 421 to 424 ms, p95 443 to 478 ms at 2,043 to 2,045 tokens | IDE p50 420 ms, p95 730 ms; live 277 / 319 ms | Typing scenario: `IAutocompleteMetrics` time to suggestion (from the request leaving the debounce to the first suggestion worth showing); live test `Latency_Large_OnTheGpu` | `scenarios/autocomplete-strong-VS*.json` (its `showStatusText` is the Show Status section), `metrics-during-run.jsonl` |
+| Autocomplete latency, 7B on the GPU | p50 300 ms, p95 800 ms, prompt within 2,048 tokens with a cached prefix | **Fail** (p50) | IDE time to suggestion p50 434 / 557 / 420 / 611 ms, p95 776 / 760 / 730 / 730 ms (runs 1 / 3 / 5 / 6, 23 to 30 suggestions each); first chunk p50 57 to 171 ms; visible after the line break (200 ms debounce included) p50 641 to 662 ms; largest prompt 286 tokens. Live, gateway only: first token p50 278 to 281 ms, p95 289 to 321 ms; total p50 421 to 424 ms, p95 443 to 478 ms at 2,043 to 2,045 tokens | IDE p50 420 / 568 ms, p95 730 / 739 ms (runs 4 / 7); live 277 / 319 ms | Typing scenario: `IAutocompleteMetrics` time to suggestion (from the request leaving the debounce to the first suggestion worth showing); live test `Latency_Large_OnTheGpu` | `scenarios/autocomplete-strong-VS*.json` (its `showStatusText` is the Show Status section), `metrics-during-run.jsonl` |
 | Autocomplete latency, cloud Fast | p50 400 ms, p95 1,000 ms; 3 s timeout dropped silently | **Pending product owner** | No key stored | No key stored | `Gate1_Cloud_FastAutocompleteAndChatFirstToken` with `-CloudProviderId` | `scenarios/cloud-VS*.json` ("pending") |
-| Keystroke latency with autocomplete on | +0 ms p50, +2 ms p95 | **Pass** | TypeChar on the UI thread, on (1.5B) against off: p50 3.37 / 3.61 ms, p95 10.71 / 11.47 ms (run 1: -0.24 / -0.76 ms); run 3: p50 3.10 / 4.21, p95 4.29 / 12.72 ms; run 5: 3.08 / 3.18, 4.61 / 11.13 ms (on is not slower; the off pass, last in each run, was noisier) | p50 2.54 / 2.52 ms, p95 5.80 / 4.43 ms: **+0.02 ms p50, +1.37 ms p95** (7B: +0.15 / +1.30 ms) | Typing scenario: each TypeChar timed until it returns, 704 per pass; the character is in the buffer when it does (0 misses) | `scenarios/autocomplete-{strong,fast,off}-VS*.json`, `typing.typeChar` |
+| Keystroke latency with autocomplete on | +0 ms p50, +2 ms p95 | **Pass** on 18.10; **borderline** on 17.14 (p95 +1.3 to +2.3 ms) | TypeChar on the UI thread, on (1.5B) against off: p50 3.37 / 3.61 ms, p95 10.71 / 11.47 ms (run 1: -0.24 / -0.76 ms); run 3: p50 3.10 / 4.21, p95 4.29 / 12.72 ms; run 5: 3.08 / 3.18, 4.61 / 11.13 ms (on is not slower; the off pass, last in each run, was noisier) | Run 4: p50 2.54 / 2.52 ms, p95 5.80 / 4.43 ms, **+0.02 ms p50, +1.37 ms p95** (7B: +0.15 / +1.30 ms); run 7: **+0.09 / +1.82 ms** (7B: +0.31 / **+2.28** ms) | Typing scenario: each TypeChar timed until it returns, 704 per pass; the character is in the buffer when it does (0 misses) | `scenarios/autocomplete-{strong,fast,off}-VS*.json`, `typing.typeChar` |
 | Prefix cache hit rate during steady typing | 70% or more | **Fail** in the IDE | Host counters over each pass: 2 to 3% (1 repeat in 31 to 51 requests; runs 1, 3, 5); live test (a request per keystroke, as the row was designed): 33 of 35 (94%) | 2% and 2% | Gateway counters (`GetAutocompleteCountersAsync`) before and after each typing pass; live tests' steady-typing loop | `scenarios/autocomplete-*-VS*.json` `autocomplete.host` |
-| VSIX cost in devenv.exe | 0 ms blocking, under 50 ms UI-thread CPU, 60 MB or less added working set | **Fail** (UI-thread CPU not shown under 50 ms); blocking and working set pass | UI thread CPU from "Begin package load" to Ready 78 / 203 / 109 ms (runs 1 / 3 / 5; 109 ms also in run 2), idle baseline 0 to 31 ms per second: an upper bound, since Visual Studio's own work on that thread in the same second is counted; working set on against off +2.3 / +17.2 / -9.8 / -5.2 MB (runs 1, 2, 3, 5); on/off UI-thread CPU deltas -258 / -156 / +70 / -48 ms (launch-to-launch noise is a few hundred ms); background load (Begin and End package load after the folder opened) | Upper bound 266 ms (235 above idle); working set +20.4 MB | `PackageLoad_UsesLittleUiThreadCpu` (UI thread sampled every 10 ms from a background thread; generous 500 ms assertion, passed); extension-on (`PillionG1`) against extension-off (`PillionG1Off`) launches, two pairs | IDE TRX output line, `gate1-results.json` `data.cost` |
+| VSIX cost in devenv.exe | 0 ms blocking, under 50 ms UI-thread CPU, 60 MB or less added working set | **Fail** (UI-thread CPU not shown under 50 ms); blocking and working set pass | Pillion's own timed UI-thread work (PR 40's `UiThreadTimings`, run 6) from the folder open to Ready: **2.6 ms** in 10 stretches (Output pane flushes, status bar), which does not include the package's own initialization on the UI thread (not timed); UI thread CPU from "Begin package load" to Ready 78 / 203 / 109 ms (runs 1 / 3 / 5; 109 ms also in run 2), idle baseline 0 to 31 ms per second: an upper bound, since Visual Studio's own work on that thread in the same second is counted; working set on against off +2.3 / +17.2 / -9.8 / -5.2 MB (runs 1, 2, 3, 5); on/off UI-thread CPU deltas -258 / -156 / +70 / -48 ms (launch-to-launch noise is a few hundred ms); background load (Begin and End package load after the folder opened) | Run 7: timed Pillion work 9.1 ms in 12 stretches (Output pane, status bar, the IntelliCode check); upper bound 266 / 344 ms (runs 4 / 7); working set +20.4 MB | `PackageLoad_UsesLittleUiThreadCpu` (UI thread sampled every 10 ms from a background thread; generous 500 ms assertion, passed); extension-on (`PillionG1`) against extension-off (`PillionG1Off`) launches, two pairs | IDE TRX output line, `gate1-results.json` `data.cost` |
 | Chat first token, cloud | p50 1.5 s, p95 3 s, including context assembly | **Pending product owner** | Local `qwen2.5-coder:7b` (information): first visible text p50 90 / 99 / 92 ms, p95 162 / 175 / 218 ms (5 messages a run) | Local p50 93 ms, p95 437 ms | Chat window: input, Enter, first reply text | `scenarios/chat-mentions-VS*.json` |
 | Context assembly without retrieval | p50 150 ms, p95 400 ms | **Pass** | Slowest case (exact tiktoken, 128k window, 69,144 prompt tokens): p50 38 to 48 ms, p95 238 to 268 ms; calibrated estimate p50 5 to 7 ms | Same tests (they do not depend on Visual Studio) | `ContextAssemblyBenchmarkTests`, 40 runs after 3 warm-ups | `tests-unit/*.trx` |
 | Inline chat preview, first line | p50 2 s, p95 5 s; Enter one edit and one undo step; Esc leaves nothing to undo | **Pass** | First line p50 352 / 370 / 348 ms, p95 928 / 827 / 1,080 ms; first text p50 198 / 229 / 206 ms (10 inline chat runs each: extract and `/doc`); buffer untouched after Esc 10 of 10; Enter and Esc tests passed | First line p50 272 ms, p95 1,289 ms; Enter and Esc tests passed | Inline chat on the real host (command, prompt, Enter, `ProposalChanged`); IDE integration tests | `scenarios/inline-chat-VS*.json` |
@@ -87,7 +92,7 @@ passes did not finish), 17.14 figures from `20261010-234936`; the evidence paths
 | Degradation | p95 over 1.5 s for five minutes: debounce 350 ms, single-line; recovers | **Pass** | New component test `AutocompleteRealHostTests.SlowHost_DegradesToTheLongerDebounceAndSingleLine_AndRecoversWhenTheSlowSamplesAge` (real pipe, fake host at 1.6 s a chunk: degraded after 20 slow suggestions, next request 350 ms and single-line, 200 ms and multi-line once the samples age out), plus the rule's unit tests | Same | Component test, no IDE (the brief's choice) | `tests-unit/*.trx` |
 | Completion evaluation baseline | Golden set against the recommended local model | **Pending product owner** | No golden-set repository (1.17) | | | |
 | Offline run | Every check above with the network disabled | **Pending product owner** | `Invoke-OfflineRun.ps1 -Phase 1` written; dry-run only | | Elevated, by the product owner | Dry-run output below |
-| CI | Green on develop with the 18.x job and a 17.14 job | **Pass** | Latest develop runs green: https://github.com/ryanjkendrick/PillionProgrammer/actions/runs/38075756824 (`4845f06`) and https://github.com/ryanjkendrick/PillionProgrammer/actions/runs/38089244576 (`f6b6796`), both jobs success. The VS 2022 integration job's host-kill UI-thread stall is under investigation (PR 40) | | `gh run list`, `gh run view` | `gate1-results.json` `data.ci` |
+| CI | Green on develop with the 18.x job and a 17.14 job | **Pass** | Latest develop runs green: https://github.com/ryanjkendrick/PillionProgrammer/actions/runs/38075756824 (`4845f06`) and https://github.com/ryanjkendrick/PillionProgrammer/actions/runs/38089244576 (`f6b6796`), both jobs success. The VS 2022 integration job's host-kill UI-thread stall was investigated in PR 40 (merged; the test now attributes gaps) | | `gh run list`, `gh run view` | `gate1-results.json` `data.ci` |
 | Feature flags | Every work item behind a flag; tests green | **Pass** | 2,790 unit and component tests passed, 0 failed, every run; flags in the README. But see open issue 3: with `autocomplete` off the extension still sends requests on 18.x | | Test run; README | `tests-unit/*.trx` |
 
 
@@ -176,10 +181,12 @@ Phase 1: settings route autocomplete to ollama/qwen2.5-coder:1.5b (Local-fast) a
    extension's own continuation cache and never reaches the host's counters. The live test's request-per-keystroke loop
    gives 94%. The row needs a definition that counts the extension's cache too, or a scenario that accepts suggestions
    (blocked by issues 1 and 2).
-6. **VSIX UI-thread CPU is not shown under 50 ms.** Nothing measures Pillion's own hops to the UI thread; the in-process
-   window from "Begin package load" to Ready (78 to 266 ms) also holds the rest of Visual Studio's folder-open work, and
-   the on/off launches are too noisy for 50 ms. A counter of the package's own main-thread time (around
-   `SwitchToMainThreadAsync` in `PillionPackage.InitializeAsync` and the feature start-ups) would settle it.
+6. **VSIX UI-thread CPU is not shown under 50 ms.** After merging PR 40, Pillion's timed UI-thread stretches between the
+   folder open and Ready add up to 2.6 ms (18.10) and 9.1 ms (17.14), but `PillionPackage.InitializeAsync`'s own section on
+   the UI thread (after its `SwitchToMainThreadAsync`: services, commands, the status bar hookup) is not timed; the
+   in-process window from "Begin package load" to Ready (78 to 344 ms) also holds the rest of Visual Studio's folder-open
+   work, and the on/off launches are too noisy for 50 ms. Wrapping that section in `UiThreadTimings.Measure` would settle
+   the row; this work item does not change product code.
 7. **The CPU-tier autocomplete p50 misses** (about 1.0 s against 600 ms) for the 1.5B model with `num_gpu` 0, as expected
    on this CPU; the p95 passes. The IDE cannot reproduce it: an Ollama provider entry has no `num_gpu` setting.
 8. **Flaky live tests** (not product failures): `OllamaResidencyLiveTests.ChatThatNeeds8192_ReloadsTheCoderOnce...`
@@ -188,8 +195,9 @@ Phase 1: settings route autocomplete to ollama/qwen2.5-coder:1.5b (Local-fast) a
    failed in the last two runs (17.14's and run 5) because `gemma4:e2b` returned code that does not parse (it passed in
    run 3); the `qwen2.5-coder:7b` inline-edit tests, which the product routes to, passed every time. The live tests also need an idle
    Ollama: the gate script unloads resident models first and runs the classes one at a time.
-9. **Visual Studio 2022 host-kill stall** under investigation in PR 40. In these runs the host-kill test passed on both
-   versions: longest UI gap 277 to 309 ms on 18.10 and 278 ms on 17.14, Ready again after about 1.7 s.
+9. **Visual Studio 2022 host-kill stall** (investigated in PR 40, merged during this work). In these runs the host-kill
+   test passed on both versions: longest UI gap 277 to 309 ms on 18.10 and 278 to 279 ms on 17.14, Ready again after about
+   1.7 s.
 10. **No persistence of conversations** until phase 2's Local Store (decision log, 2026-10-08).
 11. Prompt tokens for the coder models are estimated, not counted (`Prompts: 0 counted with the tokenizer`); the live
     test shows the estimate about 12% above Ollama's count (2,045 against 1,827), which only errs on the safe side.
