@@ -486,7 +486,7 @@ public sealed class AutocompleteMetrics : IAutocompleteMetrics
         });
     }
 
-    /// <summary>Records that the first suggestion worth showing is ready.</summary>
+    /// <summary>Records that the suggestion's first visible text is ready (decision of 2026-10-11: time to suggestion is the first visible text).</summary>
     internal void SuggestionReady(long attempt, TimeSpan latency) =>
         Update(attempt, r =>
         {

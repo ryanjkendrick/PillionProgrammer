@@ -258,6 +258,16 @@ public sealed partial class PillionPackageTests
         {
             // Leave autocomplete on for whatever runs next.
             Output.WriteLine("Settings: " + await GateScenarioChecks.ConfigureAutocompleteAsync(feature, ProviderId, null, enabled: true, HangMitigatingCancellationToken));
+
+            // Gate 1 open issue 3: with the feature off nothing is asked for, also while another provider's proposal is shown.
+            Assert.Equal(0, (long?)autocomplete["requests"] ?? 0);
+            Assert.Equal(0, (long?)(autocomplete["host"] as JObject)?["requests"] ?? 0);
+        }
+        else
+        {
+            // Gate 1 open issues 1 and 2: no ghost text in prose and none with a Markdown fence.
+            Assert.Equal(0, (long?)typing["proseProposals"] ?? 0);
+            Assert.Equal(0, (long?)typing["fencedProposals"] ?? 0);
         }
     }
 

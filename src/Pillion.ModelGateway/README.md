@@ -83,23 +83,43 @@ otherwise).
    The prefix is cut on line boundaries from the top and always keeps its tail (the caret line; a caret line longer
    than its allowance keeps its last characters). The suffix is cut on line boundaries from the bottom. No project or
    user rules are added.
-4. **Header.** Comment lines in the document's language (`//`, `#`, `--`, `<!-- -->`, none for JSON or Markdown), most
-   stable first: `File: <name>`, `Open files: <up to 8 names, sorted>`, `In: <enclosing declaration>` (left out when the
-   kept prefix already shows it), `Recent edit: ...` (up to 3, edits in the current file left out). Items are added in the
-   order file, declaration, open files, edits while they fit the header's allowance.
+4. **Header.** The prompt must read as code the model continues, never as a message it answers, so the header is a few
+   terse comments in the document's language (`//`, `#`, `--`, `<!-- -->`, none for JSON or Markdown), file names only,
+   most stable first: `file: <name>`, `see: <up to 8 open files, sorted>`, `in: <enclosing declaration>` (left out when
+   the kept prefix already shows it), `edit: <name>:<line>: <text>` (up to 3 recent edits in other files; the extension
+   sends full paths and the directory is dropped). Items are added in the order file, declaration, open files, edits
+   while they fit the header's allowance. A model family whose catalog entry sets `"fimHeader": false` (the coder
+   models under 3B parameters, `qwen2.5-coder:0.5b` and `:1.5b`) gets no header at all: on the 20-prefix measurement
+   (`AutocompletePromptQualityLiveTests`) the 1.5B model's suggestions parsed in 20 of 20 cases without it against 19 of
+   20 with it, at a median of 149 against 173 ms; the 7B scored 19 of 20 either way and keeps it. The Gate 1 header of
+   sentences (`// Recent edit: C:\...\Foo.cs:12: ...`) is gone.
 5. **Stable prefix.** The header comes first and changes only when the declaration, the open documents or the edits
    elsewhere change. The prefix starts on a line whose absolute number (from `CaretLine`) is a multiple of 16, so the
    start moves only in 16-line steps as the file grows. Consecutive keystrokes therefore change only the tail and a
    resident model reuses its cached prompt: on the development machine, the second request with one more character took
    78 ms of prompt evaluation against 237 ms for the first (qwen2.5-coder:1.5b, 1,828 prompt tokens).
 6. **FIM templates.** Ollama applies the model's own template when `suffix` is passed, so the Ollama path sends the
-   header plus prefix as `prompt` and the suffix as `suffix`. An OpenAI-compatible local server whose `providers` entry
+   header plus prefix as `prompt` and the suffix as `suffix`. Ollama's templates choose fill-in-the-middle only for a
+   suffix that is not empty (`{{- if .Suffix }}`); with an empty one (the caret at the end of the document) the
+   qwen2.5-coder template wraps the prompt in a chat turn and the instruct-tuned model answers it, in prose or behind a
+   Markdown fence. That was the cause of Gate 1's prose and fenced ghost text, so the adapter sends a single line break
+   as the suffix when the request's is empty (`OllamaFimClient.SuffixToSend`). An OpenAI-compatible local server whose `providers` entry
    sets `"supportsFim": true, "fimTemplate": "explicit"` (a raw `/v1/completions` server) gets the prompt rendered from
    the family's template in `Templates/fim-formats.json` (Qwen2.5-Coder, CodeLlama, StarCoder2, DeepSeek-Coder,
    Codestral) and an empty suffix. The family is matched by model id.
 7. **Stops.** A single-line request (`AllowMultiLine` false) stops at the first newline; then the request's
-   `StopSequences`, the family's stop tokens and the defaults (`\n\n\n`). The gateway applies them again to the stream,
-   whatever the provider honoured, and closes the stream when one matches. A multi-line request may run to 30 lines;
+   `StopSequences`, the family's stop tokens (for Qwen2.5-Coder also a closing fence, `\n` followed by three backticks)
+   and the defaults (`\n\n\n`). The gateway applies them again to the stream, whatever the provider honoured, and closes
+   the stream when one matches. The single-line newline is applied only by the gateway, not sent to the provider, so a
+   reply that opens with a fence line still reaches the content filter with the code after it.
+   **Content filter.** Before the stops, `CompletionContentFilter` keeps chat-style answers out of ghost text: a reply
+   that opens in prose ("It looks like you're ...", "Here's ...", recognised from its first words: a usual opening word,
+   three plain words, two common English words and nothing code-like) is dropped whole and not cached; a leading fence
+   line is stripped, and the code after it is kept only when it continues at the caret (it must repeat the text already
+   on the caret line, whose repetition is cut, or the caret line must be blank, when the quoted indentation is cut), not
+   when it restates a line the model saw (the header, the file). Text is held back only while the start is undecided,
+   a few characters for code. Nothing is filtered where prose belongs: comments, docstrings, string literals, Markdown
+   and plain text. Each drop or strip is logged (event 434). A multi-line request may run to 30 lines;
    the client applies its block rules. Without `MaxTokens`, a single-line request generates up to 64 tokens and a
    multi-line one up to 256.
 8. **Timeouts.** Cloud autocomplete has a 3 s hard limit and is dropped silently (an empty stream, Outbound outcome

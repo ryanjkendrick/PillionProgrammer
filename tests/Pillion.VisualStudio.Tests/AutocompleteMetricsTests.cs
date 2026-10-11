@@ -435,7 +435,7 @@ public sealed class AutocompleteMetricsPipelineTests
         var afterAnswer = engine.Metrics.Snapshot().Recent;
         Assert.Equal(1, afterAnswer.Requests);
         Assert.Equal(TimeSpan.FromMilliseconds(120), afterAnswer.TimeToFirstChunk.P50);
-        Assert.Equal(TimeSpan.FromMilliseconds(420), afterAnswer.TimeToSuggestion.P50);
+        Assert.Equal(TimeSpan.FromMilliseconds(420), afterAnswer.TimeToSuggestion.P50); // a single line is shown when complete (ShowSingleLineEarly is off)
         Assert.Equal(0, afterAnswer.Shown);
 
         engine.Metrics.SuggestionShown(attempt.Id);
