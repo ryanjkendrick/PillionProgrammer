@@ -15,25 +15,25 @@ The design document is the specification: https://claude.ai/code/artifact/02f3ee
 
 Gate 1 is "autocomplete without retrieval and chat within budget, online and offline" (section 17). Budgets come from section 13 and are measured on the reference machine (8-core CPU, 32 GB, 8 GB GPU). Local figures assume the model is resident.
 
-| Criterion | Target | Evidence |
-| --- | --- | --- |
-| Ghost text works on VS 2022 17.14 (IntelliCode on) and VS 2026 18.x for C#, TypeScript and Python | Multi-line and single-line proposals, Tab, Esc, Ctrl+Right word accept, next and previous suggestion; no proposal while a completion list has a selected item; Tab never taken while another provider's proposal is visible | Visual Studio integration tests on both versions with IntelliCode (17.14) and Copilot (18.x) enabled; gate script run |
-| IntelliCode run-time check on 17.x | Status bar and Output pane report when IntelliCode is missing or its automatic completions are off; nothing crashes | Integration test with the option off |
-| Autocomplete latency, local 1.5B FIM model on CPU | p50 600 ms, p95 1,500 ms, prompt within 1,024 tokens | Performance suite |
-| Autocomplete latency, local 7B FIM model on the GPU | p50 300 ms, p95 800 ms, prompt within 2,048 tokens with a cached prefix | Performance suite, when the 7B model is pulled |
-| Autocomplete latency, cloud Fast profile | p50 400 ms, p95 1,000 ms; 3 s hard timeout dropped silently | Performance suite, when a cloud key is stored |
-| Keystroke latency with autocomplete on | +0 ms p50, +2 ms p95; all work off the UI thread | Performance suite |
-| Prefix cache hit rate during steady typing | 70% or more | Gateway counters in the performance suite |
-| VSIX cost in devenv.exe | 0 ms blocking at start-up, under 50 ms total UI-thread CPU; added working set 60 MB or less | Performance suite |
-| Chat first token, cloud | p50 1.5 s, p95 3 s, including context assembly | Performance suite |
-| Context assembly without retrieval | p50 150 ms, p95 400 ms | Performance suite |
-| Inline chat preview, first line | p50 2 s, p95 5 s; Enter applies as one edit with one undo step; Esc leaves nothing to undo | Integration test plus gate script |
-| Mentions and inspection | `@file`, `@selection` and `@errors` resolve; the Context Inspector shows the assembled context before sending; every request from every task class has an Outbound log entry | Integration tests; gate script |
-| Degradation | Autocomplete p95 over 1.5 s for five minutes raises the debounce to 350 ms and drops to single-line; recovers | Component test with a slow fake provider |
-| Completion evaluation baseline | The completion golden set runs against the recommended local model and records exact match, edit similarity and latency; no score gate yet (section 15: gates are revised after the first baseline) | Harness report |
-| Offline run | Every check above with the network adapter disabled, local models only | `tools/gate0/Invoke-OfflineRun.ps1` extended for phase 1 |
-| CI | Green on develop with the 18.x job and a 17.14 integration-test job | CI run |
-| Feature flags | Every work item behind a flag; tests green; nothing lands red | CI run; flag list in the README |
+| Criterion | Target | Evidence | Status (re-run of 2026-10-11, [gate-1-report.md](gate-1-report.md)) |
+| --- | --- | --- | --- |
+| Ghost text works on VS 2022 17.14 (IntelliCode on) and VS 2026 18.x for C#, TypeScript and Python | Multi-line and single-line proposals, Tab, Esc, Ctrl+Right word accept, next and previous suggestion; no proposal while a completion list has a selected item; Tab never taken while another provider's proposal is visible | Visual Studio integration tests on both versions with IntelliCode (17.14) and Copilot (18.x) enabled; gate script run | Pass (C#); TypeScript and Python pending product owner (by hand) |
+| IntelliCode run-time check on 17.x | Status bar and Output pane report when IntelliCode is missing or its automatic completions are off; nothing crashes | Integration test with the option off | Pass |
+| Autocomplete latency, local 1.5B FIM model on CPU | p50 600 ms, p95 1,500 ms, prompt within 1,024 tokens | Performance suite | Fail (p50 1.2 s on the CPU against 600 ms; p95 passes) |
+| Autocomplete latency, local 7B FIM model on the GPU | p50 300 ms, p95 800 ms, prompt within 2,048 tokens with a cached prefix | Performance suite, when the 7B model is pulled | Pass (IDE p50 184 to 277 ms, p95 421 to 498 ms) |
+| Autocomplete latency, cloud Fast profile | p50 400 ms, p95 1,000 ms; 3 s hard timeout dropped silently | Performance suite, when a cloud key is stored | Pending product owner (no key) |
+| Keystroke latency with autocomplete on | +0 ms p50, +2 ms p95; all work off the UI thread | Performance suite | Pass (17.14: +0.2 ms p50, +1.3 ms p95) |
+| Prefix cache hit rate during steady typing | 70% or more | Gateway counters in the performance suite | Fail in the IDE (0 to 3%; live loop 94%) |
+| VSIX cost in devenv.exe | 0 ms blocking at start-up, under 50 ms total UI-thread CPU; added working set 60 MB or less | Performance suite | Pass on 18.10; 17.14 passes to Ready, 77 ms of Visual Studio window initialisation deferred past it |
+| Chat first token, cloud | p50 1.5 s, p95 3 s, including context assembly | Performance suite | Pending product owner (no key) |
+| Context assembly without retrieval | p50 150 ms, p95 400 ms | Performance suite | Pass (p50 35 to 37 ms; 151 ms once under load) |
+| Inline chat preview, first line | p50 2 s, p95 5 s; Enter applies as one edit with one undo step; Esc leaves nothing to undo | Integration test plus gate script | Pass (p50 273 to 366 ms) |
+| Mentions and inspection | `@file`, `@selection` and `@errors` resolve; the Context Inspector shows the assembled context before sending; every request from every task class has an Outbound log entry | Integration tests; gate script | Pass |
+| Degradation | Autocomplete p95 over 1.5 s for five minutes raises the debounce to 350 ms and drops to single-line; recovers | Component test with a slow fake provider | Pass |
+| Completion evaluation baseline | The completion golden set runs against the recommended local model and records exact match, edit similarity and latency; no score gate yet (section 15: gates are revised after the first baseline) | Harness report | Pending product owner (golden-set repository) |
+| Offline run | Every check above with the network adapter disabled, local models only | `tools/gate0/Invoke-OfflineRun.ps1` extended for phase 1 | Pending product owner (elevated run) |
+| CI | Green on develop with the 18.x job and a 17.14 integration-test job | CI run | Pass |
+| Feature flags | Every work item behind a flag; tests green; nothing lands red | CI run; flag list in the README | Pass |
 
 ## Work items
 
@@ -56,7 +56,7 @@ Gate 1 is "autocomplete without retrieval and chat within budget, online and off
 | 1.15 | Models and routing Options page (profile per task class, cloud switch per task class, Think harder control placeholder) and a settings-changed notification over RPC so pickers refresh without a button (sections 5, 6) | VSIX, Host, Contracts | | Done (PR 28) |
 | 1.16 | Visual Studio integration-test project on the VS SDK test framework, run in the Experimental Instance on 17.14 and 18.x: package load, proposal source with IntelliCode and Copilot enabled, inline difference view and single-edit apply, host kill; CI gains a 17.14 job that installs the VSIX built by the 18.x job (section 15) | Tests, CI | 1.1, 1.7 | Done (PR 24) |
 | 1.17 | Evaluation harness, completion slice: the first 100 of the 300 fill-in-the-middle cases across C#, TypeScript and Python from permissively licensed code in a private repository; exact match, edit similarity and latency; models pinned by digest; baseline run recorded (section 15) | Harness | 1.3 | Pending product owner (golden-set repository) |
-| 1.18 | Performance suite v1 and Gate 1 evidence: scripted scenarios for every budget in the table above, the offline run extended for phase 1, the gate report (sections 13, 15) | Tests | all | Done (PR 42; [gate-1-report.md](gate-1-report.md)) |
+| 1.18 | Performance suite v1 and Gate 1 evidence: scripted scenarios for every budget in the table above, the offline run extended for phase 1, the gate report (sections 13, 15) | Tests | all | Done (PR 42 and the re-run after the fixes, PR 45; [gate-1-report.md](gate-1-report.md)) |
 | 1.19 | Design document and docs: decision log (IntelliCode requirement, Gitflow, contract 1.1), section 5 coexistence text updated with the spike findings, the shortcut audit that confirms the prefix is unbound in every Visual Studio scheme, Copilot and ReSharper (section 5) | Docs | | Done (design document; PR 21) |
 
 Nineteen items against the design's indicative eighteen. Work items 1.1 to 1.5 are the autocomplete wave, 1.6 to 1.11 the inline chat and mentions wave, 1.12 to 1.17 the polish and quality wave, and 1.18 closes the gate. Items without a dependency can start at once; 1.19 is done first by the lead so every brief points at a current design document.
