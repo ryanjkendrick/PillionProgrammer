@@ -110,6 +110,17 @@ public static class PillionHostChecks
         }
     }
 
+    /// <summary>The name of the environment variable that switches the product's <see cref="UiThreadTimings"/> on (a copy of its constant, so a method that only names this does not load Pillion.VisualStudio.Core).</summary>
+    public const string UiThreadTimingsVariable = "PILLION_UI_THREAD_TIMINGS";
+
+    /// <summary>Puts the timings variable back to what it was before the package-load measurement and sets the switch to match (after the package has loaded).</summary>
+    /// <param name="previous">The variable's earlier value, or <see langword="null"/>.</param>
+    public static void RestoreUiThreadTimingsVariable(string? previous)
+    {
+        Environment.SetEnvironmentVariable(UiThreadTimingsVariable, previous);
+        UiThreadTimings.Enabled = string.Equals(previous, "1", StringComparison.Ordinal);
+    }
+
     /// <summary>Switches on the product's <see cref="UiThreadTimings"/> debug switch, forgetting earlier timings.</summary>
     public static void StartUiThreadTimings()
     {
@@ -137,19 +148,32 @@ public static class PillionHostChecks
     }
 
     /// <summary>
-    /// Sums the stretches of Pillion's own UI-thread work that <see cref="UiThreadTimings"/> recorded between two
-    /// <see cref="Stopwatch.GetTimestamp"/> moments. They are recorded only while the switch is on, which for the package
-    /// load means <c>PILLION_UI_THREAD_TIMINGS=1</c> when Visual Studio started (the gate script sets it).
+    /// Describes Pillion's own timed work around the package load, from what <see cref="UiThreadTimings"/> recorded between
+    /// two <see cref="Stopwatch.GetTimestamp"/> moments. The timings are recorded only while the switch is on, which for
+    /// the package load means <c>PILLION_UI_THREAD_TIMINGS=1</c> in devenv.exe's environment when the package loads (the
+    /// load test sets it in-process before it opens the folder; the gate script sets it for the whole run).
     /// </summary>
     /// <param name="fromTimestamp">The start.</param>
     /// <param name="toTimestamp">The end.</param>
-    /// <returns>Whether the switch is on, the total wall-clock time of those stretches, how many there were, and their names with counts.</returns>
-    public static (bool Enabled, TimeSpan Total, int Count, string Names) PillionUiThreadWorkBetween(long fromTimestamp, long toTimestamp)
+    /// <param name="uiThreadId">The managed thread id of the UI thread.</param>
+    /// <returns>The summary.</returns>
+    public static PackageLoadTimings SummarizeLoad(long fromTimestamp, long toTimestamp, int uiThreadId)
     {
         var timings = UiThreadTimings.Snapshot().Where(t => t.StartTimestamp >= fromTimestamp && t.EndTimestamp <= toTimestamp).ToList();
-        var total = TimeSpan.FromTicks(timings.Sum(t => t.Duration.Ticks));
-        var names = string.Join(", ", timings.GroupBy(t => t.Name).Select(g => $"{g.Key} x{g.Count()}"));
-        return (UiThreadTimings.Enabled, total, timings.Count, names);
+        var preAwait = timings.FirstOrDefault(t => t.Name == "package.init.preawait");
+        var mainThread = timings.Where(t => t.ThreadId == uiThreadId).ToList();
+        var stretches = mainThread
+            .GroupBy(t => t.Name)
+            .Select(g => new LoadStretch(g.Key, g.Count(), TimeSpan.FromTicks(g.Sum(t => t.Duration.Ticks))))
+            .OrderByDescending(s => s.Total)
+            .ToList();
+        return new PackageLoadTimings(
+            UiThreadTimings.Enabled,
+            TimeSpan.FromTicks(mainThread.Sum(t => t.Duration.Ticks)),
+            mainThread.Count,
+            preAwait?.Duration,
+            preAwait is not null && preAwait.ThreadId == uiThreadId,
+            stretches);
     }
 
     private static async Task<IHostConnection> GetConnectionAsync()
@@ -215,4 +239,31 @@ public static class PillionHostChecks
         return await task.ConfigureAwait(false);
     }
 #pragma warning restore VSTHRD003
+}
+
+/// <summary>One kind of timed stretch on the UI thread during the package load: how many visits and their total time.</summary>
+/// <param name="Name">The stretch (for example <c>package.init.commands</c>).</param>
+/// <param name="Count">How many times it ran.</param>
+/// <param name="Total">Their total wall-clock time.</param>
+public sealed record LoadStretch(string Name, int Count, TimeSpan Total);
+
+/// <summary>What Pillion's own timed work did on the UI thread between the folder open and Ready.</summary>
+/// <param name="Enabled">Whether the timings were recorded at all.</param>
+/// <param name="MainThreadTotal">The total wall-clock time of Pillion's timed stretches on the UI thread (an upper bound of its CPU time).</param>
+/// <param name="MainThreadVisits">How many timed stretches ran on the UI thread: each is one visit (a switch to the UI thread, or a stretch run inline on it).</param>
+/// <param name="PreAwait">The time <c>InitializeAsync</c> spent before its first switch to the UI thread, or <see langword="null"/> when not recorded.</param>
+/// <param name="PreAwaitOnUiThread">Whether that part ran on the UI thread (a synchronous load: it blocks the shell) rather than on a pool thread.</param>
+/// <param name="Stretches">The UI-thread stretches by name, longest first.</param>
+public sealed record PackageLoadTimings(bool Enabled, TimeSpan MainThreadTotal, int MainThreadVisits, TimeSpan? PreAwait, bool PreAwaitOnUiThread, IReadOnlyList<LoadStretch> Stretches)
+{
+    /// <inheritdoc/>
+    public override string ToString()
+    {
+        if (!Enabled)
+        {
+            return "not recorded (PILLION_UI_THREAD_TIMINGS was not 1 when the package loaded)";
+        }
+
+        return FormattableString.Invariant($"{MainThreadTotal.TotalMilliseconds:0.0} ms on the UI thread in {MainThreadVisits} timed visits ({string.Join(", ", Stretches.Select(s => FormattableString.Invariant($"{s.Name} x{s.Count} {s.Total.TotalMilliseconds:0.0} ms")))}); InitializeAsync before its first switch: {(PreAwait is { } p ? FormattableString.Invariant($"{p.TotalMilliseconds:0.0} ms") : "not seen")} on {(PreAwaitOnUiThread ? "the UI thread (blocks the shell)" : "a pool thread (does not block the shell)")}");
+    }
 }
