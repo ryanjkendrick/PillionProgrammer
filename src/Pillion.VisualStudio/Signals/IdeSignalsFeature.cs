@@ -44,8 +44,14 @@ internal sealed class IdeSignalsFeature : IDisposable
     /// <summary>Connects the hub to Visual Studio; each part that fails is logged and left out, the others keep working.</summary>
     /// <param name="services">The package's async service provider.</param>
     /// <param name="cancellationToken">Cancelled when Visual Studio shuts down.</param>
+    /// <param name="startupOver">
+    /// Returns a task that completes when the package's start-up is over. The Error List is connected only after it: asking for the
+    /// <c>SVsErrorList</c> service makes Visual Studio create the Error List, which took 100 to 160 ms of UI-thread time on 17.x.
+    /// Until then <see cref="IdeSignalsHub.DiagnosticsNote"/> says the Error List is not available yet (Roslyn diagnostics
+    /// answer meanwhile). <see langword="null"/> connects it at once.
+    /// </param>
     /// <returns>A task that completes when the connections are made.</returns>
-    public async Task StartAsync(IAsyncServiceProvider services, CancellationToken cancellationToken)
+    public async Task StartAsync(IAsyncServiceProvider services, CancellationToken cancellationToken, Func<Task>? startupOver = null)
     {
         await TaskScheduler.Default;
 
@@ -53,6 +59,11 @@ internal sealed class IdeSignalsFeature : IDisposable
         await RunStepAsync("document events", () => ConnectDocumentEventsAsync(services, cancellationToken)).ConfigureAwait(false);
         await RunStepAsync("output panes", () => ConnectOutputPanesAsync(services, cancellationToken)).ConfigureAwait(false);
         Hub.Roslyn = new RoslynDiagnosticsSource(_log);
+        if (startupOver is not null)
+        {
+            await startupOver().ConfigureAwait(false);
+        }
+
         await RunStepAsync("Error List", () => ConnectErrorListAsync(services, cancellationToken)).ConfigureAwait(false);
         _log.Info("signals.started", "IDE signals started.", ("diagnostics", Hub.DiagnosticsNote));
     }
@@ -109,6 +120,7 @@ internal sealed class IdeSignalsFeature : IDisposable
     private async Task ConnectBuildEventsAsync(IAsyncServiceProvider services, CancellationToken cancellationToken)
     {
         await _joinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        using var timing = UiThreadTimings.Measure("signals.connect.build");
         var buildManager = await services.GetServiceAsync(typeof(SVsSolutionBuildManager)).ConfigureAwait(true) as IVsSolutionBuildManager2;
         if (buildManager is null)
         {
@@ -129,6 +141,7 @@ internal sealed class IdeSignalsFeature : IDisposable
     private async Task ConnectDocumentEventsAsync(IAsyncServiceProvider services, CancellationToken cancellationToken)
     {
         await _joinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        using var timing = UiThreadTimings.Measure("signals.connect.documents");
         var table = await services.GetServiceAsync(typeof(SVsRunningDocumentTable)).ConfigureAwait(true) as IVsRunningDocumentTable;
         if (table is not IVsRunningDocumentTable4 table4)
         {
@@ -149,6 +162,7 @@ internal sealed class IdeSignalsFeature : IDisposable
     private async Task ConnectOutputPanesAsync(IAsyncServiceProvider services, CancellationToken cancellationToken)
     {
         await _joinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        using var timing = UiThreadTimings.Measure("signals.connect.output");
         var outputWindow = await services.GetServiceAsync(typeof(SVsOutputWindow)).ConfigureAwait(true) as IVsOutputWindow;
         var dte = await services.GetServiceAsync(typeof(SDTE)).ConfigureAwait(true) as DTE;
         if (outputWindow is null || dte is null)
@@ -163,6 +177,7 @@ internal sealed class IdeSignalsFeature : IDisposable
     private async Task ConnectErrorListAsync(IAsyncServiceProvider services, CancellationToken cancellationToken)
     {
         await _joinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        using var timing = UiThreadTimings.Measure("signals.connect.errorlist");
         var errorList = await services.GetServiceAsync(typeof(SVsErrorList)).ConfigureAwait(true) as IErrorList;
         if (errorList is null)
         {

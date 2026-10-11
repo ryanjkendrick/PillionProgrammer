@@ -5,9 +5,11 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio.Threading;
 using Pillion.Contracts;
 using Pillion.VisualStudio.Autocomplete;
 using Pillion.VisualStudio.Core;
@@ -50,6 +52,12 @@ public sealed class PillionPackage : AsyncPackage
     /// <summary>How long the host gets to exit cleanly when Visual Studio closes.</summary>
     private static readonly TimeSpan HostShutdownTimeout = TimeSpan.FromSeconds(2);
 
+    /// <summary>The longest the Output pane and the Error List wait for the host before the package's start-up counts as over.</summary>
+    private static readonly TimeSpan StartupSettleTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>How long after the host settles the Output pane and the Error List are created.</summary>
+    private static readonly TimeSpan StartupSettleGrace = TimeSpan.FromMilliseconds(250);
+
     private PillionLog? _log;
     private HostSupervisor? _supervisor;
     private ChatAvailability? _chatAvailability;
@@ -83,12 +91,25 @@ public sealed class PillionPackage : AsyncPackage
     internal InlineChatFeature? InlineChat => _inlineChat;
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Start-up cost (design section 13: 0 ms blocking, under 50 ms of UI-thread CPU). The first statement moves the work
+    /// off the caller's thread: a background load already runs on a pool thread, but a synchronous load (a service or
+    /// command that reaches the package first) enters on the UI thread, which would otherwise build the whole object graph
+    /// and JIT it there. What the UI thread must do is one short visit (command registration and the first status bar
+    /// text); the features start on the thread pool afterwards, so no JoinableTask is created, and no file is touched, on
+    /// the UI thread. <see cref="UiThreadTimings"/> (a debug switch) times every stretch, and the Gate 1 test reads them.
+    /// </remarks>
     protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
     {
+        var preAwait = UiThreadTimings.Measure("package.init.preawait");
+        await TaskScheduler.Default;
+        preAwait.Dispose();
+
+        var background = UiThreadTimings.Measure("package.init.background");
         await base.InitializeAsync(cancellationToken, progress).ConfigureAwait(true);
 
         // Background thread: nothing here touches the UI or waits for the host.
-        var log = new PillionLog(PillionLog.DefaultDirectory);
+        var log = new PillionLog(PillionLog.DefaultDirectory, writeInBackground: true);
         _log = log;
         var supervisor = CreateSupervisor(log);
         _supervisor = supervisor;
@@ -104,46 +125,64 @@ public sealed class PillionPackage : AsyncPackage
         AddService(typeof(IIdeSignals), (container, token, type) => Task.FromResult<object?>(signals.Hub), promote: true);
         Instance = this;
 
-        // The COM output window, status bar and command service must be used on the UI thread.
+        // The Output pane is created on its first write (on the UI thread, by the writer), not here. Until then lines wait
+        // in the writer's queue, so the sink can be connected now.
+        Func<Task> startupOver = () => StartupSettle.WhenSettledAsync(supervisor, StartupSettleTimeout, StartupSettleGrace, DisposalToken);
+        var output = new OutputPaneWriter(CreateOutputPane, startupOver, JoinableTaskFactory, DisposalToken);
+        _output = output;
+        log.Sink = line => output.WriteLine(line);
+        inlineChat.Output = line => output.WriteLine(line);
+        output.WriteLine($"{ProductName} {ExtensionVersion} loaded (contract {ContractVersion.Text}).");
+        background.Dispose();
+
+        // The COM status bar and command service must be used on the UI thread: one visit.
         await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
 
-        var outputWindow = await GetServiceAsync(typeof(SVsOutputWindow)).ConfigureAwait(true) as IVsOutputWindow;
+        // One visit (package.init.main) made of three parts (a name with "/" is a part of the visit before it).
+        var visit = UiThreadTimings.Measure("package.init.main");
+        var services = UiThreadTimings.Measure("package.init.main/services");
         var commandService = await GetServiceAsync(typeof(IMenuCommandService)).ConfigureAwait(true) as OleMenuCommandService;
         _statusBar = await GetServiceAsync(typeof(SVsStatusbar)).ConfigureAwait(true) as IVsStatusbar;
+        services.Dispose();
 
-        var pane = CreateOutputPane(outputWindow);
-        if (pane is not null)
+        using (UiThreadTimings.Measure("package.init.main/commands"))
         {
-            pane.OutputStringThreadSafe($"{ProductName} {ExtensionVersion} loaded (contract {ContractVersion.Text}).{Environment.NewLine}");
-            var output = new OutputPaneWriter(pane, JoinableTaskFactory, DisposalToken);
-            _output = output;
-            log.Sink = line => output.WriteLine(line);
-            inlineChat.Output = line => output.WriteLine(line);
+            if (commandService is not null)
+            {
+                commandService.AddCommand(new MenuCommand(OnShowStatus, new CommandID(PackageGuids.CommandSet, PackageIds.ShowStatusCommand)));
+                commandService.AddCommand(new MenuCommand(OnRetryHost, new CommandID(PackageGuids.CommandSet, PackageIds.RetryHostCommand)));
+                commandService.AddCommand(new MenuCommand(OnOpenLogs, new CommandID(PackageGuids.CommandSet, PackageIds.OpenLogsCommand)));
+                commandService.AddCommand(CreateOpenChatCommand(PackageIds.OpenChatCommand));
+                commandService.AddCommand(CreateOpenChatCommand(PackageIds.ViewChatCommand));
+                commandService.AddCommand(inlineChat.CreateCommand());
+            }
         }
 
-        if (commandService is not null)
+        using (UiThreadTimings.Measure("package.init.main/statusbar"))
         {
-            commandService.AddCommand(new MenuCommand(OnShowStatus, new CommandID(PackageGuids.CommandSet, PackageIds.ShowStatusCommand)));
-            commandService.AddCommand(new MenuCommand(OnRetryHost, new CommandID(PackageGuids.CommandSet, PackageIds.RetryHostCommand)));
-            commandService.AddCommand(new MenuCommand(OnOpenLogs, new CommandID(PackageGuids.CommandSet, PackageIds.OpenLogsCommand)));
-            commandService.AddCommand(CreateOpenChatCommand(PackageIds.OpenChatCommand));
-            commandService.AddCommand(CreateOpenChatCommand(PackageIds.ViewChatCommand));
-            commandService.AddCommand(inlineChat.CreateCommand());
+            SetStatusBarText(StatusBarText(supervisor));
         }
 
+        visit.Dispose();
+
+        // Back to the thread pool for the rest: subscribing and starting create JoinableTasks, and the IntelliCode check
+        // reads a process's version, none of which the UI thread should pay for. Everything the handlers use (the log
+        // sink, the Output writer, the status bar) is in place before the host starts.
+        await TaskScheduler.Default;
+        var start = UiThreadTimings.Measure("package.init.start.background");
         supervisor.StateChanged += OnHostStateChanged;
         supervisor.ConnectivityChanged += OnConnectivityChanged;
         autocomplete.StatusChanged += (_, _) => _ = JoinableTaskFactory.RunAsync(RefreshStatusBarAsync);
-        SetStatusBarText(StatusBarText(supervisor));
 
         // Returns at once: launching, connecting and the handshake run on the thread pool. Availability follows the
         // host's effective feature flags: it reads them whenever the host becomes ready.
         chatAvailability.Start();
         autocomplete.Start();
         inlineChat.Start();
-        _ = JoinableTaskFactory.RunAsync(() => signals.StartAsync(this, DisposalToken));
+        _ = JoinableTaskFactory.RunAsync(() => signals.StartAsync(this, DisposalToken, startupOver));
         _ = JoinableTaskFactory.RunAsync(() => CheckIntelliCodeAsync(DisposalToken));
         supervisor.Start();
+        start.Dispose();
     }
 
     /// <inheritdoc/>
@@ -220,6 +259,11 @@ public sealed class PillionPackage : AsyncPackage
             supervisor.Dispose();
         }
 
+        if (disposing)
+        {
+            _ = _log?.Flush(TimeSpan.FromSeconds(1)); // The log writes in the background: let the last lines reach the file.
+        }
+
         base.Dispose(disposing);
     }
 
@@ -231,11 +275,12 @@ public sealed class PillionPackage : AsyncPackage
             ?? "0.0.0";
     }
 
-    private static IVsOutputWindowPane? CreateOutputPane(IVsOutputWindow? outputWindow)
+    /// <summary>Creates the "Pillion Programmer" Output pane. Called by the writer on the UI thread, when the first line is written.</summary>
+    private static IVsOutputWindowPane? CreateOutputPane()
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
-        if (outputWindow is null)
+        if (Package.GetGlobalService(typeof(SVsOutputWindow)) is not IVsOutputWindow outputWindow)
         {
             return null;
         }
@@ -467,6 +512,9 @@ public sealed class PillionPackage : AsyncPackage
 
         try
         {
+            // Started from the UI thread (the Tools menu opening) this would run on it until the first await; the check
+            // reads the devenv.exe version resource, so leave the UI thread first. RunAsync visits it only where it must.
+            await TaskScheduler.Default;
             var (status, detail) = await IntelliCodeCheck.RunAsync(this, cancellationToken).ConfigureAwait(true);
             autocomplete.IntelliCode = status;
             var previous = _intelliCodeReported;
@@ -484,6 +532,13 @@ public sealed class PillionPackage : AsyncPackage
             else if (previous is IntelliCodeStatus.Missing or IntelliCodeStatus.CompletionsOff)
             {
                 _output?.WriteLine("IntelliCode's automatic code completions are on: inline suggestions are available.");
+            }
+
+            // The status bar text carries the IntelliCode part only while it is missing or its completions are off: when neither
+            // the old nor the new status shows it the text is unchanged, so the UI thread is not visited at all.
+            if (!ShowsInStatusBar(status) && !ShowsInStatusBar(previous))
+            {
+                return;
             }
 
             await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
@@ -508,6 +563,8 @@ public sealed class PillionPackage : AsyncPackage
             Interlocked.Exchange(ref _intelliCodeCheckRunning, 0);
         }
     }
+
+    private static bool ShowsInStatusBar(IntelliCodeStatus status) => status is IntelliCodeStatus.Missing or IntelliCodeStatus.CompletionsOff;
 
     /// <summary>Opens the log folder in File Explorer (Tools &gt; Pillion: Open Logs, and the chat window's status line).</summary>
     private void OpenLogFolder()

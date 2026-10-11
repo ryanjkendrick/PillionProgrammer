@@ -26,7 +26,10 @@ public sealed record PackageLoadCpuReport(
     int Samples)
 {
     /// <summary>Gets or sets what Pillion's own UI-thread timings (the product's debug switch) recorded from the folder open to Ready.</summary>
-    public string PillionTimed { get; init; } = "not recorded";
+    public PackageLoadTimings? PillionTimed { get; init; }
+
+    /// <summary>Gets or sets what the timings recorded in the seconds after Ready (the work Pillion deferred until its start-up was over).</summary>
+    public PackageLoadTimings? PillionDeferred { get; init; }
 
     /// <inheritdoc/>
     public override string ToString() => string.Format(
@@ -40,7 +43,7 @@ public sealed record PackageLoadCpuReport(
         UiCpuIdleBaseline.TotalMilliseconds,
         IdleLength.TotalMilliseconds,
         Samples,
-        PillionTimed);
+        PillionTimed?.ToString() ?? "not recorded");
 }
 
 /// <summary>

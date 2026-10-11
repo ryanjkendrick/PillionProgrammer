@@ -13,12 +13,17 @@ public sealed class UiThreadTiming
     /// <param name="name">What ran, for example <c>package.statusbar</c>.</param>
     /// <param name="startTimestamp">When it started, in <see cref="Stopwatch.GetTimestamp"/> ticks.</param>
     /// <param name="endTimestamp">When it ended, in <see cref="Stopwatch.GetTimestamp"/> ticks.</param>
-    public UiThreadTiming(string name, long startTimestamp, long endTimestamp)
+    /// <param name="threadId">The managed thread id it ran on (0 when not recorded).</param>
+    public UiThreadTiming(string name, long startTimestamp, long endTimestamp, int threadId = 0)
     {
         Name = name;
         StartTimestamp = startTimestamp;
         EndTimestamp = endTimestamp;
+        ThreadId = threadId;
     }
+
+    /// <summary>Gets the managed thread id the stretch ran on (0 when not recorded). Start-up stretches that may run on a pool thread (the part of package initialization before its first switch) are told apart by it.</summary>
+    public int ThreadId { get; }
 
     /// <summary>Gets what ran.</summary>
     public string Name { get; }
@@ -66,7 +71,7 @@ public static class UiThreadTimings
     /// <summary>Starts timing a stretch of work on the UI thread; dispose the result when it ends.</summary>
     /// <param name="name">What runs, as a short dotted name (for example <c>output.flush</c>).</param>
     /// <returns>The measurement (a no-op while the timings are off).</returns>
-    public static Scope Measure(string name) => enabled ? new Scope(name, Stopwatch.GetTimestamp()) : default;
+    public static Scope Measure(string name) => enabled ? new Scope(name, Stopwatch.GetTimestamp(), Environment.CurrentManagedThreadId) : default;
 
     /// <summary>Returns the timings recorded so far, oldest first.</summary>
     /// <returns>The timings.</returns>
@@ -95,11 +100,13 @@ public static class UiThreadTimings
     {
         private readonly string? _name;
         private readonly long _start;
+        private readonly int _threadId;
 
-        internal Scope(string name, long start)
+        internal Scope(string name, long start, int threadId)
         {
             _name = name;
             _start = start;
+            _threadId = threadId;
         }
 
         /// <summary>Records the measurement (nothing for a no-op scope).</summary>
@@ -107,7 +114,7 @@ public static class UiThreadTimings
         {
             if (_name is not null)
             {
-                Record(new UiThreadTiming(_name, _start, Stopwatch.GetTimestamp()));
+                Record(new UiThreadTiming(_name, _start, Stopwatch.GetTimestamp(), _threadId));
             }
         }
     }
