@@ -85,6 +85,10 @@ public sealed class PillionPackage : AsyncPackage
     /// <inheritdoc/>
     protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
     {
+        // Everything up to the switch to the UI thread below is the "pre-await" part: on a background load it runs on a pool
+        // thread, but on a synchronous load (a command or service request that reaches the package first) the shell waits
+        // for it. UiThreadTimings records it, with its thread, as package.init.preawait.
+        var preAwait = UiThreadTimings.Measure("package.init.preawait");
         await base.InitializeAsync(cancellationToken, progress).ConfigureAwait(true);
 
         // Background thread: nothing here touches the UI or waits for the host.
@@ -104,13 +108,18 @@ public sealed class PillionPackage : AsyncPackage
         AddService(typeof(IIdeSignals), (container, token, type) => Task.FromResult<object?>(signals.Hub), promote: true);
         Instance = this;
 
+        preAwait.Dispose();
+
         // The COM output window, status bar and command service must be used on the UI thread.
         await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
 
+        var services = UiThreadTimings.Measure("package.init.services");
         var outputWindow = await GetServiceAsync(typeof(SVsOutputWindow)).ConfigureAwait(true) as IVsOutputWindow;
         var commandService = await GetServiceAsync(typeof(IMenuCommandService)).ConfigureAwait(true) as OleMenuCommandService;
         _statusBar = await GetServiceAsync(typeof(SVsStatusbar)).ConfigureAwait(true) as IVsStatusbar;
+        services.Dispose();
 
+        var panes = UiThreadTimings.Measure("package.init.pane");
         var pane = CreateOutputPane(outputWindow);
         if (pane is not null)
         {
@@ -121,6 +130,9 @@ public sealed class PillionPackage : AsyncPackage
             inlineChat.Output = line => output.WriteLine(line);
         }
 
+        panes.Dispose();
+
+        var commands = UiThreadTimings.Measure("package.init.commands");
         if (commandService is not null)
         {
             commandService.AddCommand(new MenuCommand(OnShowStatus, new CommandID(PackageGuids.CommandSet, PackageIds.ShowStatusCommand)));
@@ -131,19 +143,39 @@ public sealed class PillionPackage : AsyncPackage
             commandService.AddCommand(inlineChat.CreateCommand());
         }
 
-        supervisor.StateChanged += OnHostStateChanged;
-        supervisor.ConnectivityChanged += OnConnectivityChanged;
-        autocomplete.StatusChanged += (_, _) => _ = JoinableTaskFactory.RunAsync(RefreshStatusBarAsync);
-        SetStatusBarText(StatusBarText(supervisor));
+        commands.Dispose();
+
+        using (UiThreadTimings.Measure("package.init.statusbar"))
+        {
+            supervisor.StateChanged += OnHostStateChanged;
+            supervisor.ConnectivityChanged += OnConnectivityChanged;
+            autocomplete.StatusChanged += (_, _) => _ = JoinableTaskFactory.RunAsync(RefreshStatusBarAsync);
+            SetStatusBarText(StatusBarText(supervisor));
+        }
 
         // Returns at once: launching, connecting and the handshake run on the thread pool. Availability follows the
         // host's effective feature flags: it reads them whenever the host becomes ready.
-        chatAvailability.Start();
-        autocomplete.Start();
-        inlineChat.Start();
-        _ = JoinableTaskFactory.RunAsync(() => signals.StartAsync(this, DisposalToken));
-        _ = JoinableTaskFactory.RunAsync(() => CheckIntelliCodeAsync(DisposalToken));
-        supervisor.Start();
+        using (UiThreadTimings.Measure("package.init.start.features"))
+        {
+            chatAvailability.Start();
+            autocomplete.Start();
+            inlineChat.Start();
+        }
+
+        using (UiThreadTimings.Measure("package.init.start.signals"))
+        {
+            _ = JoinableTaskFactory.RunAsync(() => signals.StartAsync(this, DisposalToken));
+        }
+
+        using (UiThreadTimings.Measure("package.init.start.intellicode"))
+        {
+            _ = JoinableTaskFactory.RunAsync(() => CheckIntelliCodeAsync(DisposalToken));
+        }
+
+        using (UiThreadTimings.Measure("package.init.start.supervisor"))
+        {
+            supervisor.Start();
+        }
     }
 
     /// <inheritdoc/>

@@ -109,6 +109,7 @@ internal sealed class IdeSignalsFeature : IDisposable
     private async Task ConnectBuildEventsAsync(IAsyncServiceProvider services, CancellationToken cancellationToken)
     {
         await _joinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        using var timing = UiThreadTimings.Measure("signals.connect.build");
         var buildManager = await services.GetServiceAsync(typeof(SVsSolutionBuildManager)).ConfigureAwait(true) as IVsSolutionBuildManager2;
         if (buildManager is null)
         {
@@ -129,6 +130,7 @@ internal sealed class IdeSignalsFeature : IDisposable
     private async Task ConnectDocumentEventsAsync(IAsyncServiceProvider services, CancellationToken cancellationToken)
     {
         await _joinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        using var timing = UiThreadTimings.Measure("signals.connect.documents");
         var table = await services.GetServiceAsync(typeof(SVsRunningDocumentTable)).ConfigureAwait(true) as IVsRunningDocumentTable;
         if (table is not IVsRunningDocumentTable4 table4)
         {
@@ -149,6 +151,7 @@ internal sealed class IdeSignalsFeature : IDisposable
     private async Task ConnectOutputPanesAsync(IAsyncServiceProvider services, CancellationToken cancellationToken)
     {
         await _joinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        using var timing = UiThreadTimings.Measure("signals.connect.output");
         var outputWindow = await services.GetServiceAsync(typeof(SVsOutputWindow)).ConfigureAwait(true) as IVsOutputWindow;
         var dte = await services.GetServiceAsync(typeof(SDTE)).ConfigureAwait(true) as DTE;
         if (outputWindow is null || dte is null)
@@ -163,6 +166,7 @@ internal sealed class IdeSignalsFeature : IDisposable
     private async Task ConnectErrorListAsync(IAsyncServiceProvider services, CancellationToken cancellationToken)
     {
         await _joinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        using var timing = UiThreadTimings.Measure("signals.connect.errorlist");
         var errorList = await services.GetServiceAsync(typeof(SVsErrorList)).ConfigureAwait(true) as IErrorList;
         if (errorList is null)
         {
