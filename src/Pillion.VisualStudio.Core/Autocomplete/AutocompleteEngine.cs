@@ -21,6 +21,16 @@ public sealed class AutocompleteEngine
     /// </summary>
     public static readonly TimeSpan DisplayUpdateInterval = TimeSpan.FromMilliseconds(50);
 
+    /// <summary>
+    /// Whether a single-line suggestion is shown at its first chunk and then grown. Off: the Visual Studio integration
+    /// tests on 18.x and 17.14 (CI run 38114630716) showed that <c>SuggestionServiceBase.TryUpdateProposal</c> returns
+    /// the proposal but does not change the displayed ghost text, so a suggestion shown at its first chunk stayed at that
+    /// chunk and Tab took only it ("var total = Calculat"). A single-line suggestion is therefore shown when its line is
+    /// complete, with no grace period; a multi-line one still at its first complete line. Switch this on once growing the
+    /// displayed proposal is shown to work.
+    /// </summary>
+    public static bool ShowSingleLineEarly => false;
+
     /// <summary>How long the language-service declaration lookup may run past the debounce before the heuristic is used.</summary>
     public static readonly TimeSpan DeclarationBudget = TimeSpan.FromMilliseconds(100);
 

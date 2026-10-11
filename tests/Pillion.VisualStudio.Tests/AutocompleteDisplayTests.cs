@@ -35,100 +35,44 @@ public sealed class AutocompleteDisplayTests
     private readonly FakeCompletionModel _model = new() { Manual = true };
 
     [Fact]
-    public async Task SingleLine_IsShownAtItsFirstChunk_WithoutAGracePeriod()
+    public async Task SingleLine_IsShownWhenItsLineIsComplete_WithoutAGracePeriod()
     {
+        // ShowSingleLineEarly is off: growing a displayed proposal does not change the ghost text in Visual Studio
+        // (CI run 38114630716), so a single line is shown whole, as soon as it is complete.
+        Assert.False(AutocompleteEngine.ShowSingleLineEarly);
         _model.Respond = _ => ["numbers", ".Min", "();"];
         var (engine, session) = CreateSession();
 
         var attempt = await StartAndSendAsync(session, InputAt("var smallest = "));
         _clock.Advance(TimeSpan.FromMilliseconds(120));
         _model.Release();
-
-        var ready = await attempt.Ready.WithTimeout(Timeout);
-        Assert.NotNull(ready);
-        Assert.False(ready!.IsComplete);
-        Assert.Equal("numbers", ready.Text);
-        Assert.Equal(TimeSpan.FromMilliseconds(120), ready.Latency);
-        Assert.False(attempt.Completed.IsCompleted);
-        Assert.Empty(_clock.Pending); // nothing waits on a grace period
-
-        // Time to suggestion is the first visible text, the same as the first chunk here.
-        var stats = engine.Metrics.Snapshot().Recent;
-        Assert.Equal(TimeSpan.FromMilliseconds(120), stats.TimeToSuggestion.P50);
-        Assert.Equal(TimeSpan.FromMilliseconds(120), engine.Latency.Snapshot().P50);
-
-        _model.Release(2);
-        var complete = await attempt.Completed.WithTimeout(Timeout);
-        Assert.Equal("numbers.Min();", complete!.Text);
-        Assert.True(complete.IsComplete);
-    }
-
-    [Fact]
-    public async Task SingleLine_Grows_AtMostOnceEvery50ms()
-    {
-        _model.Respond = _ => ["numbers", ".Min", "(", ")", ";"];
-        var (_, session) = CreateSession();
-        var updates = new ConcurrentQueue<string>();
-
-        var attempt = await StartAndSendAsync(session, InputAt("var smallest = "));
-        attempt.Updated += (_, update) => updates.Enqueue(update.Text);
-        _model.Release();
-        Assert.Equal("numbers", (await attempt.Ready.WithTimeout(Timeout))!.Text);
-
-        // 10 ms later: too soon for an update; one is scheduled for the end of the interval.
-        _clock.Advance(TimeSpan.FromMilliseconds(10));
-        _model.Release();
-        await _clock.WhenWaitingAsync(TimeSpan.FromMilliseconds(40));
-        Assert.Empty(updates);
-
-        // More chunks inside the same interval are folded into that one update.
-        _model.Release();
-        await Wait.UntilAsync(() => attempt.Latest is not null, "the chunk was taken");
-        await Task.Delay(50);
-        Assert.Single(_clock.Pending);
-        Assert.Empty(updates);
-
-        _clock.Advance(TimeSpan.FromMilliseconds(40));
-        await Wait.UntilAsync(() => updates.Count == 1, "one update after 50 ms");
-        Assert.Equal("numbers.Min(", updates.Single());
-
-        _model.Release(2);
-        var complete = await attempt.Completed.WithTimeout(Timeout);
-        Assert.Equal("numbers.Min();", complete!.Text);
-        await Task.Delay(50);
-        Assert.Single(updates); // no update after the whole suggestion
-    }
-
-    [Fact]
-    public async Task SingleLine_WhitespaceAlone_IsNotShown()
-    {
-        _model.Respond = _ => [" ", "numbers.Min();"];
-        var (_, session) = CreateSession();
-
-        var attempt = await StartAndSendAsync(session, InputAt("var smallest = "));
-        _model.Release();
         await Task.Delay(100);
         Assert.False(attempt.Ready.IsCompleted);
 
-        _model.Release();
-        Assert.Equal(" numbers.Min();", (await attempt.Ready.WithTimeout(Timeout))!.Text);
+        _clock.Advance(TimeSpan.FromMilliseconds(60));
+        _model.Release(2);
+        var ready = await attempt.Ready.WithTimeout(Timeout);
+        Assert.True(ready!.IsComplete);
+        Assert.Equal("numbers.Min();", ready.Text);
+        Assert.Equal(TimeSpan.FromMilliseconds(180), ready.Latency);
+        Assert.Equal(TimeSpan.FromMilliseconds(180), engine.Latency.Snapshot().P50);
+        Assert.Equal(TimeSpan.FromMilliseconds(120), engine.Metrics.Snapshot().Recent.TimeToFirstChunk.P50);
+        Assert.Empty(_clock.Pending); // nothing waits on a grace period
     }
 
     [Fact]
-    public async Task SingleLine_HoldsATailThatCouldRepeatTheTextRightOfTheCaret()
+    public async Task SingleLine_DropsATailThatRepeatsTheTextRightOfTheCaret()
     {
-        // The caret is inside "Max(|);": a streamed ")" might be the start of the ");" already there.
+        // The caret is inside "Max(|);".
         const string Text = "class C\n{\n    int M(int a, int b) => Math.Max();\n}\n";
         _model.Respond = _ => ["a, b)", ";"];
         var (_, session) = CreateSession();
         var input = new CompletionInput { DocumentKey = "c.cs", FilePath = "c.cs", LanguageId = "csharp", Text = new StringDocumentText(Text), Caret = Text.IndexOf("Max(", StringComparison.Ordinal) + 4 };
 
         var attempt = await StartAndSendAsync(session, input);
-        _model.Release();
+        _model.Release(2);
 
         Assert.Equal("a, b", (await attempt.Ready.WithTimeout(Timeout))!.Text);
-        _model.Release();
-        Assert.Equal("a, b", (await attempt.Completed.WithTimeout(Timeout))!.Text);
     }
 
     [Fact]

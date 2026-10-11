@@ -396,6 +396,11 @@ public sealed class AutocompleteSession : IDisposable
         // at most one update per DisplayUpdateInterval; what is shown has passed the stop rules.
         void ShowProgress()
         {
+            if (!multiLine && !AutocompleteEngine.ShowSingleLineEarly)
+            {
+                return; // Shown when the line is complete (see ShowSingleLineEarly).
+            }
+
             CompletionResult? ready = null;
             CompletionResult? update = null;
             var wait = TimeSpan.Zero;
