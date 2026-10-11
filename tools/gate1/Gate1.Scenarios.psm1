@@ -189,6 +189,8 @@ function Invoke-GateIdeRun {
     $env = @{}
     foreach ($k in $ScenarioEnvironment.Keys) { $env[$k] = $ScenarioEnvironment[$k] }
     $env['PILLION_GATE_SCENARIOS'] = '1'
+    # Pillion's own UI-thread timings from the moment Visual Studio starts, for the package-load row.
+    $env['PILLION_UI_THREAD_TIMINGS'] = '1'
     $env['PILLION_GATE_OUT'] = $scenarioDir
     $arguments = @('-DevEnvPath', $VisualStudio.DevEnv, '-ResultsDirectory', $resultsDir)
     if ($TestCaseFilter) { $arguments += @('-TestCaseFilter', $TestCaseFilter) }
@@ -550,11 +552,12 @@ function New-Gate1Table {
         # from "Begin package load" to Ready, less the idle baseline scaled to the same length. That is an upper bound for
         # Pillion's share, because Visual Studio's own work on the thread in that window is counted too.
         $loadCpu = $null
+        $timed = if ($pkg -match "Pillion's own timed UI-thread work from the folder open to Ready: ([\d.]+) ms") { [double]$Matches[1] } else { $null }
         if ($pkg -match 'to Ready: (\d+) ms over (\d+) ms;.*idle baseline after Ready: (\d+) ms over (\d+) ms') {
             $loadCpu = [math]::Round([double]$Matches[1] - [double]$Matches[3] * [double]$Matches[2] / [math]::Max(1, [double]$Matches[4]))
         }
         $cpuOk = $null -ne $loadCpu -and $loadCpu -lt 50
-        & $add 'VSIX cost in devenv.exe' '0 ms blocking at start-up, under 50 ms total UI-thread CPU, added working set 60 MB or less' "in-process: $pkg => about $loadCpu ms above idle (an upper bound); on/off launches: working set delta $($cost.workingSetDeltaMB) MB (medians $($cost.workingSetMedianOnMB) / $($cost.workingSetMedianOffMB) MB), UI thread CPU delta $($cost.uiCpuDeltaMs) ms (medians $($cost.uiCpuMedianOnMs) / $($cost.uiCpuMedianOffMs) ms; within launch-to-launch noise); the package loads in the background (AsyncPackage, Begin and End package load after the folder opened)" $(if ($cpuOk -and $null -ne $cost.workingSetDeltaMB -and $cost.workingSetDeltaMB -le 60) { 'Pass' } else { 'Fail' }) 'PackageLoad_UsesLittleUiThreadCpu (UI thread sampled every 10 ms); extension on against off launches (working set after 60 s)'
+        & $add 'VSIX cost in devenv.exe' '0 ms blocking at start-up, under 50 ms total UI-thread CPU, added working set 60 MB or less' "in-process: $pkg => about $loadCpu ms above idle (an upper bound); Pillion's own timed stretches: $(if ($null -ne $timed) { "$timed ms (package initialization's main-thread part is not timed)" } else { 'not recorded' }); on/off launches: working set delta $($cost.workingSetDeltaMB) MB (medians $($cost.workingSetMedianOnMB) / $($cost.workingSetMedianOffMB) MB), UI thread CPU delta $($cost.uiCpuDeltaMs) ms (medians $($cost.uiCpuMedianOnMs) / $($cost.uiCpuMedianOffMs) ms; within launch-to-launch noise); the package loads in the background (AsyncPackage, Begin and End package load after the folder opened)" $(if ($cpuOk -and $null -ne $cost.workingSetDeltaMB -and $cost.workingSetDeltaMB -le 60) { 'Pass' } else { 'Fail' }) 'PackageLoad_UsesLittleUiThreadCpu (UI thread sampled every 10 ms); extension on against off launches (working set after 60 s)'
     }
     else { & $add 'VSIX cost in devenv.exe' '0 ms blocking, under 50 ms UI-thread CPU, 60 MB or less' "in-process: $pkg; launches not run" 'Not measured' '' }
 

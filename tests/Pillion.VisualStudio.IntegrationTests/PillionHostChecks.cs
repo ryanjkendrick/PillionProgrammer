@@ -136,6 +136,22 @@ public static class PillionHostChecks
             .ToList();
     }
 
+    /// <summary>
+    /// Sums the stretches of Pillion's own UI-thread work that <see cref="UiThreadTimings"/> recorded between two
+    /// <see cref="Stopwatch.GetTimestamp"/> moments. They are recorded only while the switch is on, which for the package
+    /// load means <c>PILLION_UI_THREAD_TIMINGS=1</c> when Visual Studio started (the gate script sets it).
+    /// </summary>
+    /// <param name="fromTimestamp">The start.</param>
+    /// <param name="toTimestamp">The end.</param>
+    /// <returns>Whether the switch is on, the total wall-clock time of those stretches, how many there were, and their names with counts.</returns>
+    public static (bool Enabled, TimeSpan Total, int Count, string Names) PillionUiThreadWorkBetween(long fromTimestamp, long toTimestamp)
+    {
+        var timings = UiThreadTimings.Snapshot().Where(t => t.StartTimestamp >= fromTimestamp && t.EndTimestamp <= toTimestamp).ToList();
+        var total = TimeSpan.FromTicks(timings.Sum(t => t.Duration.Ticks));
+        var names = string.Join(", ", timings.GroupBy(t => t.Name).Select(g => $"{g.Key} x{g.Count()}"));
+        return (UiThreadTimings.Enabled, total, timings.Count, names);
+    }
+
     private static async Task<IHostConnection> GetConnectionAsync()
     {
         var service = await AsyncServiceProvider.GlobalProvider.GetServiceAsync(typeof(IHostConnection)).ConfigureAwait(false);

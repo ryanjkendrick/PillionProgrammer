@@ -64,10 +64,11 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
 
     /// <summary>
     /// Gate 1 row "VSIX cost in devenv.exe" (design section 13: 0 ms blocking at start-up, under 50 ms total UI-thread
-    /// CPU). There is no instrumentation of Pillion's own hops to the UI thread, so this reports the UI thread's total CPU
-    /// time from the Activity Log's "Begin package load" of the Pillion package to the host's Ready, which also holds
-    /// whatever else Visual Studio ran on that thread meanwhile (the folder open finishing, other packages), next to an
-    /// idle baseline of the same length. The assertion is deliberately generous (500 ms); the figure against the 50 ms
+    /// CPU). This reports the UI thread's total CPU time from the Activity Log's "Begin package load" of the Pillion
+    /// package to the host's Ready, which also holds whatever else Visual Studio ran on that thread meanwhile (the folder
+    /// open finishing, other packages), next to an idle baseline of the same length, and, when PILLION_UI_THREAD_TIMINGS=1
+    /// was set at start-up, the sum of Pillion's own timed UI-thread stretches (which do not cover the package's
+    /// initialization). The assertion is deliberately generous (500 ms); the figure against the 50 ms
     /// budget is in the Gate 1 report, with the extension-on against extension-off launches of tools/gate1.
     /// </summary>
     [IdeFact]
@@ -210,6 +211,7 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
         await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
         using var sampler = UiThreadCpuSampler.Start(ThreadCpuMeter.CurrentThreadId, TimeSpan.FromMilliseconds(10));
         var folderOpening = sampler.Mark();
+        var folderOpeningTimestamp = Stopwatch.GetTimestamp();
 
         await OpenScratchFolderAsync();
         var took = await WaitForPackageLoadedAsync(TimeSpan.FromSeconds(60));
@@ -219,6 +221,10 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
         // Initialization continues on a background thread after the package object exists; let it finish.
         await PillionHostChecks.WaitForReadyAsync(TimeSpan.FromSeconds(30), HangMitigatingCancellationToken);
         var ready = sampler.Mark();
+        var readyTimestamp = Stopwatch.GetTimestamp();
+
+        // Pillion's own timed UI-thread work in the same window (only with PILLION_UI_THREAD_TIMINGS=1 from the start).
+        var timed = PillionHostChecks.PillionUiThreadWorkBetween(folderOpeningTimestamp, readyTimestamp);
 
         var log = await GetActivityLogAsync();
         var begin = log.EntriesAbout(PackageGuid)
@@ -246,7 +252,10 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
             UiCpuLoadToReady: sampler.CpuBetween(loadStart, ready),
             UiCpuIdleBaseline: sampler.CpuBetween(idleStart, idleEnd),
             IdleLength: idleEnd - idleStart,
-            Samples: sampler.Count);
+            Samples: sampler.Count)
+        {
+            PillionTimed = timed.Enabled ? $"{timed.Total.TotalMilliseconds:0.0} ms in {timed.Count} timed stretches ({(timed.Names.Length == 0 ? "none" : timed.Names)})" : "not recorded (PILLION_UI_THREAD_TIMINGS was not 1 when Visual Studio started)",
+        };
         return log;
     }
 

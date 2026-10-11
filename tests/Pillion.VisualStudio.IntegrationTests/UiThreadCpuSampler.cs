@@ -25,10 +25,13 @@ public sealed record PackageLoadCpuReport(
     TimeSpan IdleLength,
     int Samples)
 {
+    /// <summary>Gets or sets what Pillion's own UI-thread timings (the product's debug switch) recorded from the folder open to Ready.</summary>
+    public string PillionTimed { get; init; } = "not recorded";
+
     /// <inheritdoc/>
     public override string ToString() => string.Format(
         System.Globalization.CultureInfo.InvariantCulture,
-        "UI thread CPU from the package load start ({0}) to Ready: {1:0} ms over {2:0} ms; from the folder open to Ready: {3:0} ms over {4:0} ms; idle baseline after Ready: {5:0} ms over {6:0} ms ({7} samples).",
+        "UI thread CPU from the package load start ({0}) to Ready: {1:0} ms over {2:0} ms; from the folder open to Ready: {3:0} ms over {4:0} ms; idle baseline after Ready: {5:0} ms over {6:0} ms ({7} samples). Pillion's own timed UI-thread work from the folder open to Ready: {8}.",
         LoadStartSource,
         UiCpuLoadToReady.TotalMilliseconds,
         LoadToReady.TotalMilliseconds,
@@ -36,7 +39,8 @@ public sealed record PackageLoadCpuReport(
         FolderOpenToReady.TotalMilliseconds,
         UiCpuIdleBaseline.TotalMilliseconds,
         IdleLength.TotalMilliseconds,
-        Samples);
+        Samples,
+        PillionTimed);
 }
 
 /// <summary>
