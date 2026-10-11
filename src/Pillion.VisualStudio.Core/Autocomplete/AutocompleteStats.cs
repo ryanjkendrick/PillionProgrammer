@@ -114,7 +114,7 @@ public sealed class AutocompleteStats
     /// <summary>Initializes a new instance of the <see cref="AutocompleteStats"/> class.</summary>
     /// <param name="counts">The counts.</param>
     /// <param name="timeToFirstChunk">Request sent to the host's first chunk.</param>
-    /// <param name="timeToSuggestion">Request sent to the first suggestion worth showing.</param>
+    /// <param name="timeToSuggestion">Request sent to the first visible text of the suggestion.</param>
     internal AutocompleteStats(MetricCounts counts, DurationPercentiles timeToFirstChunk, DurationPercentiles timeToSuggestion)
     {
         Attempts = counts.Attempts;
@@ -190,7 +190,7 @@ public sealed class AutocompleteStats
     /// <summary>Gets the time from sending a request to the host's first chunk. Empty in cumulative figures.</summary>
     public DurationPercentiles TimeToFirstChunk { get; }
 
-    /// <summary>Gets the time from sending a request to the first suggestion worth showing. Empty in cumulative figures.</summary>
+    /// <summary>Gets the time from sending a request to the first visible text of the suggestion (the first chunk of a single-line one, the first complete line of a multi-line one). Empty in cumulative figures.</summary>
     public DurationPercentiles TimeToSuggestion { get; }
 
     /// <summary>Gets the requests, shown and accepted suggestions per language identifier.</summary>

@@ -82,7 +82,7 @@ public sealed class CompletionResult
 /// text). While the rest streams, <see cref="Updated"/> reports the grown suggestion, at most once per
 /// <see cref="AutocompleteEngine.DisplayUpdateInterval"/>; <see cref="Completed"/> completes with the whole suggestion.
 /// Both tasks complete with <see langword="null"/> when there is nothing to show: cancelled, superseded by a newer
-/// attempt, suppressed, empty or failed. Neither ever faults, and no update follows <see cref="Completed"/>.
+/// attempt, suppressed, empty or failed. Neither ever faults.
 /// </summary>
 public sealed class CompletionAttempt
 {
@@ -113,8 +113,9 @@ public sealed class CompletionAttempt
     public Task<CompletionResult?> Completed => _completed.Task;
 
     /// <summary>
-    /// Raised on a thread-pool thread each time the suggestion shown early has grown (never before <see cref="Ready"/>
-    /// and never after <see cref="Completed"/>); the argument is the suggestion so far. Read <see cref="Latest"/> after
+    /// Raised on a thread-pool thread each time the suggestion shown early has grown (never before <see cref="Ready"/>;
+    /// an update can only race with <see cref="Completed"/>, so handlers act on <see cref="Latest"/> and stop once
+    /// <see cref="Completed"/> has completed); the argument is the suggestion so far. Read <see cref="Latest"/> after
     /// subscribing so an update raised in between is not missed.
     /// </summary>
     public event EventHandler<CompletionResult>? Updated;
