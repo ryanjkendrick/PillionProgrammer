@@ -534,6 +534,13 @@ public sealed class PillionPackage : AsyncPackage
                 _output?.WriteLine("IntelliCode's automatic code completions are on: inline suggestions are available.");
             }
 
+            // The status bar text carries the IntelliCode part only while it is missing or its completions are off: when neither
+            // the old nor the new status shows it the text is unchanged, so the UI thread is not visited at all.
+            if (!ShowsInStatusBar(status) && !ShowsInStatusBar(previous))
+            {
+                return;
+            }
+
             await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
             using var timing = UiThreadTimings.Measure("package.intellicode.statusbar");
             if (_supervisor is { } supervisor)
@@ -556,6 +563,8 @@ public sealed class PillionPackage : AsyncPackage
             Interlocked.Exchange(ref _intelliCodeCheckRunning, 0);
         }
     }
+
+    private static bool ShowsInStatusBar(IntelliCodeStatus status) => status is IntelliCodeStatus.Missing or IntelliCodeStatus.CompletionsOff;
 
     /// <summary>Opens the log folder in File Explorer (Tools &gt; Pillion: Open Logs, and the chat window's status line).</summary>
     private void OpenLogFolder()
