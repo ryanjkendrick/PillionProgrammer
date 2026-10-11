@@ -41,6 +41,7 @@ unless `RunIdeTests` is `true`), so the unit-test run stays fast and never start
 | --- | --- |
 | `VisualStudio_IsAtLeast17_14` | The instance under test is 17.14 or later |
 | `Package_LoadsOnFolderOpen_WithNoActivityLogErrors` | The package is not loaded before a folder opens, loads by itself after `File > Open > Folder`, and the in-memory Activity Log has no error about Pillion |
+| `PackageLoad_UsesLittleUiThreadCpu` | Gate 1 row "VSIX cost": the UI thread's CPU time, sampled every 10 ms from a background thread during the first folder open, from the Activity Log's "Begin package load" of the Pillion package to the host's Ready, beside an idle baseline of the same length after Ready. That figure also holds whatever else Visual Studio ran on that thread meanwhile; with `PILLION_UI_THREAD_TIMINGS=1` set when Visual Studio starts (the gate script sets it) the output adds the sum of Pillion's own timed UI-thread stretches (`UiThreadTimings`) in the same window. The assertion is a generous 500 ms (the design budget is 50 ms, judged in the Gate 1 report with the extension-on against extension-off launches of `tools/gate1`) |
 | `HostConnection_ReachesReady_Within30Seconds` | The `IHostConnection` service reaches `Ready` within 30 s with one `Pillion.Host.exe` child |
 | `KillingTheHost_KeepsTheUIResponsive_AndReconnectsWithin15Seconds` | After `Pillion.Host.exe` is killed, a low-priority dispatcher operation posted every 250 ms for 15 s always runs, and the connection is `Ready` again within 15 s with a new host process. The UI gap is judged against a control (see below) |
 | `OpenChatCommand_ShowsThePillionChatWindow` | `Tools.PillionOpenChat` shows the "Pillion Chat" tool window |
@@ -52,6 +53,22 @@ unless `RunIdeTests` is `true`), so the unit-test run stays fast and never start
 | `InlineDifferenceView_EnterAppliesOneEditWithOneUndoStep` | Inline chat on a selected method with a canned inline edit service (no model): the proposal is shown in the inline difference view with the buffer untouched; Enter applies it as one undo unit named "Pillion inline edit", and one Edit.Undo restores the text |
 | `InlineDifferenceView_EscDiscards_LeavingNothingToUndo` | The same, then Esc: the adornment closes, the buffer's version and the undo stack are unchanged |
 | `Mentions_TypeAtPickAFileAndSend_TheHostReceivesOnePin` | Work item 1.9, Visual Studio 2026 only: with `tests/Pillion.FakeHost` put behind the package for this test, typing `@` in the Chat window's input lists the kinds, typing `@Prog` lists `Program.cs` of the open scratch folder, Down and Enter pin it (the typed mention leaves the input), Enter sends, the reply completes and the Outbound log shows the request, and the fake host's record file holds one chat request with one `file` pin named `Program.cs`. The shipped host is restored afterwards |
+
+### The Gate 1 scenarios
+
+`PillionPackageTests.Gate1.cs` holds the Gate 1 performance scenarios (work item 1.18). Unlike every other test here they
+need a local model and the real Pillion Host, so they are `[GateScenarioFact]`s: skipped unless `PILLION_GATE_SCENARIOS=1`
+is set when the tests are discovered, as `tools/gate1/Invoke-Gate1.ps1` does (it also writes the Ollama provider into
+`settings.json` first and restores the file afterwards). They run after the other tests of the class (test order 30 to
+35) in a scratch C# project, and write their figures as JSON to `%PILLION_GATE_OUT%`:
+
+| Test | What it measures |
+| --- | --- |
+| `Gate1_Autocomplete_StrongModel_TypingScenario`, `Gate1_Autocomplete_FastModel_TypingScenario` | Autocomplete routed to one model (settings.json, Local-fast): a warm-up suggestion, then a fixed 40-line C# file typed through the view's command chain at 80 ms a character with a 1.2 s pause after each line break; a Pillion proposal that equals the next lines is accepted. The extension's figures after a reset (`IAutocompleteMetrics`: time to suggestion, show and acceptance counts, degradation; the Show Status text), the host's counters over the pass (cache hit rate, prompt tokens counted against estimated), the Outbound records, and each TypeChar's time on the UI thread |
+| `Gate1_Keystrokes_AutocompleteOff_TypingScenario` | The same typing with `features.autocomplete` off, for the keystroke-latency difference |
+| `Gate1_InlineChat_PreviewFirstLine` | Five inline chat runs each of "extract the validation into a method" and `/doc` on the real host: first preview text, first complete line and the whole proposal, then Esc (the buffer must be untouched) |
+| `Gate1_Chat_FirstToken_Mentions_AndOutboundLog` | Five chat messages to the local model (first visible reply text); `@file`, `@errors` (after a build with one compile error) and `@selection` pinned from the picker, the Context Inspector opened, the message sent; the host's Outbound records for chat, autocomplete and inline edits |
+| `Gate1_Cloud_FastAutocompleteAndChatFirstToken` | Only with a cloud provider whose key is stored (`Invoke-Gate1.ps1 -CloudProviderId`): the typing pass on the Fast profile and the chat first token on the cloud model; otherwise it records the rows as pending |
 
 ### Reading the host kill test's output
 
