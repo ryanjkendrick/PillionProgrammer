@@ -37,6 +37,21 @@ public class CatalogAndTemplateTests
         Assert.Equal(0m, capabilities.InputCostPerMillionTokens);
     }
 
+    [Theory]
+    [InlineData("qwen2.5-coder:0.5b", false)]
+    [InlineData("qwen2.5-coder:1.5b", false)]
+    [InlineData("qwen2.5-coder:1.5b-base", false)]
+    [InlineData("qwen2.5-coder:7b", true)]
+    [InlineData("qwen2.5-coder:14b", true)]
+    [InlineData("codestral-latest", true)]
+    [InlineData("hf.co/someone/unknown-model:Q4", true)]
+    public void Catalog_FimHeader_IsOffForTheSmallCoderModels(string modelId, bool header) =>
+        Assert.Equal(header, ModelCatalog.Default.GetCapabilities(modelId, isLocal: true).FimHeader);
+
+    [Fact]
+    public void Templates_QwenFamily_StopsAtAClosingFence() =>
+        Assert.Contains("\n```", PromptTemplates.Default.FindFimFormat("qwen2.5-coder:7b")!.StopSequences);
+
     [Fact]
     public void Catalog_EmbeddingFamilies_AreNotChatModels()
     {

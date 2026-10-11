@@ -276,6 +276,8 @@ public sealed class ModelCatalog
 
         public bool Fim { get; set; }
 
+        public bool FimHeader { get; set; } = true;
+
         public bool Vision { get; set; }
 
         public bool Embeddings { get; set; }
@@ -300,6 +302,7 @@ public sealed class ModelCatalog
             MaxOutputTokens = MaxOutputTokens,
             Chat = Chat,
             Fim = Fim,
+            FimHeader = FimHeader,
             Vision = Vision,
             Embeddings = Embeddings,
             Streaming = Streaming,

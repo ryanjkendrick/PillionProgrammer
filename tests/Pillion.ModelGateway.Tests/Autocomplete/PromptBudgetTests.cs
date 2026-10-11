@@ -36,7 +36,7 @@ public sealed class PromptBudgetTests
 
         // The declaration is already in the prefix, the current file's edit is left out, open files are sorted.
         Assert.Equal(
-            "// File: Calc.cs\n// Open files: alpha.cs, Zeta.cs\n// Recent edit: Zeta.cs:12 added Reset()\n",
+            "// file: Calc.cs\n// see: alpha.cs, Zeta.cs\n// edit: Zeta.cs:12 added Reset()\n",
             prompt.Header);
         Assert.Equal(["file", "openDocuments", "recentEdit"], prompt.HeaderItems);
         Assert.Equal(prompt.Header + prompt.Prefix, prompt.PromptPrefix);
@@ -52,7 +52,7 @@ public sealed class PromptBudgetTests
 
         var prompt = AutocompletePromptBuilder.Build(request, 1024, PerChar);
 
-        Assert.Contains("// In: public int Add(int a, int b)\n", prompt.Header, StringComparison.Ordinal);
+        Assert.Contains("// in: public int Add(int a, int b)\n", prompt.Header, StringComparison.Ordinal);
         Assert.Contains("declaration", prompt.HeaderItems);
     }
 
@@ -150,8 +150,92 @@ public sealed class PromptBudgetTests
         json.LanguageId = "json";
         json.FilePath = "a.json";
 
-        Assert.Equal("# File: ledger.py\n", AutocompletePromptBuilder.Build(python, 1024, PerChar).Header);
+        Assert.Equal("# file: ledger.py\n", AutocompletePromptBuilder.Build(python, 1024, PerChar).Header);
         Assert.Equal(string.Empty, AutocompletePromptBuilder.Build(json, 1024, PerChar).Header);
+    }
+
+    [Theory]
+    [InlineData("csharp", @"C:\src\Calc.cs", "// file: Calc.cs\n// see: Bar.cs\n")]
+    [InlineData("typescript", @"C:\web\src\user.ts", "// file: user.ts\n// see: Bar.cs\n")]
+    [InlineData("python", @"C:\py\ledger.py", "# file: ledger.py\n# see: Bar.cs\n")]
+    [InlineData("vb", @"C:\src\Calc.vb", "' file: Calc.vb\n' see: Bar.cs\n")]
+    [InlineData("sql", @"C:\db\q.sql", "-- file: q.sql\n-- see: Bar.cs\n")]
+    [InlineData("xml", @"C:\src\a.xml", "<!-- file: a.xml -->\n<!-- see: Bar.cs -->\n")]
+    [InlineData("css", @"C:\web\a.css", "/* file: a.css */\n/* see: Bar.cs */\n")]
+    public void Header_IsTerseCodeComments_InEachLanguagesSyntax(string languageId, string path, string expected)
+    {
+        var request = Request("x", string.Empty, 0);
+        request.LanguageId = languageId;
+        request.FilePath = path;
+        request.OpenDocuments = [@"C:\elsewhere\Bar.cs"];
+
+        Assert.Equal(expected, AutocompletePromptBuilder.Build(request, 2048, PerChar).Header);
+    }
+
+    [Fact]
+    public void Header_HasNoSentencesAndNoDirectories_EvenForRecentEditsSentWithFullPaths()
+    {
+        // The edits come from the extension as "full path:line: text"; at Gate 1 the header repeated those paths in
+        // sentences ("// Recent edit: C:\...") and the 1.5B model answered them in prose.
+        var request = Request("int Twice(int v)\n{\n    return ", "\n}\n", caretLine: 2);
+        request.FilePath = @"C:\Users\dev\repos\Gate\TypeFast.cs";
+        request.OpenDocuments = [@"C:\Users\dev\repos\Gate\TypeFast.cs", @"C:\Users\dev\repos\Gate\WarmTypeFast.cs"];
+        request.RecentEdits =
+        [
+            @"C:\Users\dev\repos\Gate\WarmTypeFast.cs:3: public static int Warm() => 1;",
+            @"C:\Users\dev\repos\Gate\TypeFast.cs:2: {",
+        ];
+
+        var prompt = AutocompletePromptBuilder.Build(request, 2048, PerChar);
+
+        // WarmTypeFast.cs is another file even though its name ends with the current one's.
+        Assert.Equal("// file: TypeFast.cs\n// see: WarmTypeFast.cs\n// edit: WarmTypeFast.cs:3: public static int Warm() => 1;\n", prompt.Header);
+        Assert.DoesNotContain(@"C:\", prompt.PromptPrefix, StringComparison.Ordinal);
+        Assert.DoesNotContain("Recent", prompt.PromptPrefix, StringComparison.Ordinal);
+        Assert.DoesNotContain("Open files", prompt.PromptPrefix, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(@"C:\src\Foo.cs:12: Reset();", "Foo.cs", "Foo.cs:12: Reset();")]
+    [InlineData("/home/dev/app/main.py:3: main()", "main.py", "main.py:3: main()")]
+    [InlineData("Zeta.cs:12 added Reset()", "", "Zeta.cs:12 added Reset()")]
+    public void RecentEdits_AreShortenedToTheFileName(string edit, string name, string text)
+    {
+        Assert.Equal((name, text), AutocompletePromptBuilder.ShortenEdit(edit));
+    }
+
+    [Fact]
+    public void WithoutTheHeader_ThePromptIsTheCodeAlone_AndThePrefixGetsTheRoom()
+    {
+        var request = Request(Lines(0, 400) + "    return ", "\n}\n", caretLine: 400);
+        request.EnclosingDeclaration = "public int Add(int a, int b)";
+        request.OpenDocuments = [@"C:\src\Zeta.cs"];
+        request.RecentEdits = [@"C:\src\Zeta.cs:12: Reset();"];
+
+        var with = AutocompletePromptBuilder.Build(request, 1024, PerChar);
+        var without = AutocompletePromptBuilder.Build(request, 1024, PerChar, includeHeader: false);
+
+        Assert.NotEmpty(with.Header);
+        Assert.Equal(string.Empty, without.Header);
+        Assert.Empty(without.HeaderItems);
+        Assert.Equal(0, without.HeaderTokens);
+        Assert.Equal(without.Prefix, without.PromptPrefix);
+        Assert.True(without.Prefix.Length >= with.Prefix.Length);
+        Assert.EndsWith("    return ", without.PromptPrefix, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WithoutTheHeader_ThePrefixStillStartsOnAnAnchorLine()
+    {
+        // The cache-friendly layout does not depend on the header: the kept prefix starts on a line whose absolute
+        // number is a multiple of 16, and a keystroke only appends to the prompt.
+        var body = Lines(0, 400);
+        var first = AutocompletePromptBuilder.Build(Request(body + "    x", "\n}\n", caretLine: 400), 1024, PerChar, includeHeader: false);
+        var second = AutocompletePromptBuilder.Build(Request(body + "    xy", "\n}\n", caretLine: 400), 1024, PerChar, includeHeader: false);
+
+        Assert.True(first.PrefixLinesDropped > 0);
+        Assert.Equal(0, first.PrefixLinesDropped % AutocompletePromptBuilder.AnchorLines);
+        Assert.StartsWith(first.PromptPrefix, second.PromptPrefix, StringComparison.Ordinal);
     }
 
     [Fact]

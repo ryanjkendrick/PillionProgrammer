@@ -572,9 +572,11 @@ public sealed partial class ModelGateway : IModelGateway
                 _rates.Observe(model.QualifiedId, plan.Prompt.PromptTokens, firstToken);
             }
 
-            // A cloud autocomplete is buffered so the hard limit can still drop it; local completions stream. The shaper
-            // applies the stop sequences and the line limit whatever the provider honoured.
-            var shaper = new CompletionShaper(plan.Request.StopSequences, multiLine ? AutocompleteBudget.MultiLineMaxLines : isAutocomplete ? 1 : int.MaxValue);
+            // A cloud autocomplete is buffered so the hard limit can still drop it; local completions stream. The content
+            // filter drops a reply in prose and strips a leading Markdown fence; the shaper then applies the stop sequences
+            // and the line limit whatever the provider honoured.
+            var filter = isAutocomplete ? new CompletionContentFilter(prefix, request.LanguageId, plan.Prompt.PromptPrefix) : null;
+            var shaper = new CompletionShaper(plan.ShaperStops, multiLine ? AutocompleteBudget.MultiLineMaxLines : isAutocomplete ? 1 : int.MaxValue);
             var buffer = model.IsLocal ? null : new StringBuilder();
             PillionError? streamError = null;
             var outcome = OutboundOutcome.Succeeded;
@@ -616,7 +618,13 @@ public sealed partial class ModelGateway : IModelGateway
                 }
 
                 attempt.GeneratedCharacters += text.Length;
-                var shown = shaper.Push(text);
+                var filtered = filter is null ? text : filter.Push(text);
+                if (filter is { IsDropped: true })
+                {
+                    break;
+                }
+
+                var shown = filtered.Length == 0 ? string.Empty : shaper.Push(filtered);
                 if (shown.Length == 0)
                 {
                     continue;
@@ -638,7 +646,18 @@ public sealed partial class ModelGateway : IModelGateway
                 yield break;
             }
 
-            var rest = streamError is null ? shaper.Flush() : string.Empty;
+            var rest = string.Empty;
+            if (streamError is null && filter is not { IsDropped: true })
+            {
+                var held = filter?.Flush() ?? string.Empty;
+                rest = (held.Length > 0 ? shaper.Push(held) : string.Empty) + shaper.Flush();
+            }
+
+            if (filter is not null && (filter.IsDropped || filter.FenceStripped))
+            {
+                LogContentFiltered(_logger, request.RequestId, model.QualifiedId, filter.IsDropped ? "dropped (" + filter.Verdict + ")" : "leading fence stripped");
+            }
+
             buffer?.Append(rest);
             var completion = shaper.Text;
             var counter = _tokens.ForModel(model.ModelId);
@@ -706,11 +725,13 @@ public sealed partial class ModelGateway : IModelGateway
 
         var format = _templates.FindFimFormat(candidate.ModelId);
         var explicitFormat = UsesExplicitFimTokens(providerSettings) ? format : null;
-        var prompt = AutocompletePromptBuilder.Build(request, budget, _tokens.ForModel(candidate.ModelId), explicitFormat);
+        var includeHeader = _catalog.GetCapabilities(candidate.ModelId, candidate.IsLocal).FimHeader;
+        var prompt = AutocompletePromptBuilder.Build(request, budget, _tokens.ForModel(candidate.ModelId), explicitFormat, includeHeader);
 
         // Stops: a single-line request ends at the first newline; then the request's own, the family's and the defaults.
+        var singleLine = !multiLine && request.TaskClass == TaskClass.Autocomplete;
         var stops = new List<string>();
-        if (!multiLine && request.TaskClass == TaskClass.Autocomplete)
+        if (singleLine)
         {
             stops.Add("\n");
         }
@@ -722,18 +743,24 @@ public sealed partial class ModelGateway : IModelGateway
         }
 
         stops.AddRange(_templates.DefaultFimStopSequences);
+        var shaperStops = stops.Distinct(StringComparer.Ordinal).ToList();
+
+        // The provider is not told to stop at the newline of a single-line request: a model that opens with a Markdown
+        // fence line would then return the fence alone. The gateway's shaper ends the line (and the stream) instead,
+        // after the content filter has stripped such a fence.
+        var providerStops = singleLine ? shaperStops.Where(s => s != "\n").ToList() : shaperStops;
 
         var fim = new FimRequest
         {
             Prefix = explicitFormat is null ? prompt.PromptPrefix : explicitFormat.Render(prompt.PromptPrefix, prompt.Suffix),
             Suffix = explicitFormat is null ? prompt.Suffix : string.Empty,
             MaxTokens = maxTokens,
-            StopSequences = stops.Distinct(StringComparer.Ordinal).ToList(),
+            StopSequences = providerStops,
             Temperature = _templates.DefaultFimTemperature,
             Profile = candidate.Profile,
             RequestId = request.RequestId,
         };
-        return new FimPlan(fim, prompt, explicitFormat);
+        return new FimPlan(fim, prompt, explicitFormat, shaperStops);
     }
 
     /// <summary>
@@ -896,6 +923,9 @@ public sealed partial class ModelGateway : IModelGateway
     [LoggerMessage(EventId = 433, Level = LogLevel.Information, Message = "Autocomplete budget by GPU tier {Gpu}")]
     private static partial void LogGpuTier(ILogger logger, GpuInfo gpu);
 
+    [LoggerMessage(EventId = 434, Level = LogLevel.Information, Message = "Autocomplete {RequestId} from {Model}: {What}")]
+    private static partial void LogContentFiltered(ILogger logger, string requestId, string model, string what);
+
     [LoggerMessage(EventId = 432, Level = LogLevel.Warning, Message = "Could not list the models of provider '{ProviderId}': {Reason}")]
     private static partial void LogListFailed(ILogger logger, string providerId, string reason);
 }
@@ -904,4 +934,5 @@ public sealed partial class ModelGateway : IModelGateway
 /// <param name="Request">The request handed to the provider's FIM client.</param>
 /// <param name="Prompt">The budgeted prompt.</param>
 /// <param name="ExplicitFormat">The FIM template the gateway rendered, or <see langword="null"/> when the server applies the model's template.</param>
-internal sealed record FimPlan(FimRequest Request, AutocompletePrompt Prompt, FimFormat? ExplicitFormat);
+/// <param name="ShaperStops">The stop sequences the gateway's shaper applies: the provider's plus, for a single-line request, the newline.</param>
+internal sealed record FimPlan(FimRequest Request, AutocompletePrompt Prompt, FimFormat? ExplicitFormat, IReadOnlyList<string> ShaperStops);

@@ -171,6 +171,19 @@ internal sealed class OllamaChatClient : IChatClient
 /// <summary>Fill-in-the-middle over Ollama's <c>/api/generate</c> with <c>suffix</c> and <c>raw</c> false, so Ollama applies the model's FIM template.</summary>
 internal sealed class OllamaFimClient : IFimClient
 {
+    /// <summary>
+    /// The suffix sent when the caret is at the end of the document. Ollama's templates choose fill-in-the-middle only
+    /// when the suffix is not empty (<c>{{- if .Suffix }}</c>); with an empty one the qwen2.5-coder template wraps the
+    /// prompt in a chat turn and the instruct-tuned model answers it, in prose or behind a Markdown fence (Gate 1 open
+    /// issues 1 and 2: typing at the end of a new file). A single line break, the end of a file, keeps the FIM template.
+    /// </summary>
+    public const string EndOfDocumentSuffix = "\n";
+
+    /// <summary>Gets the suffix to send: the request's, or <see cref="EndOfDocumentSuffix"/> when it is empty.</summary>
+    /// <param name="suffix">The request's suffix.</param>
+    /// <returns>A suffix Ollama's FIM templates accept.</returns>
+    public static string SuffixToSend(string? suffix) => string.IsNullOrEmpty(suffix) ? EndOfDocumentSuffix : suffix;
+
     private readonly OllamaProvider _provider;
     private readonly string _modelId;
 
@@ -216,7 +229,7 @@ internal sealed class OllamaFimClient : IFimClient
         {
             ["model"] = _modelId,
             ["prompt"] = request.Prefix,
-            ["suffix"] = request.Suffix,
+            ["suffix"] = SuffixToSend(request.Suffix),
             ["raw"] = false,
             ["stream"] = true,
             ["options"] = options,
