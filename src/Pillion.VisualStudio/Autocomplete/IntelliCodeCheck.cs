@@ -9,6 +9,7 @@ using Microsoft.VisualStudio.Language.Suggestions;
 using Microsoft.VisualStudio.Settings;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio.Threading;
 using Pillion.VisualStudio.Core;
 using Pillion.VisualStudio.Core.Autocomplete;
 
@@ -26,30 +27,25 @@ internal static class IntelliCodeCheck
     /// <summary>Gets the major version of the running devenv.exe (17 for Visual Studio 2022, 18 for 2026).</summary>
     public static int VisualStudioMajorVersion { get; } = ReadMajorVersion();
 
-    /// <summary>Runs the check. Switches to the UI thread for the shell services; quick.</summary>
+    /// <summary>
+    /// Runs the check. The settings manager and the MEF export provider are free-threaded, so they are read on a thread-pool
+    /// thread; the UI thread is visited once, only for <c>IVsShell.IsPackageInstalled</c>, and nothing at all is needed on
+    /// 18.x.
+    /// </summary>
     /// <param name="package">The package (service provider).</param>
     /// <param name="cancellationToken">A token that cancels the check.</param>
     /// <returns>The status and the raw option value (for the log).</returns>
     public static async Task<(IntelliCodeStatus Status, string Detail)> RunAsync(AsyncPackage package, CancellationToken cancellationToken)
     {
+        await TaskScheduler.Default; // Reading the version of devenv.exe (a static initializer) is file IO.
         var major = VisualStudioMajorVersion;
         if (major >= 18 || major == 0)
         {
             return (IntelliCodeStatus.NotRequired, "Visual Studio " + major);
         }
 
-        await package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-        using var timing = UiThreadTimings.Measure("intellicode.check");
-
-        var packageInstalled = false;
-        if (await package.GetServiceAsync(typeof(SVsShell)).ConfigureAwait(true) is IVsShell shell)
-        {
-            var guid = new Guid(IntelliCodeRequirement.PackageGuid);
-            packageInstalled = Microsoft.VisualStudio.ErrorHandler.Succeeded(shell.IsPackageInstalled(ref guid, out var installed)) && installed != 0;
-        }
-
         var serviceExported = false;
-        if (await package.GetServiceAsync(typeof(SComponentModel)).ConfigureAwait(true) is IComponentModel componentModel)
+        if (await package.GetServiceAsync(typeof(SComponentModel)).ConfigureAwait(false) is IComponentModel componentModel)
         {
             try
             {
@@ -65,7 +61,7 @@ internal static class IntelliCodeCheck
 
         object? stored = null;
         var readable = false;
-        if (await package.GetServiceAsync(typeof(SVsSettingsPersistenceManager)).ConfigureAwait(true) is ISettingsManager settings)
+        if (await package.GetServiceAsync(typeof(SVsSettingsPersistenceManager)).ConfigureAwait(false) is ISettingsManager settings)
         {
             try
             {
@@ -80,6 +76,21 @@ internal static class IntelliCodeCheck
                 readable = false;
             }
         }
+
+        var packageInstalled = false;
+        var shellService = await package.GetServiceAsync(typeof(SVsShell)).ConfigureAwait(false);
+        if (shellService is not null)
+        {
+            await package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+            using var timing = UiThreadTimings.Measure("intellicode.check");
+            if (shellService is IVsShell shell)
+            {
+                var guid = new Guid(IntelliCodeRequirement.PackageGuid);
+                packageInstalled = Microsoft.VisualStudio.ErrorHandler.Succeeded(shell.IsPackageInstalled(ref guid, out var installed)) && installed != 0;
+            }
+        }
+
+        await TaskScheduler.Default; // Leave the UI thread again (a no-op when it was never visited).
 
         var completionsOn = readable ? IntelliCodeRequirement.InterpretShowCompletions(stored) : null;
         var status = IntelliCodeRequirement.Evaluate(major, packageInstalled && serviceExported, completionsOn);

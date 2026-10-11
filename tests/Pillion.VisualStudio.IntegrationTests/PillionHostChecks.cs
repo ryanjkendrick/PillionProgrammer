@@ -161,8 +161,16 @@ public static class PillionHostChecks
     {
         var timings = UiThreadTimings.Snapshot().Where(t => t.StartTimestamp >= fromTimestamp && t.EndTimestamp <= toTimestamp).ToList();
         var preAwait = timings.FirstOrDefault(t => t.Name == "package.init.preawait");
-        var mainThread = timings.Where(t => t.ThreadId == uiThreadId).ToList();
-        var stretches = mainThread
+
+        // A name with a "/" is a part of the visit before it (its time is inside that visit's): listed, not added again.
+        var mainThread = timings.Where(t => t.ThreadId == uiThreadId && t.Name.IndexOf('/') < 0).ToList();
+        var stretches = timings.Where(t => t.ThreadId == uiThreadId)
+            .GroupBy(t => t.Name)
+            .Select(g => new LoadStretch(g.Key, g.Count(), TimeSpan.FromTicks(g.Sum(t => t.Duration.Ticks))))
+            .OrderBy(s => s.Name, StringComparer.Ordinal) // A part sorts right after its visit.
+            .ToList();
+        var elsewhere = timings
+            .Where(t => t.ThreadId != uiThreadId)
             .GroupBy(t => t.Name)
             .Select(g => new LoadStretch(g.Key, g.Count(), TimeSpan.FromTicks(g.Sum(t => t.Duration.Ticks))))
             .OrderByDescending(s => s.Total)
@@ -173,7 +181,10 @@ public static class PillionHostChecks
             mainThread.Count,
             preAwait?.Duration,
             preAwait is not null && preAwait.ThreadId == uiThreadId,
-            stretches);
+            stretches)
+        {
+            OffThread = elsewhere,
+        };
     }
 
     private static async Task<IHostConnection> GetConnectionAsync()
@@ -256,6 +267,9 @@ public sealed record LoadStretch(string Name, int Count, TimeSpan Total);
 /// <param name="Stretches">The UI-thread stretches by name, longest first.</param>
 public sealed record PackageLoadTimings(bool Enabled, TimeSpan MainThreadTotal, int MainThreadVisits, TimeSpan? PreAwait, bool PreAwaitOnUiThread, IReadOnlyList<LoadStretch> Stretches)
 {
+    /// <summary>Gets the timed stretches that ran on other threads (the background part of initialization), longest first: they do not block the shell.</summary>
+    public IReadOnlyList<LoadStretch> OffThread { get; init; } = [];
+
     /// <inheritdoc/>
     public override string ToString()
     {
@@ -264,6 +278,6 @@ public sealed record PackageLoadTimings(bool Enabled, TimeSpan MainThreadTotal, 
             return "not recorded (PILLION_UI_THREAD_TIMINGS was not 1 when the package loaded)";
         }
 
-        return FormattableString.Invariant($"{MainThreadTotal.TotalMilliseconds:0.0} ms on the UI thread in {MainThreadVisits} timed visits ({string.Join(", ", Stretches.Select(s => FormattableString.Invariant($"{s.Name} x{s.Count} {s.Total.TotalMilliseconds:0.0} ms")))}); InitializeAsync before its first switch: {(PreAwait is { } p ? FormattableString.Invariant($"{p.TotalMilliseconds:0.0} ms") : "not seen")} on {(PreAwaitOnUiThread ? "the UI thread (blocks the shell)" : "a pool thread (does not block the shell)")}");
+        return FormattableString.Invariant($"{MainThreadTotal.TotalMilliseconds:0.0} ms on the UI thread in {MainThreadVisits} timed visits ({string.Join(", ", Stretches.Select(s => FormattableString.Invariant($"{s.Name} x{s.Count} {s.Total.TotalMilliseconds:0.0} ms")))}); InitializeAsync before its first switch: {(PreAwait is { } p ? FormattableString.Invariant($"{p.TotalMilliseconds:0.0} ms") : "not seen")} on {(PreAwaitOnUiThread ? "the UI thread (blocks the shell)" : "a pool thread (does not block the shell)")}; timed off the UI thread: {(OffThread.Count == 0 ? "none" : string.Join(", ", OffThread.Select(s => FormattableString.Invariant($"{s.Name} x{s.Count} {s.Total.TotalMilliseconds:0.0} ms"))))}");
     }
 }

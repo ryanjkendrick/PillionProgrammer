@@ -31,6 +31,9 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
     /// <summary>The design budget (section 13) for Pillion's own time on the UI thread between the package load and Ready.</summary>
     private static readonly TimeSpan MaxPillionLoadMainThread = TimeSpan.FromMilliseconds(50);
 
+    /// <summary>How long after Ready the test keeps counting Pillion's deferred UI-thread work.</summary>
+    private static readonly TimeSpan DeferredWindow = TimeSpan.FromSeconds(3);
+
     /// <summary>The budget for the part of <c>InitializeAsync</c> before its first switch to the UI thread (it blocks the shell on a synchronous load).</summary>
     private static readonly TimeSpan MaxPreAwait = TimeSpan.FromMilliseconds(10);
 
@@ -94,6 +97,12 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
         Output.WriteLine(measured.ToString());
         var timed = measured.PillionTimed;
         Output.WriteLine("PackageLoadTimings: " + (timed is null ? "{}" : PackageLoadTimingsJson(timed)));
+        if (measured.PillionDeferred is { } deferred)
+        {
+            Output.WriteLine($"Pillion's work deferred until after Ready ({DeferredWindow.TotalSeconds:0} s window): {deferred.MainThreadTotal.TotalMilliseconds:0.0} ms on the UI thread in {deferred.MainThreadVisits} timed visits ({string.Join(", ", deferred.Stretches.Select(s => FormattableString.Invariant($"{s.Name} x{s.Count} {s.Total.TotalMilliseconds:0.0} ms")))}). Load plus deferred: {(timed?.MainThreadTotal + deferred.MainThreadTotal)?.TotalMilliseconds:0.0} ms.");
+            Output.WriteLine("PackageDeferredTimings: " + PackageLoadTimingsJson(deferred));
+        }
+
         Assert.True(timed is { Enabled: true }, "Pillion's UI-thread timings were not recorded during the package load. " + measured);
         Assert.True(
             timed!.MainThreadTotal < MaxPillionLoadMainThread,
@@ -247,8 +256,13 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
         var ready = sampler.Mark();
         var readyTimestamp = Stopwatch.GetTimestamp();
 
-        // Pillion's own timed UI-thread work in the same window (only with PILLION_UI_THREAD_TIMINGS=1 from the start).
+        // Pillion's own timed UI-thread work in the same window.
         var timed = PillionHostChecks.SummarizeLoad(folderOpeningTimestamp, readyTimestamp, uiThreadId);
+
+        // What Pillion deferred until the start-up was over (the Output pane, the Error List connection): a few seconds
+        // after Ready, still counted, but reported apart from the load.
+        await Task.Delay(DeferredWindow, HangMitigatingCancellationToken);
+        var deferred = PillionHostChecks.SummarizeLoad(readyTimestamp, Stopwatch.GetTimestamp(), uiThreadId);
         PillionHostChecks.RestoreUiThreadTimingsVariable(timingsVariable); // The rest of the run is untimed unless the gate asked for it.
 
         var log = await GetActivityLogAsync();
@@ -280,6 +294,7 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
             Samples: sampler.Count)
         {
             PillionTimed = timed,
+            PillionDeferred = deferred,
         };
         return log;
     }
@@ -294,6 +309,7 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
             ["preAwaitMs"] = timed.PreAwait is { } p ? Math.Round(p.TotalMilliseconds, 2) : null,
             ["preAwaitOnUiThread"] = timed.PreAwaitOnUiThread,
             ["stretches"] = new Newtonsoft.Json.Linq.JArray(timed.Stretches.Select(s => new Newtonsoft.Json.Linq.JObject { ["name"] = s.Name, ["count"] = s.Count, ["ms"] = Math.Round(s.Total.TotalMilliseconds, 2) })),
+            ["offThread"] = new Newtonsoft.Json.Linq.JArray(timed.OffThread.Select(s => new Newtonsoft.Json.Linq.JObject { ["name"] = s.Name, ["count"] = s.Count, ["ms"] = Math.Round(s.Total.TotalMilliseconds, 2) })),
         }.ToString(Newtonsoft.Json.Formatting.None);
 
     private async Task<IVsWindowFrame?> FindChatWindowAsync()

@@ -44,8 +44,14 @@ internal sealed class IdeSignalsFeature : IDisposable
     /// <summary>Connects the hub to Visual Studio; each part that fails is logged and left out, the others keep working.</summary>
     /// <param name="services">The package's async service provider.</param>
     /// <param name="cancellationToken">Cancelled when Visual Studio shuts down.</param>
+    /// <param name="startupOver">
+    /// Returns a task that completes when the package's start-up is over. The Error List is connected only after it: asking for the
+    /// <c>SVsErrorList</c> service makes Visual Studio create the Error List, which took 100 to 160 ms of UI-thread time on 17.x.
+    /// Until then <see cref="IdeSignalsHub.DiagnosticsNote"/> says the Error List is not available yet (Roslyn diagnostics
+    /// answer meanwhile). <see langword="null"/> connects it at once.
+    /// </param>
     /// <returns>A task that completes when the connections are made.</returns>
-    public async Task StartAsync(IAsyncServiceProvider services, CancellationToken cancellationToken)
+    public async Task StartAsync(IAsyncServiceProvider services, CancellationToken cancellationToken, Func<Task>? startupOver = null)
     {
         await TaskScheduler.Default;
 
@@ -53,6 +59,11 @@ internal sealed class IdeSignalsFeature : IDisposable
         await RunStepAsync("document events", () => ConnectDocumentEventsAsync(services, cancellationToken)).ConfigureAwait(false);
         await RunStepAsync("output panes", () => ConnectOutputPanesAsync(services, cancellationToken)).ConfigureAwait(false);
         Hub.Roslyn = new RoslynDiagnosticsSource(_log);
+        if (startupOver is not null)
+        {
+            await startupOver().ConfigureAwait(false);
+        }
+
         await RunStepAsync("Error List", () => ConnectErrorListAsync(services, cancellationToken)).ConfigureAwait(false);
         _log.Info("signals.started", "IDE signals started.", ("diagnostics", Hub.DiagnosticsNote));
     }
