@@ -31,7 +31,10 @@ public enum PillionLogLevel
 /// Line format: <c>2026-10-08T14:02:03.123Z info host.launched pid=1234 pipe=pillion-1-0a1b2c3d message="..."</c>.
 /// Values containing spaces, quotes or equals signs are quoted. Registered secrets (the protocol token) are replaced
 /// by <c>[redacted]</c> in every line as a last line of defence; callers never pass them in the first place.
-/// Logging never throws.
+/// Logging never throws. By default each line is appended to the file on the calling thread. With
+/// <c>writeInBackground</c> (the extension's choice) a line is only queued by the caller, in order, and a thread-pool
+/// thread appends the queue in batches, so a caller on Visual Studio's UI thread never waits for file IO or for a lock
+/// held across it; <see cref="Flush"/> waits for the queue to be written (at shutdown, and in tests).
 /// </remarks>
 public sealed class PillionLog
 {
@@ -41,14 +44,19 @@ public sealed class PillionLog
     private readonly HashSet<string> _secrets = new(StringComparer.Ordinal);
     private readonly string? _directory;
     private readonly Func<DateTimeOffset> _now;
+    private readonly bool _writeInBackground;
+    private readonly Queue<(DateTimeOffset Time, string Line)> _queued = new();
+    private bool _draining;
 
     /// <summary>Initializes a new instance of the <see cref="PillionLog"/> class.</summary>
     /// <param name="directory">The log directory, or <see langword="null"/> to write to the sink only.</param>
     /// <param name="now">The time source; defaults to <see cref="DateTimeOffset.UtcNow"/>.</param>
-    public PillionLog(string? directory, Func<DateTimeOffset>? now = null)
+    /// <param name="writeInBackground">Whether a thread-pool thread appends the lines to the file (callers only queue them) instead of the calling thread.</param>
+    public PillionLog(string? directory, Func<DateTimeOffset>? now = null, bool writeInBackground = false)
     {
         _directory = directory;
         _now = now ?? (() => DateTimeOffset.UtcNow);
+        _writeInBackground = writeInBackground;
     }
 
     /// <summary>
@@ -139,10 +147,28 @@ public sealed class PillionLog
         {
             var now = _now();
             string line;
+            var startDrain = false;
             lock (_gate)
             {
                 line = Redact(Format(now, level, eventName, message, fields));
-                AppendToFile(now, line);
+                if (_writeInBackground)
+                {
+                    if (_directory is not null)
+                    {
+                        _queued.Enqueue((now, line));
+                        startDrain = !_draining;
+                        _draining = true;
+                    }
+                }
+                else
+                {
+                    AppendToFile(now, line);
+                }
+            }
+
+            if (startDrain)
+            {
+                _ = System.Threading.ThreadPool.UnsafeQueueUserWorkItem(_ => Drain(), null);
             }
 
             if (level >= PillionLogLevel.Info)
@@ -154,6 +180,27 @@ public sealed class PillionLog
         catch (Exception)
 #pragma warning restore CA1031
         {
+        }
+    }
+
+    /// <summary>Waits until every line logged so far has been written to the file (nothing to wait for unless the log writes in the background).</summary>
+    /// <param name="timeout">The longest to wait.</param>
+    /// <returns><see langword="true"/> when the queue is empty and written; <see langword="false"/> when the wait timed out.</returns>
+    public bool Flush(TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        lock (_gate)
+        {
+            while (_queued.Count > 0 || _draining)
+            {
+                var remaining = deadline - DateTime.UtcNow;
+                if (remaining <= TimeSpan.Zero || !System.Threading.Monitor.Wait(_gate, remaining))
+                {
+                    return _queued.Count == 0 && !_draining;
+                }
+            }
+
+            return true;
         }
     }
 
@@ -252,6 +299,82 @@ public sealed class PillionLog
         }
 
         return line;
+    }
+
+    /// <summary>Appends the queued lines in batches on a pool thread until the queue is empty. The queue's order is the order the lines were logged in.</summary>
+    private void Drain()
+    {
+        try
+        {
+            while (true)
+            {
+                List<(DateTimeOffset Time, string Line)> batch;
+                lock (_gate)
+                {
+                    if (_queued.Count == 0)
+                    {
+                        _draining = false;
+                        System.Threading.Monitor.PulseAll(_gate);
+                        return;
+                    }
+
+                    batch = new List<(DateTimeOffset, string)>(_queued);
+                    _queued.Clear();
+                }
+
+                AppendBatch(batch);
+            }
+        }
+#pragma warning disable CA1031 // Logging must never take the extension down; a failed drain restarts with the next line.
+        catch (Exception)
+#pragma warning restore CA1031
+        {
+            lock (_gate)
+            {
+                _draining = false;
+                System.Threading.Monitor.PulseAll(_gate);
+            }
+        }
+    }
+
+    private void AppendBatch(List<(DateTimeOffset Time, string Line)> batch)
+    {
+        if (_directory is null)
+        {
+            return;
+        }
+
+        // One file per UTC day: a batch that crosses midnight is written as one append per day, in order.
+        var index = 0;
+        while (index < batch.Count)
+        {
+            var fileName = FileNameFor(batch[index].Time);
+            var text = new StringBuilder();
+            while (index < batch.Count && FileNameFor(batch[index].Time) == fileName)
+            {
+                text.Append(batch[index].Line).Append(Environment.NewLine);
+                index++;
+            }
+
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                try
+                {
+                    Directory.CreateDirectory(_directory);
+                    File.AppendAllText(Path.Combine(_directory, fileName), text.ToString(), Utf8NoBom);
+                    break;
+                }
+                catch (IOException)
+                {
+                    // Another devenv.exe may hold the file briefly: this is a pool thread, so wait a little and try again.
+                    System.Threading.Thread.Sleep(15);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    break;
+                }
+            }
+        }
     }
 
     private void AppendToFile(DateTimeOffset now, string line)

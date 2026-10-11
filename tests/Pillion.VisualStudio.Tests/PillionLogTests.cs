@@ -55,6 +55,50 @@ public sealed class PillionLogTests : IDisposable
     }
 
     [Fact]
+    public void Write_InBackground_QueuesLinesInOrder_AndFlushWaitsForTheFile()
+    {
+        var log = new PillionLog(_directory, () => Now, writeInBackground: true);
+
+        for (var i = 0; i < 200; i++)
+        {
+            log.Info("e", "line " + i);
+        }
+
+        Assert.True(log.Flush(TimeSpan.FromSeconds(10)));
+        var lines = File.ReadAllLines(Path.Combine(_directory, "vsix-20261008.log"));
+        Assert.Equal(200, lines.Length);
+        for (var i = 0; i < 200; i++)
+        {
+            Assert.EndsWith("message=\"line " + i + "\"", lines[i]);
+        }
+    }
+
+    [Fact]
+    public void Write_InBackground_DoesNotWaitForTheFile()
+    {
+        // The file is held open without sharing: a synchronous log would hit the IOException path and lose the line, and
+        // the caller must not be the one to wait. Once the file is released the queued line is written.
+        Directory.CreateDirectory(_directory);
+        var path = Path.Combine(_directory, "vsix-20261008.log");
+        var log = new PillionLog(_directory, () => Now, writeInBackground: true);
+
+        using (new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            log.Info("e", "while locked");
+            Assert.True(clock.Elapsed < TimeSpan.FromMilliseconds(500), "Logging waited for the file: " + clock.Elapsed);
+        }
+
+        log.Info("e", "after");
+        Assert.True(log.Flush(TimeSpan.FromSeconds(10)));
+        Assert.Contains("after", File.ReadAllText(path));
+    }
+
+    [Fact]
+    public void Flush_WithNothingQueued_ReturnsAtOnce() =>
+        Assert.True(new PillionLog(_directory, () => Now, writeInBackground: true).Flush(TimeSpan.FromSeconds(1)));
+
+    [Fact]
     public void Sink_ReceivesInfoAndAbove()
     {
         var sunk = new List<string>();
