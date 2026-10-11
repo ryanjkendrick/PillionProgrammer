@@ -13,8 +13,23 @@ namespace Pillion.VisualStudio.Core.Autocomplete;
 /// </summary>
 public sealed class AutocompleteEngine
 {
-    /// <summary>How long a multi-line attempt waits for the whole suggestion after its first line before showing what it has.</summary>
-    public static readonly TimeSpan PartialGrace = TimeSpan.FromMilliseconds(300);
+    /// <summary>
+    /// The shortest time between two updates of a suggestion that grows while it streams (design section 13: the UI
+    /// thread gets batched updates, no more than one display update per 50 ms). The first visible text is shown at once:
+    /// there is no grace period any more (the 300 ms <c>PartialGrace</c> made a 57 to 171 ms first chunk a 420 to 611 ms
+    /// suggestion at Gate 1).
+    /// </summary>
+    public static readonly TimeSpan DisplayUpdateInterval = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>
+    /// Whether a single-line suggestion is shown at its first chunk and then grown. Off: the Visual Studio integration
+    /// tests on 18.x and 17.14 (CI run 38114630716) showed that <c>SuggestionServiceBase.TryUpdateProposal</c> returns
+    /// the proposal but does not change the displayed ghost text, so a suggestion shown at its first chunk stayed at that
+    /// chunk and Tab took only it ("var total = Calculat"). A single-line suggestion is therefore shown when its line is
+    /// complete, with no grace period; a multi-line one still at its first complete line. Switch this on once growing the
+    /// displayed proposal is shown to work.
+    /// </summary>
+    public static bool ShowSingleLineEarly => false;
 
     /// <summary>How long the language-service declaration lookup may run past the debounce before the heuristic is used.</summary>
     public static readonly TimeSpan DeclarationBudget = TimeSpan.FromMilliseconds(100);
@@ -80,6 +95,20 @@ public sealed class AutocompleteEngine
 
     /// <summary>Gets the current settings (the defaults until the host has answered).</summary>
     public AutocompleteSettings Settings => _availability?.Settings ?? AutocompleteSettings.Default;
+
+    /// <summary>
+    /// The availability gate every request path passes before anything is sent (Gate 1 open issue 3): the
+    /// <c>autocomplete</c> feature flag and the user's disabled languages, read from the current settings.
+    /// </summary>
+    /// <param name="languageId">The document's language id.</param>
+    /// <returns><see cref="SuppressionReason.FeatureDisabled"/>, <see cref="SuppressionReason.LanguageDisabled"/> or <see cref="SuppressionReason.None"/>.</returns>
+    public SuppressionReason Gate(string? languageId)
+    {
+        var settings = Settings;
+        return !settings.Enabled ? SuppressionReason.FeatureDisabled
+            : SuppressionRules.IsLanguageDisabled(languageId, settings.DisabledLanguages) ? SuppressionReason.LanguageDisabled
+            : SuppressionReason.None;
+    }
 
     /// <summary>Gets a value indicating whether the host (or the test override, <see cref="AutocompleteOverrides"/>) can take requests now.</summary>
     public bool HostUsable => AutocompleteOverrides.ModelService is not null || Connection.State is HostState.Ready or HostState.Degraded;

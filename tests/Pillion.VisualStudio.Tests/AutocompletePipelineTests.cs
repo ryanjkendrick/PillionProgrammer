@@ -265,7 +265,7 @@ public sealed class AutocompletePipelineTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public async Task MultiLine_IsReadyWithTheFirstLinesWhenTheRestIsSlow()
+    public async Task MultiLine_IsReadyWithTheFirstLineWhenTheRestIsSlow()
     {
         _model.Manual = true;
         _model.Respond = _ => ["\n        var x = 1;\n", "        return x;\n"];
@@ -279,8 +279,6 @@ public sealed class AutocompletePipelineTests(ITestOutputHelper output)
         _clock.Advance(Debounce);
         await Wait.UntilAsync(() => _model.Requests.Count == 1, "the request reached the host");
         _model.Release();
-        await _clock.WhenWaitingAsync(AutocompleteEngine.PartialGrace);
-        _clock.Advance(AutocompleteEngine.PartialGrace);
 
         var ready = await attempt.Ready.WithTimeout(Timeout);
         Assert.False(ready!.IsComplete);

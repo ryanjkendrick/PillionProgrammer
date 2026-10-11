@@ -102,7 +102,14 @@ public sealed record AutocompletePrompt
 /// documents or the edits elsewhere change; the prefix starts on a line whose absolute number is a multiple of
 /// <see cref="AnchorLines"/>, so the start moves only in steps of that many lines as the file grows.
 /// </summary>
-public static class AutocompletePromptBuilder
+/// <remarks>
+/// The prompt must read as code the model is continuing, never as a message to answer (Gate 1 open issue 1: with a
+/// header of sentences such as <c>// Recent edit: C:\src\Foo.cs:12: ...</c> the instruct-tuned 1.5B model replied in
+/// prose). So the header is a few terse comments in the language's own syntax (<c>// file: Foo.cs</c>,
+/// <c>// see: Bar.cs, Baz.cs</c>, <c>// in: void Run()</c>, <c>// edit: Bar.cs:12: Reset();</c>), file names only, and a
+/// model family whose catalog entry sets <c>"fimHeader": false</c> (the small coder models) gets no header at all.
+/// </remarks>
+public static partial class AutocompletePromptBuilder
 {
     /// <summary>The line step the prefix start is aligned to, so it stays put while the user types.</summary>
     public const int AnchorLines = 16;
@@ -124,8 +131,9 @@ public static class AutocompletePromptBuilder
     /// <param name="budget">The prompt budget in tokens.</param>
     /// <param name="counter">The model's token counter.</param>
     /// <param name="explicitFormat">The FIM template when the gateway frames the prompt itself; <see langword="null"/> when the server applies the model's template.</param>
+    /// <param name="includeHeader">Whether to write the comment header (the model family's <c>fimHeader</c> capability); without it the prompt is the code alone.</param>
     /// <returns>The prompt.</returns>
-    public static AutocompletePrompt Build(CompletionRequest request, int budget, IModelTokenCounter counter, FimFormat? explicitFormat = null)
+    public static AutocompletePrompt Build(CompletionRequest request, int budget, IModelTokenCounter counter, FimFormat? explicitFormat = null, bool includeHeader = true)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(counter);
@@ -147,7 +155,7 @@ public static class AutocompletePromptBuilder
 
         var suffixFloor = Math.Min(suffixNeed, suffixMinimum);
         var prefixFloor = Math.Min(prefixNeed, prefixMinimum);
-        var headerRoom = Math.Min(headerMaximum, available - suffixFloor - prefixFloor);
+        var headerRoom = includeHeader ? Math.Min(headerMaximum, available - suffixFloor - prefixFloor) : 0;
 
         var context = new HeaderContext(request);
         var header = BuildHeader(context, headerRoom, counter, includeDeclaration: true);
@@ -377,8 +385,8 @@ public static class AutocompletePromptBuilder
         string Line(string text) => comment.Open + text + comment.Close + "\n";
 
         // Inclusion priority: file, declaration, open documents, recent edits. Layout order is most to least stable.
-        var file = context.FileName is { } name ? Line("File: " + name) : null;
-        var declaration = includeDeclaration && context.Declaration is { } d ? Line("In: " + d) : null;
+        var file = context.FileName is { } name ? Line("file: " + name) : null;
+        var declaration = includeDeclaration && context.Declaration is { } d ? Line("in: " + d) : null;
         string? openDocuments = null;
         var edits = new List<string>();
 
@@ -397,7 +405,7 @@ public static class AutocompletePromptBuilder
 
         for (var count = Math.Min(MaxOpenDocuments, context.OpenDocuments.Count); count > 0; count /= 2)
         {
-            openDocuments = Line("Open files: " + string.Join(", ", context.OpenDocuments.Take(count).Order(StringComparer.OrdinalIgnoreCase)));
+            openDocuments = Line("see: " + string.Join(", ", context.OpenDocuments.Take(count).Order(StringComparer.OrdinalIgnoreCase)));
             if (Fits())
             {
                 break;
@@ -408,7 +416,7 @@ public static class AutocompletePromptBuilder
 
         foreach (var edit in context.RecentEdits)
         {
-            edits.Add(Line("Recent edit: " + edit));
+            edits.Add(Line("edit: " + edit));
             if (!Fits())
             {
                 edits.RemoveAt(edits.Count - 1);
@@ -492,11 +500,12 @@ public static class AutocompletePromptBuilder
                 .ToList();
 
             // Edits in the current file are already visible around the caret, and listing them would change the header
-            // on every keystroke and defeat the model's prompt cache, so only edits elsewhere are kept.
+            // on every keystroke and defeat the model's prompt cache, so only edits elsewhere are kept, by file name.
             RecentEdits = (request.RecentEdits ?? [])
                 .Where(e => !string.IsNullOrWhiteSpace(e))
-                .Where(e => FileName is null || !e.Contains(FileName, StringComparison.OrdinalIgnoreCase))
-                .Select(Flatten)
+                .Select(ShortenEdit)
+                .Where(e => FileName is null || !(e.Name.Equals(FileName, StringComparison.OrdinalIgnoreCase) || (e.Name.Length == 0 && e.Text.StartsWith(FileName + ":", StringComparison.OrdinalIgnoreCase))))
+                .Select(e => Flatten(e.Text))
                 .Take(MaxRecentEdits)
                 .ToList();
         }
@@ -511,6 +520,27 @@ public static class AutocompletePromptBuilder
 
         public List<string> RecentEdits { get; }
     }
+
+    /// <summary>
+    /// Shortens a recent edit (<c>path:line: text</c>, as the extension sends it) to <c>name:line: text</c>, so no
+    /// directory reaches the model; an edit in another shape is kept as it is.
+    /// </summary>
+    /// <param name="edit">The edit.</param>
+    /// <returns>The file name (empty when unknown) and the text for the header.</returns>
+    internal static (string Name, string Text) ShortenEdit(string edit)
+    {
+        var match = EditPattern().Match(edit.Trim());
+        if (!match.Success)
+        {
+            return (string.Empty, edit);
+        }
+
+        var name = Path.GetFileName(match.Groups["path"].Value.Trim());
+        return (name, name + ":" + match.Groups["line"].Value + ": " + match.Groups["text"].Value);
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^(?<path>.+?):(?<line>\d+):\s?(?<text>.*)$", System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex EditPattern();
 
     private sealed record PromptLayout(string Prefix, int PrefixTokens, int PrefixLinesDropped, bool CaretLineCut, string Suffix, int SuffixTokens, int SuffixLinesDropped);
 }

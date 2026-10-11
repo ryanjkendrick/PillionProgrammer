@@ -12,7 +12,7 @@ public sealed class AutocompleteGatewayTests
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
 
     [Fact]
-    public async Task Ollama_GetsTheRawPrefixAndSuffix_WithHeader_SingleLineStops_AndTheGpuBudget()
+    public async Task Ollama_SmallModel_GetsTheCodeAlone_NoNewlineStop_AndTheGpuBudget()
     {
         using var harness = new GatewayHarness(withCloud: false);
         var request = PromptBudgetTests.Request("int Add(int a, int b) => ", ";\n", caretLine: 0);
@@ -21,21 +21,103 @@ public sealed class AutocompleteGatewayTests
 
         var chunks = await harness.Gateway.CompleteAsync(request, CancellationToken.None).CollectAsync().WaitAsync(Wait);
 
+        // qwen2.5-coder:1.5b's catalog family sets fimHeader false: no header at all.
         var fim = Assert.Single(harness.Local!.ReceivedFims);
-        Assert.Equal("// File: Calc.cs\n// Open files: Program.cs\nint Add(int a, int b) => ", fim.Prefix);
+        Assert.Equal("int Add(int a, int b) => ", fim.Prefix);
         Assert.Equal(";\n", fim.Suffix);
         Assert.Equal(64, fim.MaxTokens);
         Assert.Equal(Profile.LocalFast, fim.Profile);
         Assert.Null(fim.ContextSize); // num_ctx stays fixed per profile in the adapter
-        Assert.Equal("\n", fim.StopSequences[0]);
-        Assert.Equal("// stop", fim.StopSequences[1]);
+
+        // The single-line newline is not sent to the provider (a leading fence line would end the completion); the
+        // gateway's shaper ends the line instead.
+        Assert.DoesNotContain("\n", fim.StopSequences);
+        Assert.Equal("// stop", fim.StopSequences[0]);
         Assert.Contains("<|fim_prefix|>", fim.StopSequences); // the Qwen2.5-Coder family's stops
+        Assert.Contains("\n```", fim.StopSequences); // and its closing-fence stop
         Assert.Equal("a + b", string.Concat(chunks.Select(c => c.Text)));
 
         var final = chunks[^1];
         Assert.True(final.IsFinal);
         var counted = TokenCounter.Default.ForModel("qwen2.5-coder:1.5b").Count(fim.Prefix) + TokenCounter.Default.ForModel("qwen2.5-coder:1.5b").Count(fim.Suffix) + AutocompleteBudget.ServerTemplateReserveTokens;
         Assert.InRange(final.PromptTokens, counted, counted + 2); // the header and the prefix are rounded up separately
+    }
+
+    [Fact]
+    public async Task LargerModel_GetsTheTerseCommentHeader()
+    {
+        using var harness = new GatewayHarness(withCloud: false);
+        harness.Settings.Routing.Profiles[Profile.LocalFast] = "local/qwen2.5-coder:14b";
+        harness.Reload();
+        harness.ListAll();
+        var request = PromptBudgetTests.Request("int Add(int a, int b) => ", ";\n", caretLine: 0);
+        request.OpenDocuments = [@"C:\src\Program.cs"];
+        request.RecentEdits = [@"C:\src\Program.cs:8: Run(args);"];
+
+        await harness.Gateway.CompleteAsync(request, CancellationToken.None).CollectAsync().WaitAsync(Wait);
+
+        var fim = Assert.Single(harness.Local!.ReceivedFims);
+        Assert.Equal("// file: Calc.cs\n// see: Program.cs\n// edit: Program.cs:8: Run(args);\nint Add(int a, int b) => ", fim.Prefix);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LeadingFence_IsStripped_AndTheCodeAfterItShown(bool multiLine)
+    {
+        using var harness = new GatewayHarness(withCloud: false);
+        harness.Local!.Fim = (_, ct) => FakeProvider.Pieces(ct, "``", "`csharp\n", "    return a + b;", "\n```\n", "more");
+        var request = GatewayHarness.CompletionRequest(prefix: "int Add(int a, int b)\n{\n    ", suffix: "\n}\n");
+        request.AllowMultiLine = multiLine;
+
+        var chunks = await harness.Gateway.CompleteAsync(request, CancellationToken.None).CollectAsync().WaitAsync(Wait);
+
+        // The caret stands after the indentation already, so the quoted line's own indentation goes; the closing fence
+        // ends the completion.
+        var text = string.Concat(chunks.Select(c => c.Text));
+        Assert.Equal("return a + b;", text);
+        Assert.DoesNotContain("```", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FencedRestatementOfTheCaretLine_KeepsOnlyTheContinuation()
+    {
+        // Sample from the Gate 1 measurement (qwen2.5-coder:7b, empty suffix): "```csharp\n        return value * 2;\n    }\n}".
+        using var harness = new GatewayHarness(withCloud: false);
+        harness.Local!.Fim = (_, ct) => FakeProvider.Pieces(ct, " ```csharp\n", "        return value * 2;\n", "    }\n}");
+        var request = GatewayHarness.CompletionRequest(prefix: "public static int Twice(int value)\n    {\n        return ", suffix: string.Empty);
+
+        var chunks = await harness.Gateway.CompleteAsync(request, CancellationToken.None).CollectAsync().WaitAsync(Wait);
+
+        Assert.Equal("value * 2;", string.Concat(chunks.Select(c => c.Text)));
+    }
+
+    [Fact]
+    public async Task Prose_IsDropped_AndNotCached()
+    {
+        // A real 1.5B reply from the Gate 1 typing scenario (autocomplete-fast-VS18.json, run 3).
+        using var harness = new GatewayHarness(withCloud: false);
+        harness.Local!.Fim = (_, ct) => FakeProvider.Pieces(ct, "It", " looks", " like", " you're", " encountering an issue with the `TypeFast.cs` file.");
+        var request = GatewayHarness.CompletionRequest(prefix: "namespace Gate;\n\npublic static class TypeFast\n{\n    ", suffix: string.Empty);
+
+        var chunks = await harness.Gateway.CompleteAsync(request, CancellationToken.None).CollectAsync().WaitAsync(Wait);
+
+        Assert.Equal(string.Empty, string.Concat(chunks.Select(c => c.Text)));
+        Assert.True(chunks[^1].IsFinal);
+        Assert.Equal(0, harness.Local.InFlight); // the stream was closed at once
+        Assert.Equal(CacheHitKind.None, harness.Cache.Lookup("local", "qwen2.5-coder:1.5b", false, request.Prefix!, request.Suffix!, out _));
+    }
+
+    [Fact]
+    public async Task ProseInAComment_IsKept()
+    {
+        using var harness = new GatewayHarness(withCloud: false);
+        harness.Local!.Fim = (_, ct) => FakeProvider.Pieces(ct, "It looks like the total of the items in the cart.");
+        var request = GatewayHarness.CompletionRequest(prefix: "    // Returns the total. ", suffix: "\n");
+
+        var chunks = await harness.Gateway.CompleteAsync(request, CancellationToken.None).CollectAsync().WaitAsync(Wait);
+
+        Assert.Equal("It looks like the total of the items in the cart.", string.Concat(chunks.Select(c => c.Text)));
     }
 
     [Fact]
@@ -145,7 +227,7 @@ public sealed class AutocompleteGatewayTests
         await harness.Gateway.CompleteAsync(PromptBudgetTests.Request("x = ", ";", 0), CancellationToken.None).CollectAsync().WaitAsync(Wait);
 
         var fim = Assert.Single(raw.ReceivedFims);
-        Assert.Equal("<fim_prefix>// File: Calc.cs\nx = <fim_suffix>;<fim_middle>", fim.Prefix);
+        Assert.Equal("<fim_prefix>// file: Calc.cs\nx = <fim_suffix>;<fim_middle>", fim.Prefix);
         Assert.Equal(string.Empty, fim.Suffix);
         Assert.Contains("<file_sep>", fim.StopSequences);
     }

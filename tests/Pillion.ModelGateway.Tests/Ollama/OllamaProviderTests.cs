@@ -202,6 +202,23 @@ public class OllamaProviderTests
     }
 
     [Fact]
+    public async Task Fim_AtTheEndOfTheDocument_SendsALineBreakAsTheSuffix()
+    {
+        // Ollama's templates take the FIM path only when the suffix is not empty; an empty one turns the prompt into a
+        // chat turn, which the instruct-tuned coder models answered in prose or behind a fence at Gate 1.
+        var handler = FakeOllamaHandler.WithDefaults();
+        using var provider = Create(handler);
+        var client = provider.GetFimClient("qwen2.5-coder:1.5b")!;
+
+        await client.CompleteAsync(new FimRequest { Prefix = "int Add(int a, int b) => ", Suffix = string.Empty, Profile = Profile.LocalFast }, CancellationToken.None).CollectAsync();
+
+        var body = handler.BodiesFor("api/generate").Single();
+        Assert.Equal("\n", body["suffix"]!.GetValue<string>());
+        Assert.Equal("\n", global::Pillion.ModelGateway.Providers.Ollama.OllamaFimClient.SuffixToSend(null));
+        Assert.Equal(" ", global::Pillion.ModelGateway.Providers.Ollama.OllamaFimClient.SuffixToSend(" "));
+    }
+
+    [Fact]
     public async Task Fim_ModelWithoutInsert_HasNoFimClientOnceListed()
     {
         using var provider = Create(FakeOllamaHandler.WithDefaults());

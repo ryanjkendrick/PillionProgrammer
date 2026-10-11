@@ -36,6 +36,13 @@ public sealed record ModelCapabilityDescriptor
     /// <summary>Gets a value indicating whether the model supports fill-in-the-middle completion.</summary>
     public bool Fim { get; init; }
 
+    /// <summary>
+    /// Gets a value indicating whether the autocomplete prompt for the model carries the terse comment header (file name,
+    /// open files, enclosing declaration, recent edits elsewhere) before the code. Catalog data only: small instruct-tuned
+    /// coder models answer such a header in prose instead of continuing the code, so their families set it off.
+    /// </summary>
+    public bool FimHeader { get; init; } = true;
+
     /// <summary>Gets a value indicating whether the model generates embeddings.</summary>
     public bool Embeddings { get; init; }
 

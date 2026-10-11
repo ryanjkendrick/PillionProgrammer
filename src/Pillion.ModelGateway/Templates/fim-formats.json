@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "comment": "Fill-in-the-middle token formats per model family (design section 6, Prompt templates). Ollama applies a model's own FIM template when 'suffix' is passed, so the Ollama path sends the raw prefix and suffix; an OpenAI-compatible /v1/completions server whose provider entry sets \"fimTemplate\": \"explicit\" receives the prompt built from the template here, with no suffix. {prefix} and {suffix} are replaced by the text around the caret. 'match' patterns are matched in order against the model id without its provider or namespace prefix, case-insensitively, '*' being a wildcard. 'stop' sequences are added to every completion from the family, after a single-line request's newline and the request's own stop sequences. 'defaults': maxTokens for FIM outside autocomplete, maxTokensSingleLine and maxTokensMultiLine for autocomplete requests that do not set MaxTokens, temperature, and stop sequences for every family.",
+  "comment": "Fill-in-the-middle token formats per model family (design section 6, Prompt templates). Ollama applies a model's own FIM template when 'suffix' is passed, so the Ollama path sends the raw prefix and suffix; an OpenAI-compatible /v1/completions server whose provider entry sets \"fimTemplate\": \"explicit\" receives the prompt built from the template here, with no suffix. {prefix} and {suffix} are replaced by the text around the caret. 'match' patterns are matched in order against the model id without its provider or namespace prefix, case-insensitively, '*' being a wildcard. 'stop' sequences are added to every completion from the family, after a single-line request's newline and the request's own stop sequences. 'defaults': maxTokens for FIM outside autocomplete, maxTokensSingleLine and maxTokensMultiLine for autocomplete requests that do not set MaxTokens, temperature, and stop sequences for every family. The qwen2.5-coder family also stops at a Markdown fence on a new line (\"\n```\"): its instruct-tuned tags sometimes wrap a completion in a fence, whose opening line the gateway strips (CompletionContentFilter) and whose closing line ends the completion.",
   "formats": [
     {
       "family": "qwen2.5-coder",
       "match": "qwen2.5-coder*",
       "template": "<|fim_prefix|>{prefix}<|fim_suffix|>{suffix}<|fim_middle|>",
-      "stop": [ "<|endoftext|>", "<|fim_prefix|>", "<|fim_suffix|>", "<|fim_middle|>", "<|fim_pad|>", "<|repo_name|>", "<|file_sep|>", "<|im_start|>", "<|im_end|>" ]
+      "stop": [ "<|endoftext|>", "<|fim_prefix|>", "<|fim_suffix|>", "<|fim_middle|>", "<|fim_pad|>", "<|repo_name|>", "<|file_sep|>", "<|im_start|>", "<|im_end|>", "\n```" ]
     },
     {
       "family": "codellama",

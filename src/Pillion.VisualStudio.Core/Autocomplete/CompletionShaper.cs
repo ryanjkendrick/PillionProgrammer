@@ -28,6 +28,9 @@ public enum CompletionStopReason
 
     /// <summary>The line limit (30) was reached.</summary>
     MaxLines,
+
+    /// <summary>A Markdown fence line (<c>```csharp</c>, <c>```</c>) followed content: the model was writing a chat reply.</summary>
+    Fence,
 }
 
 /// <summary>What the shaper needs to know about the document around the caret.</summary>
@@ -65,8 +68,10 @@ public sealed class ShapingContext
 /// Applies the output stop rules of design section 5 (Completion shaping) to streamed completion text: single-line
 /// requests end at the first line break; multi-line output is cut at the end of the enclosing block (brace matching
 /// for C-family languages, dedent for Python), at 30 lines, or at the first line that duplicates text already below
-/// the caret. Feed chunks to <see cref="Append"/> until it returns <see langword="true"/> or the stream ends, then call
-/// <see cref="Complete"/>. Not thread-safe.
+/// the caret. A line that is only a Markdown fence is never shown (Gate 1 open issue 2; the host strips fences too):
+/// a leading one is skipped, a later one ends the suggestion, and a single-line suggestion that is a fence is empty.
+/// Feed chunks to <see cref="Append"/> until it returns <see langword="true"/> or the stream ends, then call
+/// <see cref="Complete"/>; <see cref="DisplayText"/> is what may be shown meanwhile. Not thread-safe.
 /// </summary>
 public sealed class CompletionShaper
 {
@@ -117,6 +122,66 @@ public sealed class CompletionShaper
     /// stream ends, or <see langword="null"/> when no complete line has content yet.
     /// </summary>
     public string? PartialText => CompleteContentLines == 0 ? null : Join(_lines);
+
+    /// <summary>
+    /// Gets what may be shown before the stream ends, or <see langword="null"/> when nothing visible is known yet: for a
+    /// multi-line request the complete lines (<see cref="PartialText"/>), for a single-line one the text so far. A
+    /// single-line text is held back while it could still become a fence (it starts with a backtick or a tilde), and a
+    /// tail that could be the start of the text right of the caret is held until it is known not to repeat it.
+    /// </summary>
+    public string? DisplayText
+    {
+        get
+        {
+            if (_final is not null)
+            {
+                return _final.Trim().Length == 0 ? null : _final;
+            }
+
+            if (_context.MultiLine)
+            {
+                return PartialText;
+            }
+
+            if (_lines.Count > 0)
+            {
+                var line = _lines[0];
+                return line.Trim().Length == 0 ? null : line;
+            }
+
+            var pending = _pending.ToString();
+            var start = pending.TrimStart();
+            if (start.Length == 0 || start[0] is '`' or '~')
+            {
+                return null;
+            }
+
+            var shown = HoldSuffixStart(pending);
+            return shown.Trim().Length == 0 ? null : shown;
+        }
+    }
+
+    /// <summary>Gets a value indicating whether a line is a Markdown fence: <c>```</c> or <c>~~~</c>, optionally followed by a language tag.</summary>
+    /// <param name="line">The line.</param>
+    /// <returns><see langword="true"/> for a fence line.</returns>
+    public static bool IsFenceLine(string? line)
+    {
+        var trimmed = (line ?? string.Empty).Trim();
+        if (!(trimmed.StartsWith("```", StringComparison.Ordinal) || trimmed.StartsWith("~~~", StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        foreach (var c in trimmed.TrimStart('`', '~'))
+        {
+            if (!(char.IsLetterOrDigit(c) || c is '+' or '#' or '-' or '_' or '.' or ' '))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     /// <summary>Shapes a whole completion at once.</summary>
     /// <param name="context">The document context.</param>
@@ -186,8 +251,15 @@ public sealed class CompletionShaper
 
             if (!_context.MultiLine)
             {
-                AcceptLine(_pending.ToString());
+                var single = _pending.ToString();
                 _pending.Clear();
+                if (IsFenceLine(single))
+                {
+                    StopReason = CompletionStopReason.Fence;
+                    return true;
+                }
+
+                AcceptLine(single);
                 StopReason = CompletionStopReason.SingleLine;
                 return true;
             }
@@ -216,7 +288,11 @@ public sealed class CompletionShaper
         {
             if (_pending.Length > 0)
             {
-                if (_context.MultiLine)
+                if (IsFenceLine(_pending.ToString()))
+                {
+                    // A fence that the stream ended on is never shown.
+                }
+                else if (_context.MultiLine)
                 {
                     ProcessLine(_pending.ToString(), complete: false);
                 }
@@ -280,6 +356,18 @@ public sealed class CompletionShaper
     {
         var index = _lines.Count;
         var trimmed = line.Trim();
+
+        // A Markdown fence: skipped before any content, the end of the suggestion after it.
+        if (IsFenceLine(trimmed))
+        {
+            if (CompleteContentLines == 0 && !_lines.Any(l => l.Trim().Length > 0))
+            {
+                return false;
+            }
+
+            StopReason = CompletionStopReason.Fence;
+            return true;
+        }
 
         // Duplicate of the code already below the caret: the model is re-typing what is there.
         if (trimmed.Length > 0 && !DeclarationHeuristic.IsPunctuationOnly(trimmed))
@@ -352,6 +440,21 @@ public sealed class CompletionShaper
         {
             CompleteContentLines++;
         }
+    }
+
+    /// <summary>Holds back the longest tail of a partial line that is the start of the text right of the caret.</summary>
+    private string HoldSuffixStart(string text)
+    {
+        var after = _context.LineAfterCaret.Trim();
+        for (var length = Math.Min(after.Length, text.Length); length > 0; length--)
+        {
+            if (string.CompareOrdinal(text, text.Length - length, after, 0, length) == 0)
+            {
+                return text.Substring(0, text.Length - length);
+            }
+        }
+
+        return text;
     }
 
     /// <summary>Drops a tail that repeats the text right of the caret (for example <c>);</c> inside a call).</summary>

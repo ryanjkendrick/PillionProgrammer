@@ -77,16 +77,21 @@ public sealed class CompletionResult
 
 /// <summary>
 /// One completion attempt: the debounce, the request and the streamed answer. <see cref="Ready"/> completes with the
-/// first suggestion worth showing (the whole single-line suggestion, or the first lines of a multi-line one that is
-/// still streaming after a short grace period); <see cref="Completed"/> with the whole suggestion. Both complete with
-/// <see langword="null"/> when there is nothing to show: cancelled, superseded by a newer attempt, suppressed, empty
-/// or failed. Neither ever faults.
+/// first text worth showing: for a single-line request the first chunk with visible text, for a multi-line one its
+/// first complete line (design decision of 2026-10-11, Gate 1 open issue 4: "time to suggestion" is the first visible
+/// text). While the rest streams, <see cref="Updated"/> reports the grown suggestion, at most once per
+/// <see cref="AutocompleteEngine.DisplayUpdateInterval"/>; <see cref="Completed"/> completes with the whole suggestion.
+/// Both tasks complete with <see langword="null"/> when there is nothing to show: cancelled, superseded by a newer
+/// attempt, suppressed, empty or failed. Neither ever faults.
 /// </summary>
 public sealed class CompletionAttempt
 {
     private readonly CancellationTokenSource _cancellation;
     private readonly TaskCompletionSource<CompletionResult?> _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource<CompletionResult?> _completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly object _gate = new();
+    private CompletionResult? _latest;
+    private bool _shownEarly;
 
     internal CompletionAttempt(long id, string requestId, CancellationTokenSource cancellation)
     {
@@ -107,6 +112,26 @@ public sealed class CompletionAttempt
     /// <summary>Gets a task that completes with the whole suggestion, or <see langword="null"/>.</summary>
     public Task<CompletionResult?> Completed => _completed.Task;
 
+    /// <summary>
+    /// Raised on a thread-pool thread each time the suggestion shown early has grown (never before <see cref="Ready"/>;
+    /// an update can only race with <see cref="Completed"/>, so handlers act on <see cref="Latest"/> and stop once
+    /// <see cref="Completed"/> has completed); the argument is the suggestion so far. Read <see cref="Latest"/> after
+    /// subscribing so an update raised in between is not missed.
+    /// </summary>
+    public event EventHandler<CompletionResult>? Updated;
+
+    /// <summary>Gets the newest suggestion handed out (by <see cref="Ready"/>, <see cref="Updated"/> or <see cref="Completed"/>), or <see langword="null"/>.</summary>
+    public CompletionResult? Latest
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _latest;
+            }
+        }
+    }
+
     /// <summary>Gets the token that is cancelled when the attempt is cancelled or superseded.</summary>
     internal CancellationToken Token => _cancellation.Token;
 
@@ -126,11 +151,46 @@ public sealed class CompletionAttempt
         }
     }
 
-    internal void SetReady(CompletionResult? result) => _ready.TrySetResult(result);
+    internal void SetReady(CompletionResult? result)
+    {
+        lock (_gate)
+        {
+            if (_ready.Task.IsCompleted)
+            {
+                return;
+            }
+
+            _latest = result;
+            _shownEarly = result is not null;
+            _ready.TrySetResult(result);
+        }
+    }
+
+    /// <summary>Reports the grown suggestion; ignored before <see cref="Ready"/> and after <see cref="Completed"/>.</summary>
+    /// <returns><see langword="true"/> when the update was raised.</returns>
+    internal bool Publish(CompletionResult update)
+    {
+        lock (_gate)
+        {
+            if (!_shownEarly || _completed.Task.IsCompleted)
+            {
+                return false;
+            }
+
+            _latest = update;
+        }
+
+        Updated?.Invoke(this, update);
+        return true;
+    }
 
     internal void SetCompleted(CompletionResult? result)
     {
-        _ready.TrySetResult(result);
-        _completed.TrySetResult(result);
+        lock (_gate)
+        {
+            _latest = result;
+            _ready.TrySetResult(result);
+            _completed.TrySetResult(result);
+        }
     }
 }

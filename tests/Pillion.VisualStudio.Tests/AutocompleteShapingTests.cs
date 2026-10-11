@@ -221,4 +221,86 @@ public sealed class CompletionShaperTests
     {
         Assert.Equal(expected, CompletionShaper.FirstLineVariant(text));
     }
+
+    [Theory]
+    [InlineData("```csharp")]
+    [InlineData("```")]
+    [InlineData("```typescript")]
+    [InlineData("  ~~~python")]
+    public void FenceLines_AreRecognised(string line) => Assert.True(CompletionShaper.IsFenceLine(line));
+
+    [Theory]
+    [InlineData("var s = \"```\";")]
+    [InlineData("`x`")]
+    [InlineData("```csharp {")]
+    public void OtherLines_AreNotFences(string line) => Assert.False(CompletionShaper.IsFenceLine(line));
+
+    [Fact]
+    public void SingleLine_Gate1Fence_IsNeverShown()
+    {
+        // The 7B's ghost text at Gate 1: "```csharp" (tools/gate1/out/*/scenarios/autocomplete-strong-VS18.json).
+        var shaper = new CompletionShaper(new ShapingContext { LanguageId = "csharp", LineBeforeCaret = "    " });
+
+        shaper.Append("``");
+        Assert.Null(shaper.DisplayText);
+        shaper.Append("`csharp");
+        Assert.Null(shaper.DisplayText);
+        Assert.True(shaper.Append("\n"));
+
+        Assert.Equal(CompletionStopReason.Fence, shaper.StopReason);
+        Assert.Equal(string.Empty, shaper.Complete());
+        Assert.Null(shaper.DisplayText);
+    }
+
+    [Fact]
+    public void SingleLine_FenceTheStreamEndsOn_IsNeverShown()
+    {
+        var shaper = new CompletionShaper(new ShapingContext { LanguageId = "csharp", LineBeforeCaret = "    " });
+
+        shaper.Append("```csharp");
+
+        Assert.Equal(string.Empty, shaper.Complete());
+    }
+
+    [Fact]
+    public void MultiLine_LeadingFenceIsSkipped_ALaterOneEndsTheSuggestion()
+    {
+        var context = new ShapingContext { LanguageId = "python", MultiLine = true, LineBeforeCaret = "    " };
+
+        Assert.Equal("    return 1", CompletionShaper.Shape(context, "```python\n    return 1\n```\nThis returns one.\n"));
+    }
+
+    [Fact]
+    public void DisplayText_SingleLine_IsTheTextSoFar()
+    {
+        var shaper = new CompletionShaper(new ShapingContext { LanguageId = "csharp", LineBeforeCaret = "        var x = " });
+
+        Assert.Null(shaper.DisplayText);
+        shaper.Append(" ");
+        Assert.Null(shaper.DisplayText);
+        shaper.Append("Math");
+        Assert.Equal(" Math", shaper.DisplayText);
+        shaper.Append(".Max(a, b);");
+        Assert.Equal(" Math.Max(a, b);", shaper.DisplayText);
+    }
+
+    [Fact]
+    public void DisplayText_SingleLine_HoldsWhatCouldBeTheTextRightOfTheCaret()
+    {
+        var shaper = new CompletionShaper(new ShapingContext { LanguageId = "csharp", LineBeforeCaret = "        Foo(", LineAfterCaret = ");" });
+
+        shaper.Append("a, b)");
+        Assert.Equal("a, b", shaper.DisplayText);
+        shaper.Append(" + c");
+        Assert.Equal("a, b) + c", shaper.DisplayText);
+    }
+
+    [Fact]
+    public void DisplayText_MultiLine_IsTheCompleteLines()
+    {
+        var shaper = new CompletionShaper(new ShapingContext { LanguageId = "csharp", MultiLine = true, LineBeforeCaret = "        " });
+
+        shaper.Append("first();\n        sec");
+        Assert.Equal("first();", shaper.DisplayText);
+    }
 }

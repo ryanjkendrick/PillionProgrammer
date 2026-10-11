@@ -378,6 +378,9 @@ public static class GateScenarioChecks
         var pausesWithOther = 0;
         var pauses = 0;
         var mismatches = new List<string>();
+        var nonMatching = 0;
+        var prose = 0;
+        var fenced = 0;
         var total = Stopwatch.StartNew();
         var target = CommandTarget(view);
         var broker = ((IComponentModel)Package.GetGlobalService(typeof(SComponentModel))).GetService<IAsyncCompletionBroker>();
@@ -412,9 +415,17 @@ public static class GateScenarioChecks
                         accepted++;
                         acceptedLines += take;
                     }
-                    else if (mismatches.Count < 5)
+                    else
                     {
-                        mismatches.Add(DisplayedText(view).Split('\n')[0].Trim());
+                        // Gate 1 open issues 1 and 2: every proposal that is not taken is checked for prose and fences.
+                        var shown = DisplayedText(view);
+                        nonMatching++;
+                        prose += LooksLikeProse(shown) ? 1 : 0;
+                        fenced += HasFenceLine(shown) ? 1 : 0;
+                        if (mismatches.Count < 5)
+                        {
+                            mismatches.Add(shown.Split('\n')[0].Trim());
+                        }
                     }
                 }
 
@@ -499,6 +510,9 @@ public static class GateScenarioChecks
             ["lineBreakToVisibleProposal"] = Percentiles(visible),
             ["acceptedProposals"] = accepted,
             ["acceptedLines"] = acceptedLines,
+            ["nonMatchingProposals"] = nonMatching,
+            ["proseProposals"] = prose,
+            ["fencedProposals"] = fenced,
             ["firstNonMatchingProposals"] = new JArray(mismatches),
             ["finalTextMatchesSnippetIgnoringIndentation"] = string.Equals(expected, actual, StringComparison.Ordinal),
         };
@@ -540,6 +554,23 @@ public static class GateScenarioChecks
         var componentModel = (IComponentModel)Package.GetGlobalService(typeof(SComponentModel));
         var proposal = componentModel.DefaultExportProvider.GetExportedValueOrDefault<SuggestionServiceBase>()?.GetDisplayedProposal(view);
         return proposal?.Edits is { } edits ? string.Concat(edits.Select(e => e.ReplacementText)).Replace("\r\n", "\n") : string.Empty;
+    }
+
+    /// <summary>Whether a proposal has a line that is only a Markdown fence (<c>```csharp</c>).</summary>
+    internal static bool HasFenceLine(string proposal) =>
+        proposal.Replace("\r", string.Empty).Split('\n').Any(l => System.Text.RegularExpressions.Regex.IsMatch(l.Trim(), @"^(```|~~~)[\w+#.\- ]*$"));
+
+    /// <summary>
+    /// Whether a proposal starts like a chat reply rather than code: a capitalised opening such as "It looks like you're"
+    /// or "Here's", with no code characters in its first words (the Gate 1 prose all opened "It looks like you're").
+    /// </summary>
+    internal static bool LooksLikeProse(string proposal)
+    {
+        var first = proposal.Replace("\r", string.Empty).Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0) ?? string.Empty;
+        var words = first.Split(' ').Take(5).ToArray();
+        return words.Length >= 3
+            && System.Text.RegularExpressions.Regex.IsMatch(words[0], @"^(It|Here|Here's|Sure|Certainly|This|To|I|I'm|You|Your|The|Based|Unfortunately|Let's|Note|As|In|If)[,:]?$")
+            && words.All(w => System.Text.RegularExpressions.Regex.IsMatch(w, @"^[A-Za-z'`\-]+[,.:]?$"));
     }
 
     /// <summary>How many snippet lines from <paramref name="line"/> the proposal reproduces exactly (ignoring indentation), or 0.</summary>

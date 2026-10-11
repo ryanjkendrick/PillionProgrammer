@@ -43,9 +43,9 @@ public sealed class AutocompleteRpcTests : IDisposable
         Assert.InRange(final.PromptTokens, 700, AutocompleteBudget.CpuPromptTokens);
 
         var fim = Assert.Single(_provider.Received);
-        Assert.StartsWith("// File: Calc.cs\n", fim.Prefix, StringComparison.Ordinal);
+        Assert.DoesNotContain("// file:", fim.Prefix, StringComparison.Ordinal); // the 1.5B family gets no header
         Assert.EndsWith("    return a ", fim.Prefix, StringComparison.Ordinal);
-        Assert.Equal("\n", fim.StopSequences[0]);
+        Assert.DoesNotContain("\n", fim.StopSequences); // the gateway ends the single line itself
 
         var record = Assert.Single(host.Services.GetRequiredService<IOutboundLog>().GetRecent());
         Assert.Equal(TaskClass.Autocomplete, record.TaskClass);
