@@ -20,6 +20,56 @@ against 600 ms, expected), the prefix cache hit rate in the IDE (2 to 3% against
 shown to be under 50 ms; the upper bound measured is 78 to 266 ms). Behind the first and third is a finding that matters
 more than the numbers: **the ghost text the local models produce in the IDE is not code** (open issues 1 and 2).
 
+## Autocomplete quality fixes (2026-10-11)
+
+Branch `feature/autocomplete-quality` (open issues 1 to 4; decisions in the [phase 1 plan's](phase-1-plan.md) decision
+log, 2026-10-11). The numbers further down are the 2026-10-10 runs, kept for comparison; where this work changes a row,
+the row says so.
+
+**Root cause of the prose and the fences.** Ollama's `qwen2.5-coder` template takes the fill-in-the-middle path only
+when `suffix` is not empty (`{{- if .Suffix }}`). The typing scenario types a new file with brace completion off, so at
+every line-break pause the caret was at the end of the document, the suffix was empty, and the prompt went to the model
+as a chat turn, which the instruct-tuned models answered. The header of sentences (`// Recent edit: C:\...`) made the
+answers about the file. The adapter now sends a line break as the suffix when it is empty; the header is terse code
+comments with file names only, and off for the 1.5B (catalog `fimHeader`); the gateway drops a reply that opens in prose
+and strips a leading fence; the extension never shows a fence line.
+
+**Measured on 20 fixed prefixes** (8 C#, 6 TypeScript, 6 Python, eight of them at the end of the document;
+`AutocompletePromptQualityLiveTests`, `Category=Live`, seed 42, temperature 0.2, both models resident on the reference
+machine). Raw replies (prose / fence / code) and, for what the user would see after the gateway and the extension's block
+rule, how many suggestions leave the document parsing (Roslyn, Node's TypeScript stripping, Python's `ast`):
+
+| Model | Gate 1 request (sentence header, empty suffix passed on) | Terse header, suffix still empty | Shipped: terse header | Shipped: no header |
+| --- | --- | --- | --- | --- |
+| `qwen2.5-coder:1.5b` | 3 / 5 / 12; shown and parsing 12 of 12 (8 empty after the new filter) | 2 / 6 / 12 | 0 / 0 / 20; 19 of 20 parse; median 173 ms | **0 / 0 / 20; 20 of 20 parse; median 149 ms** (shipped for the 1.5B) |
+| `qwen2.5-coder:7b` | 5 / 3 / 12; 12 of 12 (8 empty) | 3 / 5 / 12 | **0 / 0 / 20; 19 of 20; median 356 ms** (shipped for the 7B) | 0 / 0 / 20; 19 of 20; median 351 ms |
+
+The one suggestion that does not parse in either shipped column is a single-line ` {` after an arrow function's `=>`,
+a legitimate start of a block body. Before the fix the filter alone would already have kept all of the prose and fences
+off the screen (the "Gate 1 request" column shows nothing in prose or fenced after it), but at the cost of 8 empty
+suggestions in 20.
+
+**IDE re-measurement: not obtained.** Three runs of `Invoke-Gate1.ps1 -SkipBuild -SkipTests -SkipCost` were made, each
+started only after no `devenv.exe` had run for 90 s:
+
+- `tools/gate1/out/20261011-054553-gate1` (18.10): the Experimental Instance held five copies of Pillion (four left by
+  other agents' installs of other branches the same morning), and the MEF composition failed for Pillion's editor parts
+  (`Unable to find method: PillionProposalSourceProvider..ctor(AutocompleteHost)`, "The Visual Studio component cache is
+  out of date" in `ide-VS18/logs/ActivityLog-VS18.xml`). Pillion's proposal source was never created: no request in the
+  typing passes, the canned ghost-text test and the inline chat tests failed. The scenario figures of this run are
+  therefore not evidence for or against this work.
+- `tools/gate1/out/20261011-060203-gate1` (17.14): the package did not load at all ("Timed out after 60 s waiting for
+  the Pillion package to load"; the Activity Log shows the extension manager failing to load `PkgDefMgmt.dll`).
+- An earlier attempt stopped at the install check (the bin DLL and the packaged VSIX differed after an interrupted
+  build).
+
+Deleting other agents' extension folders was out of bounds, so the rows below keep the 2026-10-10 IDE figures. To
+re-measure: with no Visual Studio running and the stale `Pillion*` folders removed from the two Experimental Instances
+(`%LOCALAPPDATA%\Microsoft\VisualStudio\18.0_*Exp\Extensions` and `17.0_*Exp\Extensions`), run
+`pwsh tools/gate1/Invoke-Gate1.ps1 -SkipTests -SkipCost` (and with `-DevEnvPath` for 17.14). The typing scenario now
+records `nonMatchingProposals`, `proseProposals` and `fencedProposals`, asserts no prose and no fence with autocomplete
+on, and asserts that the pass with it off sent no request to the extension's pipeline or the host.
+
 ## How the evidence is produced
 
 | Script | What it does | Who runs it |
@@ -77,13 +127,13 @@ the evidence paths are relative to those run folders.
 
 | Criterion | Target | Status | Measured: 18.10 | Measured: 17.14 | How measured | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| Ghost text works on 17.14 (IntelliCode on) and 18.x for C#, TypeScript and Python | Multi-line and single-line, Tab, Esc, word accept, next/previous; none while a completion item is selected; Tab never taken from another provider | **Pass (C#)**; TypeScript and Python **Pending product owner** (by hand) | `ProposalSource_ShowsGhostText_WithTheCompetitorEnabled` and `ProposalSource_NoProposal_WhileACompletionListItemIsSelected` passed with Copilot on, every run; real model: a Pillion proposal at 24 to 27 of 40 line-break pauses (show rate 68 to 81%) | Same two tests passed with IntelliCode on; a Pillion proposal at 34 and 35 of 40 pauses | IDE integration tests (canned completions); the typing scenario on the real host | `ide-VS18/ide-VS18.trx`, `ide-VS17/ide-VS2022.trx`, `scenarios/autocomplete-*-VS*.json` |
+| Ghost text works on 17.14 (IntelliCode on) and 18.x for C#, TypeScript and Python | Multi-line and single-line, Tab, Esc, word accept, next/previous; none while a completion item is selected; Tab never taken from another provider | **Pass (C#)**; TypeScript and Python **Pending product owner** (by hand). 2026-10-11: ghost text now grows as it streams (`TryUpdateProposal`); not yet seen in the IDE (see "Autocomplete quality fixes") | `ProposalSource_ShowsGhostText_WithTheCompetitorEnabled` and `ProposalSource_NoProposal_WhileACompletionListItemIsSelected` passed with Copilot on, every run; real model: a Pillion proposal at 24 to 27 of 40 line-break pauses (show rate 68 to 81%) | Same two tests passed with IntelliCode on; a Pillion proposal at 34 and 35 of 40 pauses | IDE integration tests (canned completions); the typing scenario on the real host | `ide-VS18/ide-VS18.trx`, `ide-VS17/ide-VS2022.trx`, `scenarios/autocomplete-*-VS*.json` |
 | IntelliCode run-time check on 17.x | Status bar and Output pane report it; nothing crashes | **Pass** | n/a | `IntelliCodeCheck_ReportsWhenAutomaticCompletionsAreOff` passed | IDE integration test with the option off | `ide-VS17/ide-VS2022.trx` |
 | Autocomplete latency, 1.5B on the CPU | p50 600 ms, p95 1,500 ms, prompt within 1,024 tokens | **Fail** (p50) | First token p50 1,025 / 940 ms, p95 1,057 / 1,037 ms (runs 3 / 5); 1,123 / 13,825 ms in run 2 with live classes in parallel; prompt 991 to 993 estimated tokens | 980 / 1,008 ms | `AutocompleteLiveTests.Latency_Small_OnTheCpu_Direct` (the gateway's 1,024-token prompt posted with `num_gpu` 0). Not measured in the IDE: an Ollama provider entry has no `num_gpu` setting, so the host cannot force the CPU | `tests-live/*.trx` |
-| Autocomplete latency, 7B on the GPU | p50 300 ms, p95 800 ms, prompt within 2,048 tokens with a cached prefix | **Fail** (p50) | IDE time to suggestion p50 434 / 557 / 420 / 611 ms, p95 776 / 760 / 730 / 730 ms (runs 1 / 3 / 5 / 6, 23 to 30 suggestions each); first chunk p50 57 to 171 ms; visible after the line break (200 ms debounce included) p50 641 to 662 ms; largest prompt 286 tokens. Live, gateway only: first token p50 278 to 281 ms, p95 289 to 321 ms; total p50 421 to 424 ms, p95 443 to 478 ms at 2,043 to 2,045 tokens | IDE p50 420 / 568 ms, p95 730 / 739 ms (runs 4 / 7); live 277 / 319 ms | Typing scenario: `IAutocompleteMetrics` time to suggestion (from the request leaving the debounce to the first suggestion worth showing); live test `Latency_Large_OnTheGpu` | `scenarios/autocomplete-strong-VS*.json` (its `showStatusText` is the Show Status section), `metrics-during-run.jsonl` |
+| Autocomplete latency, 7B on the GPU | p50 300 ms, p95 800 ms, prompt within 2,048 tokens with a cached prefix | **Fail** (p50) on 2026-10-10; **to re-measure**: from 2026-10-11 "time to suggestion" is the first visible text (the first chunk, p50 57 to 171 ms in these runs, for a single-line request; the 300 ms grace is gone), so the IDE p50 should fall to about the first-chunk figure | IDE time to suggestion p50 434 / 557 / 420 / 611 ms, p95 776 / 760 / 730 / 730 ms (runs 1 / 3 / 5 / 6, 23 to 30 suggestions each); first chunk p50 57 to 171 ms; visible after the line break (200 ms debounce included) p50 641 to 662 ms; largest prompt 286 tokens. Live, gateway only: first token p50 278 to 281 ms, p95 289 to 321 ms; total p50 421 to 424 ms, p95 443 to 478 ms at 2,043 to 2,045 tokens | IDE p50 420 / 568 ms, p95 730 / 739 ms (runs 4 / 7); live 277 / 319 ms | Typing scenario: `IAutocompleteMetrics` time to suggestion (from the request leaving the debounce to the first suggestion worth showing); live test `Latency_Large_OnTheGpu` | `scenarios/autocomplete-strong-VS*.json` (its `showStatusText` is the Show Status section), `metrics-during-run.jsonl` |
 | Autocomplete latency, cloud Fast | p50 400 ms, p95 1,000 ms; 3 s timeout dropped silently | **Pending product owner** | No key stored | No key stored | `Gate1_Cloud_FastAutocompleteAndChatFirstToken` with `-CloudProviderId` | `scenarios/cloud-VS*.json` ("pending") |
 | Keystroke latency with autocomplete on | +0 ms p50, +2 ms p95 | **Pass** on 18.10; **borderline** on 17.14 (p95 +1.3 to +2.3 ms) | TypeChar on the UI thread, on (1.5B) against off: p50 3.37 / 3.61 ms, p95 10.71 / 11.47 ms (run 1: -0.24 / -0.76 ms); run 3: p50 3.10 / 4.21, p95 4.29 / 12.72 ms; run 5: 3.08 / 3.18, 4.61 / 11.13 ms (on is not slower; the off pass, last in each run, was noisier) | Run 4: p50 2.54 / 2.52 ms, p95 5.80 / 4.43 ms, **+0.02 ms p50, +1.37 ms p95** (7B: +0.15 / +1.30 ms); run 7: **+0.09 / +1.82 ms** (7B: +0.31 / **+2.28** ms) | Typing scenario: each TypeChar timed until it returns, 704 per pass; the character is in the buffer when it does (0 misses) | `scenarios/autocomplete-{strong,fast,off}-VS*.json`, `typing.typeChar` |
-| Prefix cache hit rate during steady typing | 70% or more | **Fail** in the IDE | Host counters over each pass: 2 to 3% (1 repeat in 31 to 51 requests; runs 1, 3, 5); live test (a request per keystroke, as the row was designed): 33 of 35 (94%) | 2% and 2% | Gateway counters (`GetAutocompleteCountersAsync`) before and after each typing pass; live tests' steady-typing loop | `scenarios/autocomplete-*-VS*.json` `autocomplete.host` |
+| Prefix cache hit rate during steady typing | 70% or more | **Fail** in the IDE on 2026-10-10; **to re-measure** now that suggestions can be accepted (open issue 5) | Host counters over each pass: 2 to 3% (1 repeat in 31 to 51 requests; runs 1, 3, 5); live test (a request per keystroke, as the row was designed): 33 of 35 (94%) | 2% and 2% | Gateway counters (`GetAutocompleteCountersAsync`) before and after each typing pass; live tests' steady-typing loop | `scenarios/autocomplete-*-VS*.json` `autocomplete.host` |
 | VSIX cost in devenv.exe | 0 ms blocking, under 50 ms UI-thread CPU, 60 MB or less added working set | **Fail** (UI-thread CPU not shown under 50 ms); blocking and working set pass | Pillion's own timed UI-thread work (PR 40's `UiThreadTimings`, run 6) from the folder open to Ready: **2.6 ms** in 10 stretches (Output pane flushes, status bar), which does not include the package's own initialization on the UI thread (not timed); UI thread CPU from "Begin package load" to Ready 78 / 203 / 109 ms (runs 1 / 3 / 5; 109 ms also in run 2), idle baseline 0 to 31 ms per second: an upper bound, since Visual Studio's own work on that thread in the same second is counted; working set on against off +2.3 / +17.2 / -9.8 / -5.2 MB (runs 1, 2, 3, 5); on/off UI-thread CPU deltas -258 / -156 / +70 / -48 ms (launch-to-launch noise is a few hundred ms); background load (Begin and End package load after the folder opened) | Run 7: timed Pillion work 9.1 ms in 12 stretches (Output pane, status bar, the IntelliCode check); upper bound 266 / 344 ms (runs 4 / 7); working set +20.4 MB | `PackageLoad_UsesLittleUiThreadCpu` (UI thread sampled every 10 ms from a background thread; generous 500 ms assertion, passed); extension-on (`PillionG1`) against extension-off (`PillionG1Off`) launches, two pairs | IDE TRX output line, `gate1-results.json` `data.cost` |
 | Chat first token, cloud | p50 1.5 s, p95 3 s, including context assembly | **Pending product owner** | Local `qwen2.5-coder:7b` (information): first visible text p50 90 / 99 / 92 ms, p95 162 / 175 / 218 ms (5 messages a run) | Local p50 93 ms, p95 437 ms | Chat window: input, Enter, first reply text | `scenarios/chat-mentions-VS*.json` |
 | Context assembly without retrieval | p50 150 ms, p95 400 ms | **Pass** | Slowest case (exact tiktoken, 128k window, 69,144 prompt tokens): p50 38 to 48 ms, p95 238 to 268 ms; calibrated estimate p50 5 to 7 ms | Same tests (they do not depend on Visual Studio) | `ContextAssemblyBenchmarkTests`, 40 runs after 3 warm-ups | `tests-unit/*.trx` |
@@ -93,7 +143,7 @@ the evidence paths are relative to those run folders.
 | Completion evaluation baseline | Golden set against the recommended local model | **Pending product owner** | No golden-set repository (1.17) | | | |
 | Offline run | Every check above with the network disabled | **Pending product owner** | `Invoke-OfflineRun.ps1 -Phase 1` written; dry-run only | | Elevated, by the product owner | Dry-run output below |
 | CI | Green on develop with the 18.x job and a 17.14 job | **Pass** | Latest develop runs green: https://github.com/ryanjkendrick/PillionProgrammer/actions/runs/38075756824 (`4845f06`) and https://github.com/ryanjkendrick/PillionProgrammer/actions/runs/38089244576 (`f6b6796`), both jobs success. The VS 2022 integration job's host-kill UI-thread stall was investigated in PR 40 (merged; the test now attributes gaps) | | `gh run list`, `gh run view` | `gate1-results.json` `data.ci` |
-| Feature flags | Every work item behind a flag; tests green | **Pass** | 2,790 unit and component tests passed, 0 failed, every run; flags in the README. But see open issue 3: with `autocomplete` off the extension still sends requests on 18.x | | Test run; README | `tests-unit/*.trx` |
+| Feature flags | Every work item behind a flag; tests green | **Pass** | 2,790 unit and component tests passed, 0 failed, every run; flags in the README. But see open issue 3: with `autocomplete` off the extension still sent requests on 18.x (fixed 2026-10-11: every request path passes the availability gate; unit tests `AutocompleteDisplayTests.Gate_*`; the off pass now asserts none) | | Test run; README | `tests-unit/*.trx` |
 
 
 ## What the product owner must do
@@ -162,20 +212,30 @@ Phase 1: settings route autocomplete to ollama/qwen2.5-coder:1.5b (Local-fast) a
    `src/Pillion.ModelGateway`). The Ollama tag `qwen2.5-coder:1.5b` is the instruct-tuned model. The live gateway tests
    do not see this because their requests carry no recent edits. Nothing was accepted in any pass. For the autocomplete
    owners: try the prompt without the edit lines (or the base model), and add a completion-shaping test that drops prose.
+   **Fixed 2026-10-11** (`feature/autocomplete-quality`): the cause was the empty suffix (Ollama's template then makes
+   the prompt a chat turn), not only the header. Live, on 20 prefixes: prose in 3 of 20 raw replies before, 0 after, on
+   the 1.5B (5 and 0 on the 7B); the gateway also drops a reply that opens in prose. IDE count not yet re-measured.
 2. **Ghost text from `qwen2.5-coder:7b` opens with a Markdown fence** (bug, found by this run): most non-matching
    proposals began with "```csharp". Neither the host nor `CompletionShaper` strips it. Together with issue 1 this is
    why no proposal was accepted, why the host's cache never served a type-through, and why the time to suggestion runs
-   past the first chunk.
+   past the first chunk. **Fixed 2026-10-11**: same root cause (empty suffix); live, fences in 5 of 20 raw replies before
+   and 0 after on the 1.5B (3 and 0 on the 7B); the gateway strips a leading fence and stops at a closing one, and the
+   extension never shows a fence line.
 3. **With `features.autocomplete` off, Visual Studio 2026 still sends completion requests** (bug, found by this run). The
    off passes on 18.10 recorded 21, 31 and 20 requests, all failing at the host (the flag denies them), matching the pauses
    where another provider's proposal (Copilot's) was displayed (21, 29 and 20 pauses); on 17.14, where IntelliCode showed
    nothing at those pauses, the off pass sent none. The coexistence path `ViewAutocomplete.RequestOutsideBroker`
    (`src/Pillion.VisualStudio/Autocomplete`) starts a session without the document suppression the broker path checks
    (`SuppressionRules.EvaluateDocument` returns `FeatureDisabled`). The README says the extension stops asking.
+   **Fixed 2026-10-11**: `AutocompleteSession.Start`, the one door every path goes through, checks the flag and the
+   disabled languages first and again after the debounce, and `RequestOutsideBroker` and the coexistence actions check the
+   document first. Unit-tested; the IDE assertion has not run yet.
 4. **The 7B p50 target and the engine's definition of "suggestion"**: the first chunk arrives at a p50 of 57 to 171 ms,
    but the engine records the suggestion when a line completes or 300 ms (`AutocompleteEngine.PartialGrace`) after the
    first chunk, so with this model the p50 lands at 420 to 560 ms. Whether the 300 ms budget means first visible text or
    first complete line is a design question for the lead and the product owner; with issue 2 fixed the number will move.
+   **Decided and implemented 2026-10-11** (lead's decision): the first visible text counts; a single-line suggestion is
+   shown at its first chunk and grows (at most one update per 50 ms), a multi-line one at its first complete line.
 5. **The cache hit rate row cannot be met the way the IDE asks.** With the 200 ms debounce, requests leave only at pauses,
    so consecutive requests rarely share a prefix the host has seen (2 to 3%). Typed-through text is served by the
    extension's own continuation cache and never reaches the host's counters. The live test's request-per-keystroke loop
