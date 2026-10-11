@@ -28,9 +28,9 @@ internal static class IntelliCodeCheck
     public static int VisualStudioMajorVersion { get; } = ReadMajorVersion();
 
     /// <summary>
-    /// Runs the check. The settings manager and the MEF export provider are free-threaded, so they are read on a thread-pool
-    /// thread; the UI thread is visited once, only for <c>IVsShell.IsPackageInstalled</c>, and nothing at all is needed on
-    /// 18.x.
+    /// Runs the check. The MEF export provider is free-threaded and is asked on a thread-pool thread; the UI thread is visited
+    /// once, only for the settings store read and <c>IVsShell.IsPackageInstalled</c> (the first is where the option is
+    /// written), and not at all on 18.x.
     /// </summary>
     /// <param name="package">The package (service provider).</param>
     /// <param name="cancellationToken">A token that cancels the check.</param>
@@ -59,30 +59,34 @@ internal static class IntelliCodeCheck
             }
         }
 
+        // The settings manager is read on the UI thread, as before: with the read on a pool thread the CI run of
+        // IntelliCodeCheck_ReportsWhenAutomaticCompletionsAreOff never saw the option switched back on (the check kept
+        // reporting "off"; the cause was not established, the read location is the one thing that differed).
+        var settingsService = await package.GetServiceAsync(typeof(SVsSettingsPersistenceManager)).ConfigureAwait(false);
+        var shellService = await package.GetServiceAsync(typeof(SVsShell)).ConfigureAwait(false);
+
         object? stored = null;
         var readable = false;
-        if (await package.GetServiceAsync(typeof(SVsSettingsPersistenceManager)).ConfigureAwait(false) is ISettingsManager settings)
-        {
-            try
-            {
-                var result = settings.TryGetValue(IntelliCodeRequirement.ShowCompletionsSetting, out object value);
-                readable = true;
-                stored = result == GetValueResult.Success ? value : null;
-            }
-#pragma warning disable CA1031 // An unreadable option is treated as on.
-            catch (Exception)
-#pragma warning restore CA1031
-            {
-                readable = false;
-            }
-        }
-
         var packageInstalled = false;
-        var shellService = await package.GetServiceAsync(typeof(SVsShell)).ConfigureAwait(false);
-        if (shellService is not null)
+        await package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        using (UiThreadTimings.Measure("intellicode.check"))
         {
-            await package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-            using var timing = UiThreadTimings.Measure("intellicode.check");
+            if (settingsService is ISettingsManager settings)
+            {
+                try
+                {
+                    var result = settings.TryGetValue(IntelliCodeRequirement.ShowCompletionsSetting, out object value);
+                    readable = true;
+                    stored = result == GetValueResult.Success ? value : null;
+                }
+#pragma warning disable CA1031 // An unreadable option is treated as on.
+                catch (Exception)
+#pragma warning restore CA1031
+                {
+                    readable = false;
+                }
+            }
+
             if (shellService is IVsShell shell)
             {
                 var guid = new Guid(IntelliCodeRequirement.PackageGuid);
