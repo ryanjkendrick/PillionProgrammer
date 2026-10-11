@@ -163,12 +163,20 @@ internal sealed class ViewAutocomplete
         {
             CoexistenceTrace.Write("source.explicit", "at=" + key + " answer=" + answer);
         }
-        if (answer == SourceAnswer.FromKept && kept is not null && ProposalFactory.CreateInsertion(caret, kept.Text, PillionProposalId.Create(kept.Attempt, 0)) is { } keptProposal)
+        var keptText = kept is null ? null : kept.Source?.Latest is { } latest ? ProposalFactory.ToDocumentLineBreaks(latest.Text, newLine) : kept.Text;
+        if (answer == SourceAnswer.FromKept && kept is not null && ProposalFactory.CreateInsertion(caret, keptText!, PillionProposalId.Create(kept.Attempt, 0)) is { } keptProposal)
         {
-            session.CancelPending();
+            // The pushed suggestion may still be streaming: keep its attempt alive and let it grow.
+            session.CancelPendingExcept(kept.Attempt);
+            var keptShown = new Shown(kept.Attempt, caret, keptText!, isMultiLine: keptText!.IndexOf('\n') >= 0);
             lock (_gate)
             {
-                _shown = new Shown(kept.Attempt, caret, kept.Text, isMultiLine: kept.Text.IndexOf('\n') >= 0);
+                _shown = keptShown;
+            }
+
+            if (kept.Source is { } source && !source.Completed.IsCompleted)
+            {
+                _ = FollowUpAsync(feature, session, source, keptShown, newLine);
             }
 
             CoexistenceTrace.Write("source.kept", "attempt=" + kept.Attempt + " at=" + key + " scenario=" + scenario);
@@ -252,7 +260,7 @@ internal sealed class ViewAutocomplete
             if (Timeline.CompetitorDisplayed)
             {
                 CoexistenceTrace.Write("pillion.late", "attempt=" + attempt.Id + " at=" + key);
-                HandleReady(feature, key, documentText, attempt.Id);
+                HandleReady(feature, key, documentText, attempt.Id, attempt);
             }
         });
 
@@ -609,7 +617,7 @@ internal sealed class ViewAutocomplete
             || componentModel.GetService<ICompletionBroker>()?.IsCompletionActive(_view) == true;
     }
 
-    /// <summary>Carries out a coexistence decision on the UI thread.</summary>
+    /// <summary>Carries out a coexistence decision on the UI thread; nothing is requested, dismissed or invoked while autocomplete is off for this document.</summary>
     private void Execute(AutocompleteFeature feature, CoexistenceDecision decision, CaretKey key, bool immediate = false)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
@@ -617,6 +625,11 @@ internal sealed class ViewAutocomplete
         {
             feature.Engine.Metrics.SuggestionDisplaced(decision.DisplacedAttempt);
             feature.Log.Debug("autocomplete.displaced", "Another provider's proposal replaced a Pillion suggestion.", ("attempt", decision.DisplacedAttempt));
+        }
+
+        if (decision.Actions != CoexistenceActions.None && IsSuppressedHere(feature))
+        {
+            return;
         }
 
         if (decision.Has(CoexistenceActions.DismissCompetitor))
@@ -644,6 +657,14 @@ internal sealed class ViewAutocomplete
         ThreadHelper.ThrowIfNotOnUIThread();
         var caret = _view.Caret.Position.VirtualBufferPosition;
         var snapshot = caret.Position.Snapshot;
+
+        // The availability gate first (Gate 1 open issue 3: with the feature off this path still sent a request at
+        // every pause where Copilot's proposal was shown). The session checks the flag and the language again.
+        if (DocumentSuppression(snapshot, feature.Engine.Settings) != SuppressionReason.None)
+        {
+            return;
+        }
+
         if (KeyOf(caret.Position) != key || (!immediate && IsCompletionActive()))
         {
             return;
@@ -654,7 +675,7 @@ internal sealed class ViewAutocomplete
         if (!caret.IsInVirtualSpace && session.Continuations.TryGetRemainder(DocumentKey, text, caret.Position, out var rest, out var restAttempt))
         {
             CoexistenceTrace.Write("pillion.cached", "attempt=" + restAttempt + " at=" + key);
-            HandleReady(feature, key, rest, restAttempt);
+            HandleReady(feature, key, rest, restAttempt, source: null);
             return;
         }
 
@@ -703,7 +724,7 @@ internal sealed class ViewAutocomplete
 
             await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
             CoexistenceTrace.Write("pillion.ready", "attempt=" + attempt.Id + " at=" + key + " chars=" + (documentText?.Length ?? 0));
-            HandleReady(feature, key, documentText, attempt.Id);
+            HandleReady(feature, key, documentText, attempt.Id, attempt);
         }
 #pragma warning disable CA1031 // A failed follow-up only means the competitor's proposal stays.
         catch (Exception ex)
@@ -714,10 +735,15 @@ internal sealed class ViewAutocomplete
     }
 
     /// <summary>A Pillion suggestion is ready for a caret outside the broker's wait: ask the timeline whether to show it.</summary>
-    private void HandleReady(AutocompleteFeature feature, CaretKey requestedAt, string? text, long attempt)
+    /// <param name="feature">The feature.</param>
+    /// <param name="requestedAt">The caret the suggestion was asked for.</param>
+    /// <param name="text">The suggestion (the first visible text when it is still streaming), or <see langword="null"/>.</param>
+    /// <param name="attempt">The attempt number.</param>
+    /// <param name="source">The attempt itself when it may still be streaming, so the pushed suggestion can grow.</param>
+    private void HandleReady(AutocompleteFeature feature, CaretKey requestedAt, string? text, long attempt, CompletionAttempt? source)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
-        if (_closed)
+        if (_closed || IsSuppressedHere(feature))
         {
             return;
         }
@@ -727,7 +753,7 @@ internal sealed class ViewAutocomplete
         var decision = Timeline.PillionReady(requestedAt, current, !string.IsNullOrEmpty(text) && text!.Trim().Length > 0);
         if (decision.Has(CoexistenceActions.PushPillion))
         {
-            _ = PushAsync(feature, current, text!, attempt);
+            _ = PushAsync(feature, current, text!, attempt, source);
         }
         else if (decision.Has(CoexistenceActions.RequestAll))
         {
@@ -748,7 +774,7 @@ internal sealed class ViewAutocomplete
     /// user-Escape reason, the only one that clears the broker's queued proposals), and makes the editor ask every source
     /// again; Pillion's source then answers at once from what it kept, ahead of the others.
     /// </summary>
-    private async Task PushAsync(AutocompleteFeature feature, CaretKey key, string text, long attempt)
+    private async Task PushAsync(AutocompleteFeature feature, CaretKey key, string text, long attempt, CompletionAttempt? source)
     {
         try
         {
@@ -769,7 +795,7 @@ internal sealed class ViewAutocomplete
 
             lock (_gate)
             {
-                _kept = new Kept(key, text, attempt, DateTimeOffset.UtcNow + TimeSpan.FromSeconds(2));
+                _kept = new Kept(key, text, attempt, DateTimeOffset.UtcNow + TimeSpan.FromSeconds(2), source);
             }
 
             if (_host.Suggestions is { } suggestions && suggestions.GetDisplayedProposal(_view) is { } displayed)
@@ -883,6 +909,10 @@ internal sealed class ViewAutocomplete
         return reason;
     }
 
+    /// <summary>Whether autocomplete is off for this document now (the feature flag, the language, a generated or large file).</summary>
+    private bool IsSuppressedHere(AutocompleteFeature feature) =>
+        DocumentSuppression(_view.TextBuffer.CurrentSnapshot, feature.Engine.Settings) != SuppressionReason.None;
+
     private ProposalBase? DisplayedPillionProposal()
     {
         var displayed = _host.Suggestions?.GetDisplayedProposal(_view);
@@ -900,11 +930,48 @@ internal sealed class ViewAutocomplete
             shown.Attempt);
     }
 
-    /// <summary>Waits for the whole of a multi-line suggestion that was shown early, then remembers and (if still untouched) extends it.</summary>
+    /// <summary>
+    /// Follows a suggestion that was shown at its first visible text (decision of 2026-10-11): while it streams, the
+    /// displayed proposal grows (the session sends at most one update per 50 ms, and they are coalesced onto the UI
+    /// thread); at the end the whole suggestion replaces it and is remembered for typing through. Nothing is updated once
+    /// the user has typed or the proposal is no longer Pillion's.
+    /// </summary>
     private async Task FollowUpAsync(AutocompleteFeature feature, AutocompleteSession session, CompletionAttempt attempt, Shown shown, string newLine)
     {
+        var queued = 0;
+        void OnUpdated(object? sender, CompletionResult update)
+        {
+            if (Interlocked.Exchange(ref queued, 1) == 1)
+            {
+                return; // An update is already on its way to the UI thread; it reads the latest text.
+            }
+
+            _host.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Interlocked.Exchange(ref queued, 0);
+                if (attempt.Completed.IsCompleted || attempt.Latest is not { } latest)
+                {
+                    return; // The final update follows.
+                }
+
+                var documentText = ProposalFactory.ToDocumentLineBreaks(latest.Text, newLine);
+                if (documentText != shown.Primary && Grow(attempt, shown, documentText))
+                {
+                    shown.SetPrimary(documentText);
+                    Remember(session, shown, documentText);
+                }
+            }).FileAndForget("pillion/autocomplete/grow");
+        }
+
+        attempt.Updated += OnUpdated;
         try
         {
+            if (attempt.Latest is { IsComplete: false } early && ProposalFactory.ToDocumentLineBreaks(early.Text, newLine) != shown.Primary)
+            {
+                OnUpdated(attempt, early);
+            }
+
             #pragma warning disable VSTHRD003 // The attempt's tasks are completed by thread-pool work and never need the UI thread.
             var final = await attempt.Completed.ConfigureAwait(false);
             #pragma warning restore VSTHRD003
@@ -913,25 +980,31 @@ internal sealed class ViewAutocomplete
                 return;
             }
 
-            var documentText = ProposalFactory.ToDocumentLineBreaks(final.Text, newLine);
-            shown.SetPrimary(documentText);
-            Remember(session, shown, documentText);
+            var finalText = ProposalFactory.ToDocumentLineBreaks(final.Text, newLine);
+            shown.SetPrimary(finalText);
+            Remember(session, shown, finalText);
+
+            // The broker may not have displayed the first text yet when a short suggestion is already complete: wait a
+            // little for it, so the whole suggestion still replaces the first chunk.
+            for (var i = 0; i < 10; i++)
+            {
+                await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
+                if (_closed || _view.TextSnapshot != shown.Caret.Position.Snapshot)
+                {
+                    return; // The user typed: the remembered suggestion supplies the rest on the next request.
+                }
+
+                if (DisplayedPillionProposal() is not null)
+                {
+                    break;
+                }
+
+                await Task.Delay(AutocompleteEngine.DisplayUpdateInterval).ConfigureAwait(false);
+            }
 
             await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
-            if (_closed || _view.TextSnapshot != shown.Caret.Position.Snapshot)
-            {
-                return; // The user typed: the remembered suggestion supplies the rest on the next request.
-            }
-
-            var displayed = DisplayedPillionProposal();
-            if (displayed?.ProposalId != PillionProposalId.Create(attempt.Id, 0))
-            {
-                return;
-            }
-
-            var proposal = ProposalFactory.CreateInsertion(shown.Caret, documentText, PillionProposalId.Create(attempt.Id, 0));
-            var updated = proposal is not null ? _host.Suggestions?.TryUpdateProposal(_view, proposal) : null;
-            feature.Log.Debug("autocomplete.extended", "Extended a suggestion shown early.", ("request", attempt.RequestId), ("updated", updated is not null));
+            var updated = Grow(attempt, shown, finalText);
+            feature.Log.Debug("autocomplete.extended", "Completed a suggestion shown at its first text.", ("request", attempt.RequestId), ("updated", updated));
         }
 #pragma warning disable CA1031 // A follow-up failure only means the early part stays shown.
         catch (Exception ex)
@@ -939,6 +1012,29 @@ internal sealed class ViewAutocomplete
         {
             feature.Log.Debug("autocomplete.extend.failed", "Could not extend a suggestion.", ("error", ex.GetType().Name));
         }
+        finally
+        {
+            attempt.Updated -= OnUpdated;
+        }
+    }
+
+    /// <summary>Replaces the displayed Pillion proposal of an attempt with longer text (UI thread); false when it is not displayed or the user typed.</summary>
+    private bool Grow(CompletionAttempt attempt, Shown shown, string documentText)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (_closed || _view.TextSnapshot != shown.Caret.Position.Snapshot)
+        {
+            return false;
+        }
+
+        var id = PillionProposalId.Create(attempt.Id, 0);
+        if (DisplayedPillionProposal()?.ProposalId != id)
+        {
+            return false;
+        }
+
+        var proposal = ProposalFactory.CreateInsertion(shown.Caret, documentText, id);
+        return proposal is not null && _host.Suggestions?.TryUpdateProposal(_view, proposal) is not null;
     }
 
     /// <summary>After a word accept, replaces the displayed suggestion with its rest at the new caret.</summary>
@@ -1019,8 +1115,11 @@ internal sealed class ViewAutocomplete
     }
 
     /// <summary>A Pillion suggestion kept for the next request at exactly one caret (a push).</summary>
-    private sealed class Kept(CaretKey key, string text, long attempt, DateTimeOffset until)
+    private sealed class Kept(CaretKey key, string text, long attempt, DateTimeOffset until, CompletionAttempt? source)
     {
+        /// <summary>Gets the attempt that produced the suggestion, when it may still be streaming.</summary>
+        public CompletionAttempt? Source { get; } = source;
+
         public CaretKey Key { get; } = key;
 
         public string Text { get; } = text;
@@ -1049,6 +1148,17 @@ internal sealed class ViewAutocomplete
         public VirtualSnapshotPoint Caret { get; }
 
         public bool IsMultiLine { get; }
+
+        public string Primary
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _variants.Count > 0 ? _variants[0] : string.Empty;
+                }
+            }
+        }
 
         public IReadOnlyList<string> Variants
         {

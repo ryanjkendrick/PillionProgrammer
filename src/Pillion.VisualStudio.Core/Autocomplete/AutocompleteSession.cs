@@ -80,6 +80,26 @@ public sealed class AutocompleteSession : IDisposable
         current?.Cancel();
     }
 
+    /// <summary>Cancels the attempt in flight unless it is the given one (a pushed suggestion that is still streaming).</summary>
+    /// <param name="attempt">The attempt number to keep.</param>
+    public void CancelPendingExcept(long attempt)
+    {
+        CompletionAttempt? current;
+        lock (_gate)
+        {
+            if (_current is null || _current.Id == attempt)
+            {
+                return;
+            }
+
+            current = _current;
+            _current = null;
+            _currentInput = null;
+        }
+
+        current.Cancel();
+    }
+
     /// <summary>
     /// Cancels the attempt in flight unless it was started for exactly this text version (and caret, when given).
     /// Called on every keystroke and caret move; the version check keeps an attempt the broker started for the new
@@ -106,7 +126,13 @@ public sealed class AutocompleteSession : IDisposable
         current.Cancel();
     }
 
-    /// <summary>Starts an attempt, cancelling the previous one. Returns at once; the work runs on the thread pool.</summary>
+    /// <summary>
+    /// Starts an attempt, cancelling the previous one. Returns at once; the work runs on the thread pool. Every request
+    /// path of the extension (the proposal broker, the coexistence requests outside it, "Pillion: Suggest") comes through
+    /// here, so the availability gate (<see cref="AutocompleteEngine.Gate"/>: the feature flag and the disabled
+    /// languages) is checked here first, and again after the debounce: with the gate shut the attempt ends at once with
+    /// nothing to show and nothing reaches the host.
+    /// </summary>
     /// <param name="input">What the editor captured.</param>
     /// <param name="cancellationToken">The caller's token (the proposal broker's), linked to the attempt.</param>
     /// <returns>The attempt.</returns>
@@ -125,6 +151,25 @@ public sealed class AutocompleteSession : IDisposable
         var id = _engine.NextAttempt();
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var attempt = new CompletionAttempt(id, _engine.RequestIdFor(id), cancellation);
+        if (_engine.Gate(input.LanguageId) != SuppressionReason.None)
+        {
+            CompletionAttempt? superseded;
+            lock (_gate)
+            {
+                superseded = _current;
+                _current = null;
+                _currentInput = null;
+                Interlocked.Exchange(ref _latestAttempt, id);
+            }
+
+            superseded?.Cancel();
+            cancellation.Cancel();
+            cancellation.Dispose();
+            _engine.Metrics.Suppressed(input.LanguageId);
+            attempt.SetCompleted(null);
+            return attempt;
+        }
+
         _engine.Metrics.RequestStarted(id, input.LanguageId);
         CompletionAttempt? previous;
         lock (_gate)
@@ -186,12 +231,14 @@ public sealed class AutocompleteSession : IDisposable
                 await _engine.Clock.DelayAsync(debounce, token).ConfigureAwait(false);
             }
 
-            if (!_engine.HostUsable && !token.IsCancellationRequested && IsCurrent(attempt.Id))
+            // The settings may have changed during the debounce: the gate is checked again before anything is sent.
+            var gated = _engine.Gate(input.LanguageId) != SuppressionReason.None;
+            if ((gated || !_engine.HostUsable) && !token.IsCancellationRequested && IsCurrent(attempt.Id))
             {
                 _engine.Metrics.RequestFailed(attempt.Id, AutocompleteOutcome.Suppressed);
             }
 
-            if (token.IsCancellationRequested || !IsCurrent(attempt.Id) || !_engine.HostUsable)
+            if (token.IsCancellationRequested || !IsCurrent(attempt.Id) || gated || !_engine.HostUsable)
             {
                 return;
             }
@@ -287,7 +334,10 @@ public sealed class AutocompleteSession : IDisposable
         string? providerId = null;
         var stoppedEarly = false;
         var recorded = 0;
-        var graceStarted = false;
+        var readySent = false;
+        string? lastShown = null;
+        var lastShownAt = DateTimeOffset.MinValue;
+        var updatePending = false;
 
         CompletionResult Snapshot(string text, bool complete) => new()
         {
@@ -312,30 +362,81 @@ public sealed class AutocompleteSession : IDisposable
             }
         }
 
-        async Task GraceAsync()
+        // The display rule (decision of 2026-10-11): the first visible text is shown at once (a single-line request's
+        // first chunk, a multi-line request's first complete line) and the suggestion then grows as chunks stream, with
+        // at most one update per DisplayUpdateInterval; what is shown has passed the stop rules.
+        void ShowProgress()
+        {
+            CompletionResult? ready = null;
+            CompletionResult? update = null;
+            var wait = TimeSpan.Zero;
+            lock (shaper)
+            {
+                var text = shaper.DisplayText;
+                if (text is null || text == lastShown || attempt.Completed.IsCompleted || !IsCurrent(attempt.Id) || token.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                var now = _engine.Clock.UtcNow;
+                if (!readySent)
+                {
+                    readySent = true;
+                    ready = Snapshot(text, complete: false);
+                }
+                else if (now - lastShownAt >= AutocompleteEngine.DisplayUpdateInterval)
+                {
+                    update = Snapshot(text, complete: false);
+                }
+                else if (!updatePending)
+                {
+                    updatePending = true;
+                    wait = AutocompleteEngine.DisplayUpdateInterval - (now - lastShownAt);
+                }
+                else
+                {
+                    return;
+                }
+
+                if (ready is not null || update is not null)
+                {
+                    lastShown = text;
+                    lastShownAt = now;
+                }
+            }
+
+            if (ready is not null)
+            {
+                RecordLatency(ready.Latency);
+                attempt.SetReady(ready);
+            }
+            else if (update is not null)
+            {
+                attempt.Publish(update);
+            }
+            else
+            {
+                _ = ShowLaterAsync(wait);
+            }
+        }
+
+        async Task ShowLaterAsync(TimeSpan wait)
         {
             try
             {
-                await _engine.Clock.DelayAsync(AutocompleteEngine.PartialGrace, token).ConfigureAwait(false);
+                await _engine.Clock.DelayAsync(wait, token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
                 return;
             }
 
-            CompletionResult? partial;
             lock (shaper)
             {
-                partial = shaper.PartialText is { } text && !attempt.Completed.IsCompleted && IsCurrent(attempt.Id)
-                    ? Snapshot(text, complete: false)
-                    : null;
+                updatePending = false;
             }
 
-            if (partial is not null)
-            {
-                RecordLatency(partial.Latency);
-                attempt.SetReady(partial);
-            }
+            ShowProgress();
         }
 
         var enumerator = service.CompleteAsync(request, token).GetAsyncEnumerator(token);
@@ -394,11 +495,7 @@ public sealed class AutocompleteSession : IDisposable
                     break;
                 }
 
-                if (multiLine && !graceStarted && shaper.CompleteContentLines > 0)
-                {
-                    graceStarted = true;
-                    _ = GraceAsync();
-                }
+                ShowProgress();
             }
         }
         finally
