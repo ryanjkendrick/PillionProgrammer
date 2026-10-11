@@ -77,6 +77,11 @@ public sealed class AutocompleteSession : IDisposable
             _currentInput = null;
         }
 
+        if (current is not null)
+        {
+            _engine.Log?.Debug("autocomplete.attempt.cancelled", "The attempt in flight was cancelled.", ("request", current.RequestId), ("by", "cancelPending"));
+        }
+
         current?.Cancel();
     }
 
@@ -110,6 +115,7 @@ public sealed class AutocompleteSession : IDisposable
     public void CancelPendingUnless(long textVersion, int? caret)
     {
         CompletionAttempt? current;
+        CompletionInput? input;
         lock (_gate)
         {
             if (_current is null || _currentInput is null
@@ -119,10 +125,20 @@ public sealed class AutocompleteSession : IDisposable
             }
 
             current = _current;
+            input = _currentInput;
             _current = null;
             _currentInput = null;
         }
 
+        _engine.Log?.Debug(
+            "autocomplete.attempt.cancelled",
+            "The attempt in flight was cancelled.",
+            ("request", current.RequestId),
+            ("by", caret is null ? "textChanged" : "caretMoved"),
+            ("attemptVersion", input.TextVersion),
+            ("version", textVersion),
+            ("attemptCaret", input.Caret),
+            ("caret", caret));
         current.Cancel();
     }
 
@@ -240,6 +256,13 @@ public sealed class AutocompleteSession : IDisposable
 
             if (token.IsCancellationRequested || !IsCurrent(attempt.Id) || gated || !_engine.HostUsable)
             {
+                _engine.Log?.Debug(
+                    "autocomplete.attempt.dropped",
+                    "An attempt ended before it asked the model.",
+                    ("request", attempt.RequestId),
+                    ("cancelled", token.IsCancellationRequested),
+                    ("current", IsCurrent(attempt.Id)),
+                    ("hostUsable", _engine.HostUsable));
                 return;
             }
 
@@ -284,6 +307,12 @@ public sealed class AutocompleteSession : IDisposable
         }
         catch (OperationCanceledException)
         {
+            _engine.Log?.Debug(
+                "autocomplete.attempt.dropped",
+                "An attempt was cancelled while it waited or streamed.",
+                ("request", attempt.RequestId),
+                ("cancelled", token.IsCancellationRequested),
+                ("current", IsCurrent(attempt.Id)));
             result = null;
         }
 #pragma warning disable CA1031 // Host failures and restarts never surface to the editor.

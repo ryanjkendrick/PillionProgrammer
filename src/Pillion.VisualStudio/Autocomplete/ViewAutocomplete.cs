@@ -135,6 +135,12 @@ internal sealed class ViewAutocomplete
             return null;
         }
 
+        feature.Log.Debug(
+            "autocomplete.requested",
+            "The proposal broker asked Pillion's source for a suggestion.",
+            ("scenario", scenario.ToString()),
+            ("completionList", completionState is not null),
+            ("ordering", feature.Engine.Settings.Ordering.ToString()));
         var session = EnsureSession(feature);
         var snapshot = caret.Position.Snapshot;
         var suppression = snapshot.TextBuffer != _view.TextBuffer
@@ -235,6 +241,12 @@ internal sealed class ViewAutocomplete
         #pragma warning restore VSTHRD003
         if (result is null || cancellationToken.IsCancellationRequested)
         {
+            feature.Log.Debug(
+                "autocomplete.request.nothing",
+                "The broker's request ended with no proposal.",
+                ("request", attempt.RequestId),
+                ("answered", result is not null),
+                ("brokerCancelled", cancellationToken.IsCancellationRequested));
             return null;
         }
 
