@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -10,6 +10,7 @@ using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text.Editor;
 using Newtonsoft.Json.Linq;
+using Pillion.Contracts;
 using Task = System.Threading.Tasks.Task;
 
 namespace Pillion.VisualStudio.IntegrationTests;
@@ -72,7 +73,25 @@ public sealed partial class PillionPackageTests
             return;
         }
 
-        await RunTypingPassAsync("autocomplete-cloud", model, enabled: true, "TypeCloud.cs", provider, "fast");
+        // Only a model with fill-in-the-middle can serve the Fast autocomplete row (Mistral's Codestral, or a local
+        // OpenAI-compatible server that declares it); the gateway skips a candidate without a FIM client, so a typing pass
+        // on, say, an Anthropic model would measure the local fallback. Record that the row does not apply instead.
+        var connection = await GateScenarioChecks.ConnectionAsync();
+        var descriptors = await connection.GetProxy<IModelService>().ListModelsAsync(HangMitigatingCancellationToken);
+        var descriptor = descriptors.FirstOrDefault(d => string.Equals(d.ProviderId, provider, StringComparison.OrdinalIgnoreCase) && string.Equals(d.ModelId, model, StringComparison.OrdinalIgnoreCase));
+        var fim = descriptor is not null && (descriptor.Capabilities & ModelCapabilities.Fim) == ModelCapabilities.Fim;
+        string autocomplete;
+        if (fim)
+        {
+            await RunTypingPassAsync("autocomplete-cloud", model, enabled: true, "TypeCloud.cs", provider, "fast");
+            autocomplete = "measured";
+        }
+        else
+        {
+            autocomplete = descriptor is null ? "not measured: the host does not list this model" : "not applicable: the model has no fill-in-the-middle";
+            Output.WriteLine($"Cloud autocomplete {autocomplete} ({provider}/{model}).");
+        }
+
         var frame = await OpenChatWindowAsync();
         await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
         ErrorHandler.ThrowOnFailure(frame.GetProperty((int)__VSFPROPID.VSFPROPID_DocView, out var docView));
@@ -81,7 +100,7 @@ public sealed partial class PillionPackageTests
         Output.WriteLine("Cloud chat: " + chat.ToString(Newtonsoft.Json.Formatting.None));
         await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
         _ = frame.CloseFrame((uint)__FRAMECLOSE.FRAMECLOSE_NoSave);
-        GateScenarioChecks.WriteResult(GateOutput, $"cloud-VS{version.Major}", new JObject { ["status"] = "measured", ["provider"] = provider, ["model"] = model, ["chat"] = chat });
+        GateScenarioChecks.WriteResult(GateOutput, $"cloud-VS{version.Major}", new JObject { ["status"] = "measured", ["provider"] = provider, ["model"] = model, ["autocomplete"] = autocomplete, ["chat"] = chat });
     }
 
     [GateScenarioFact]

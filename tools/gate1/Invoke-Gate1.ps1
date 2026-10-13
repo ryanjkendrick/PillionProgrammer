@@ -1,4 +1,4 @@
-#Requires -Version 7.5
+﻿#Requires -Version 7.5
 <#
 .SYNOPSIS
     Collects the Gate 1 evidence (work item 1.18): build, unit and live tests, the IDE performance scenarios with the real
@@ -11,6 +11,7 @@
         pwsh tools/gate1/Invoke-Gate1.ps1 -SkipBuild -SkipTests
         pwsh tools/gate1/Invoke-Gate1.ps1 -DevEnvPath "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe"
         pwsh tools/gate1/Invoke-Gate1.ps1 -CloudProviderId openai          # after storing that provider's key
+        pwsh tools/gate1/Invoke-Gate1.ps1 -CloudProviderId anthropic -CloudModel claude-haiku-5-5   # a provider whose entry lists no models
 
     Steps, each timed and logged to tools/gate1/out/<timestamp>-gate1/ (git-ignored):
       a. Build the full solution (Release, Visual Studio 2026's MSBuild, no deployment) and record the versions: VSIX,
@@ -60,6 +61,9 @@
 .PARAMETER CloudProviderId
     A configured cloud provider whose key is stored; its first model is measured for the cloud Fast autocomplete and chat
     first token rows. Without it (or without a stored key) those rows are pending.
+.PARAMETER CloudModel
+    The model of that provider to measure. Required when the provider's settings entry lists no models (the Anthropic and
+    OpenAI entries written by the Providers and keys page list their models from the service instead).
 #>
 [CmdletBinding()]
 param(
@@ -71,6 +75,7 @@ param(
     [switch]$KeepInstanceOpen,
     [string]$DevEnvPath,
     [string]$CloudProviderId,
+    [string]$CloudModel,
     [string]$ProviderId = 'ollama',
     [string]$StrongModel = 'qwen2.5-coder:7b',
     [string]$FastModel = 'qwen2.5-coder:1.5b',
@@ -94,7 +99,7 @@ $run = [ordered]@{
     kind       = 'Invoke-Gate1'
     startedAt  = $runStart.ToString('o')
     machine    = $env:COMPUTERNAME
-    parameters = [ordered]@{ SkipBuild = [bool]$SkipBuild; SkipTests = [bool]$SkipTests; SkipLiveTests = [bool]$SkipLiveTests; SkipIde = [bool]$SkipIde; SkipCost = [bool]$SkipCost; KeepInstanceOpen = [bool]$KeepInstanceOpen; DevEnvPath = $DevEnvPath; CloudProviderId = $CloudProviderId; ProviderId = $ProviderId; StrongModel = $StrongModel; FastModel = $FastModel; CostRootSuffix = $CostRootSuffix; CostPairs = $CostPairs }
+    parameters = [ordered]@{ SkipBuild = [bool]$SkipBuild; SkipTests = [bool]$SkipTests; SkipLiveTests = [bool]$SkipLiveTests; SkipIde = [bool]$SkipIde; SkipCost = [bool]$SkipCost; KeepInstanceOpen = [bool]$KeepInstanceOpen; DevEnvPath = $DevEnvPath; CloudProviderId = $CloudProviderId; CloudModel = $CloudModel; ProviderId = $ProviderId; StrongModel = $StrongModel; FastModel = $FastModel; CostRootSuffix = $CostRootSuffix; CostPairs = $CostPairs }
     versions   = [ordered]@{}
     data       = [ordered]@{}
 }
@@ -251,7 +256,11 @@ try {
         else {
             $provider = Get-PillionProviderSettings -Id $CloudProviderId
             if (-not $provider) { $cloud = "pending: provider '$CloudProviderId' is not in settings.json" }
-            else { $cloudEnv['PILLION_GATE_CLOUD_PROVIDER'] = $CloudProviderId; $cloudEnv['PILLION_GATE_CLOUD_MODEL'] = @($provider['models'])[0]; $cloud = "measured with $CloudProviderId/$(@($provider['models'])[0])" }
+            else {
+                $model = if ($CloudModel) { $CloudModel } else { @($provider['models'])[0] }
+                if (-not $model) { $cloud = "pending: provider '$CloudProviderId' lists no models in settings.json; pass -CloudModel <id>" }
+                else { $cloudEnv['PILLION_GATE_CLOUD_PROVIDER'] = $CloudProviderId; $cloudEnv['PILLION_GATE_CLOUD_MODEL'] = $model; $cloud = "measured with $CloudProviderId/$model" }
+            }
         }
     }
     else { $cloud = 'pending: no cloud key stored (run with -CloudProviderId <id> after storing one)' }
