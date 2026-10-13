@@ -1,4 +1,4 @@
-#Requires -Version 7.5
+﻿#Requires -Version 7.5
 <#
 .SYNOPSIS
     Helpers for tools/gate1/Invoke-Gate1.ps1: test runs and their TRX files, the IDE scenario run in the Experimental
@@ -525,7 +525,8 @@ function New-Gate1Table {
         $cp50 = Get-Value $cloudFast 'autocomplete.timeToSuggestion.p50'; $cp95 = Get-Value $cloudFast 'autocomplete.timeToSuggestion.p95'
         & $add 'Autocomplete latency, cloud Fast' 'p50 400 ms, p95 1,000 ms' "IDE: p50 $(Format-Ms $cp50), p95 $(Format-Ms $cp95)" $(if ($cp50 -le 400 -and $cp95 -le 1000) { 'Pass' } else { 'Fail' }) 'Typing scenario routed to the Fast profile'
     }
-    else { & $add 'Autocomplete latency, cloud Fast' 'p50 400 ms, p95 1,000 ms' "$($Data['cloud'])" 'Pending product owner' 'Store a key, run with -CloudProviderId' }
+    elseif ($cloud -and (Get-Value $cloud 'autocomplete') -like 'not applicable*') { & $add 'Autocomplete latency, cloud Fast' 'p50 400 ms, p95 1,000 ms' "$($Data['cloud']): $(Get-Value $cloud 'autocomplete'); only a model with fill-in-the-middle (Mistral Codestral) can serve this row" 'Not applicable' 'Typing scenario routed to the Fast profile' }
+    else { & $add 'Autocomplete latency, cloud Fast' 'p50 400 ms, p95 1,000 ms' "$($Data['cloud'])" 'Pending product owner' 'Store a key, run with -CloudProviderId <id> -CloudModel <model>' }
 
     # Keystroke latency.
     $kOn50 = Get-Value $fast 'typing.typeChar.p50'; $kOn95 = Get-Value $fast 'typing.typeChar.p95'
