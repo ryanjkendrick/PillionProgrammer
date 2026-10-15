@@ -58,8 +58,22 @@ internal sealed partial class ContextRpcService
         return (name, location, 0);
     }
 
+    /// <summary>The dotted name of a definition, without type parameters: <c>Fixtures.Sample.Greeter.Greet</c>.</summary>
     private static string DottedName(SymbolDefinition definition) =>
-        string.Join('.', definition.Container.Split(Breadcrumbs.Separator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Append(definition.Name));
+        string.Join('.', definition.Container.Split(Breadcrumbs.Separator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Append(definition.Name).Select(WithoutTypeParameters));
+
+    private static string WithoutTypeParameters(string segment)
+    {
+        var angle = segment.IndexOfAny(['<', '(']);
+        return angle > 0 ? segment[..angle] : segment;
+    }
+
+    /// <summary>The last part of a dotted or <c>::</c>-qualified name.</summary>
+    private static string SimpleName(string name)
+    {
+        var cut = Math.Max(name.LastIndexOf('.'), name.LastIndexOf(':'));
+        return cut >= 0 && cut + 1 < name.Length ? name[(cut + 1)..] : name;
+    }
 
     private async Task<MentionResolution> ResolveSymbolAsync(Resolution context, CancellationToken cancellationToken, bool exactOnly = false)
     {
@@ -75,7 +89,10 @@ internal sealed partial class ContextRpcService
             return context.Unresolved(MentionKinds.Symbol, "@symbol reads the index, and no index is open for this solution or folder (see the Pillion Index window).");
         }
 
-        var (matches, loose) = FindSymbols(views, name, exactOnly);
+        // With a location the simple name finds the namesakes and the location picks one (a dotted container may not match
+        // the graph's spelling, for example a type's parameters).
+        var lookup = hintPath.Length > 0 ? SimpleName(name) : name;
+        var (matches, loose) = FindSymbols(views, lookup, exactOnly);
         if (hintPath.Length > 0)
         {
             var inFile = matches.Where(m => SamePath(m.View.FullPath(m.Definition.FilePath), hintPath) || string.Equals(m.Definition.FilePath, hintPath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase)).ToList();
