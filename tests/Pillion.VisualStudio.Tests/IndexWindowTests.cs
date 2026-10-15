@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Threading;
 using Pillion.Contracts;
@@ -126,25 +127,33 @@ public sealed class IndexWindowTests : IDisposable
     [Fact]
     public async Task ABurstOfNotifications_IsAppliedAsOneBatch_AndTheLastStatusWins()
     {
-        var vm = await StartAsync(applyDelay: TimeSpan.FromMilliseconds(120));
+        var delay = TimeSpan.FromMilliseconds(400);
+        var vm = await StartAsync(applyDelay: delay);
         var applied = 0;
         vm.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(IndexWindowViewModel.SummaryText))
             {
-                applied++;
+                Interlocked.Increment(ref applied);
             }
         };
 
+        var burst = System.Diagnostics.Stopwatch.StartNew();
         for (var i = 1; i <= 40; i++)
         {
             await RaiseAsync(IndexData.Running(IndexPhase.Embedding, i, 40, i * 8, 5, IndexData.Root(IndexData.RootA, files: i)));
         }
 
+        burst.Stop();
         await Wait.UntilAsync(() => vm.ProgressText.StartsWith("40 of 40", StringComparison.Ordinal), "the last status");
-        await Task.Delay(300);
+        await Task.Delay(delay + delay);
 
-        Assert.InRange(applied, 1, 8);
+        // One visit per apply delay at most: the first apply comes one delay after the first notification, and each later
+        // one needs a notification after the previous apply plus another delay. On an idle machine the 40 notifications
+        // take a few milliseconds and land in one apply; on a loaded one the bound grows with the time the burst took
+        // (the earlier fixed bound of 8 failed when raising the burst itself took longer than 8 delays).
+        var bound = 2 + (int)Math.Ceiling(burst.Elapsed.TotalMilliseconds / delay.TotalMilliseconds);
+        Assert.InRange(Volatile.Read(ref applied), 1, Math.Min(bound, 39));
     }
 
     [Fact]

@@ -46,7 +46,7 @@ public sealed class AutocompleteDisplayTests
         var attempt = await StartAndSendAsync(session, InputAt("var smallest = "));
         _clock.Advance(TimeSpan.FromMilliseconds(120));
         _model.Release();
-        await Task.Delay(100);
+        await Wait.UntilAsync(() => _model.WaitsForRelease >= 2, "the first chunk to be handled");
         Assert.False(attempt.Ready.IsCompleted);
 
         _clock.Advance(TimeSpan.FromMilliseconds(60));
@@ -90,7 +90,7 @@ public sealed class AutocompleteDisplayTests
         // Half a line: nothing to show yet.
         _clock.Advance(TimeSpan.FromMilliseconds(80));
         _model.Release();
-        await Task.Delay(100);
+        await Wait.UntilAsync(() => _model.WaitsForRelease >= 2, "the first chunk to be handled");
         Assert.False(attempt.Ready.IsCompleted);
 
         // The first line completes: shown at once.

@@ -89,6 +89,10 @@ public sealed class ConnectivityNotificationTests
         fakes.Prober.Reachable = false;
         await using var host = await StartHostAsync(fakes);
         var monitor = host.Services.GetRequiredService<ConnectivityMonitor>();
+
+        // The hosted service starts the monitor after a yield, so the host can be Ready before it has; a probe asked for
+        // before that is a no-op and the state stays Online. Start is idempotent: whichever call comes second does nothing.
+        monitor.Start();
         await monitor.ProbeNowAsync(CancellationToken.None).WaitAsync(Wait);
         Assert.Equal(ConnectivityState.Offline, monitor.State);
 

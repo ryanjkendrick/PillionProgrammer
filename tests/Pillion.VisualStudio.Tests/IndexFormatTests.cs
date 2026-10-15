@@ -221,18 +221,23 @@ public sealed class IndexFormatTests : IDisposable
     {
         using var indicator = new IndexStatusIndicator(_connection, availability: null);
         var changes = 0;
-        indicator.Changed += (_, _) => changes++;
+        indicator.Changed += (_, _) => System.Threading.Interlocked.Increment(ref changes);
         indicator.Start();
 
+        var burst = System.Diagnostics.Stopwatch.StartNew();
         for (var i = 1; i <= 40; i++)
         {
             await _connection.RaiseIndexStatusChangedAsync(IndexData.Running(IndexPhase.Embedding, i, 40, i, 1));
         }
 
+        burst.Stop();
         await Wait.UntilAsync(() => indicator.Text.EndsWith("Indexing 100%", StringComparison.Ordinal), "the last percentage");
         await Task.Delay(700);
 
-        Assert.InRange(changes, 1, 6);
+        // At most one change per 500 ms interval (plus the first and the last), so the bound follows the time the burst took
+        // to raise: a few milliseconds on an idle machine, longer on a loaded one.
+        var bound = Math.Max(6, 2 + (int)Math.Ceiling(burst.Elapsed.TotalMilliseconds / 500));
+        Assert.InRange(System.Threading.Volatile.Read(ref changes), 1, Math.Min(bound, 39));
     }
 
     [Fact]

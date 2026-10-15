@@ -74,7 +74,8 @@ public sealed class ConversationRealHostTests : IDisposable
         chat.CurrentConversation = fresh;
         chat.InputText = "Where is Main? /cite";
         await chat.SendAsync().WithTimeout(Timeout);
-        Assert.True(fresh.IsPersisted);
+        var reply = chat.Turns.Last();
+        Assert.True(fresh.IsPersisted, $"reply {reply.State} ({reply.ErrorMessage}); storage {chat.Storage}; text '{reply.Text}'");
         Assert.Equal(2, chat.Turns.Last().Citations.Count);
 
         // The next session: a new window reads the list the host kept.
