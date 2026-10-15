@@ -365,6 +365,8 @@ function Get-G2 {
     return $current
 }
 
+function Get-G2Count { param($Value) if ($null -eq $Value) { 0 } else { @($Value).Count } }
+
 function New-Gate2Table {
     <#
     The Gate 2 criteria table of this run (one Visual Studio version): per row the target, what was measured, a status (Pass,
@@ -394,7 +396,7 @@ function New-Gate2Table {
     foreach ($row in @(@{ Lines = $smallLines; Name = 'Initial index, 100,000 lines, bundled model, CPU'; Target = '3 minutes or less'; Limit = 3 }, @{ Lines = $bigLines; Name = 'Initial index, 1,000,000 lines, CPU'; Target = '30 minutes or less, in the background, partial results searchable after the first minute'; Limit = 30 })) {
         if (-not $row.Lines) { & $add $row.Name $row.Target 'not run' 'Not measured' ''; continue }
         $syn = & $find 'synthetic' $row.Lines 'cpu'; $real = & $find 'real' $row.Lines 'cpu'
-        $dml = @(& $find 'synthetic' $row.Lines 'directml'; & $find 'real' $row.Lines 'directml') | Where-Object { $_ }
+        $dml = @(@(& $find 'synthetic' $row.Lines 'directml'; & $find 'real' $row.Lines 'directml') | Where-Object { $_ })
         $measured = "CPU: $(& $describeRun $syn); $(& $describeRun $real)" + $(if ($dml.Count) { "; DirectML (issue #78, reported separately): " + (($dml | ForEach-Object { & $describeRun $_ }) -join '; ') } else { '' })
         $judged = if ($real) { $real } else { $syn }
         $partialOk = $row.Limit -lt 30 -or ($judged -and $null -ne $judged.firstSearchableSeconds -and $judged.firstSearchableSeconds -le 60)
@@ -460,13 +462,13 @@ function New-Gate2Table {
 
     # Secret files.
     $ix = & $sc 'gate2-index-solution'
-    $secretOk = @(Get-G2 $ix 'secretFiles').Count -ge 2 -and ((Get-G2 $ix 'envMention.requiresApproval') -eq $true -or (Get-G2 $ix 'envMention.isSensitive') -eq $true) -and (Get-G2 $ix 'envMention.hasContent') -eq $false
-    & $add 'Secret-file exclusion' 'Not indexed, listed in the Index window, per-file approval as a pin' "listed as secret-bearing: $((@(Get-G2 $ix 'secretFiles')) -join ', '); @file .env without approval: requires approval $(Get-G2 $ix 'envMention.requiresApproval'), content returned $(Get-G2 $ix 'envMention.hasContent'); with approval: content $(Get-G2 $ix 'envMentionApproved.hasContent'); search for their text: $(@(Get-G2 $ix 'secretTextSearchHits').Count) hits in them; Index window test $(& $outcome 'IndexWindow_ShowsTheRootRow')" $(if ($null -eq $ix) { 'Not measured' } elseif ($secretOk) { 'Pass' } else { 'Fail' }) 'IDE: ListExcludedFilesAsync, ResolveMentionAsync(.env) with and without approval, SearchDetailedAsync'
+    $secretOk = (Get-G2Count (Get-G2 $ix 'secretFiles')) -ge 2 -and ((Get-G2 $ix 'envMention.requiresApproval') -eq $true -or (Get-G2 $ix 'envMention.isSensitive') -eq $true) -and (Get-G2 $ix 'envMention.hasContent') -eq $false
+    & $add 'Secret-file exclusion' 'Not indexed, listed in the Index window, per-file approval as a pin' "listed as secret-bearing: $((@(Get-G2 $ix 'secretFiles')) -join ', '); @file .env without approval: requires approval $(Get-G2 $ix 'envMention.requiresApproval'), content returned $(Get-G2 $ix 'envMention.hasContent'); with approval: content $(Get-G2 $ix 'envMentionApproved.hasContent'); search for their text: $((Get-G2Count (Get-G2 $ix 'secretTextSearchHits'))) hits in them; Index window test $(& $outcome 'IndexWindow_ShowsTheRootRow')" $(if ($null -eq $ix) { 'Not measured' } elseif ($secretOk) { 'Pass' } else { 'Fail' }) 'IDE: ListExcludedFilesAsync, ResolveMentionAsync(.env) with and without approval, SearchDetailedAsync'
 
     # Citations.
     $cite = & $sc 'gate2-chat-cites'
     $citeTest = & $outcome 'CitedAnswer_ShowsTheSpanLink'
-    & $add 'Cited answers' 'Replies that used retrieved chunks cite file:line spans; citations open the location' "real host and $((Get-G2 $cite 'model')): $(@(Get-G2 $cite 'citations').Count) citations ($(Get-G2 $cite 'explicit') explicit, $(Get-G2 $cite 'implicit') implicit), e.g. $((@(Get-G2 $cite 'citations') | Select-Object -First 2) -join ', '); opening a span: integration test $citeTest" $(if ($null -eq $cite) { 'Not measured' } elseif (@(Get-G2 $cite 'citations').Count -gt 0 -and $citeTest -eq 'Passed') { 'Pass' } else { 'Fail' }) 'IDE: ChatAsync with retrieval on; CitedAnswer_ShowsTheSpanLink_... (fake host, the window)'
+    & $add 'Cited answers' 'Replies that used retrieved chunks cite file:line spans; citations open the location' "real host and $((Get-G2 $cite 'model')): $((Get-G2Count (Get-G2 $cite 'citations'))) citations ($(Get-G2 $cite 'explicit') explicit, $(Get-G2 $cite 'implicit') implicit), e.g. $((@(Get-G2 $cite 'citations') | Select-Object -First 2) -join ', '); opening a span: integration test $citeTest" $(if ($null -eq $cite) { 'Not measured' } elseif ((Get-G2Count (Get-G2 $cite 'citations')) -gt 0 -and $citeTest -eq 'Passed') { 'Pass' } else { 'Fail' }) 'IDE: ChatAsync with retrieval on; CitedAnswer_ShowsTheSpanLink_... (fake host, the window)'
 
     # Autocomplete with retrieval (Gate 1 rows re-run).
     $strong = & $sc 'autocomplete-strong'; $fast = & $sc 'autocomplete-fast'; $off = & $sc 'autocomplete-off'

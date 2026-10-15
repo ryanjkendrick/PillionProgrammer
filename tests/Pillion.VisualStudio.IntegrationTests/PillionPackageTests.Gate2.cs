@@ -661,9 +661,20 @@ public sealed partial class PillionPackageTests
 
             await JoinableTaskFactory.SwitchToMainThreadAsync(lease.Token);
             VsShellUtilities.OpenDocument(ServiceProvider.GlobalProvider, path);
-            var view = await TestServices.Editor.GetActiveTextViewAsync(lease.Token);
+            Microsoft.VisualStudio.Text.Editor.IWpfTextView? opened = null;
+            await WaitUntilAsync(
+                async () =>
+                {
+                    opened = await TestServices.Editor.GetActiveTextViewAsync(lease.Token);
+                    await JoinableTaskFactory.SwitchToMainThreadAsync(lease.Token);
+                    _ = opened.VisualElement.Focus();
+                    return opened.TextBuffer.Properties.TryGetProperty(typeof(Microsoft.VisualStudio.Text.ITextDocument), out Microsoft.VisualStudio.Text.ITextDocument document)
+                        && Gate2SamePath(document.FilePath, path) && opened.HasAggregateFocus;
+                },
+                TimeSpan.FromSeconds(30),
+                file + " to open with keyboard focus");
+            var view = opened!;
             await JoinableTaskFactory.SwitchToMainThreadAsync(lease.Token);
-            _ = view.VisualElement.Focus();
             GateScenarioChecks.PrepareEditor(view);
             typing = await GateScenarioChecks.TypeSnippetAsync(view, new TypingOptions(CharacterDelay, TimeSpan.FromMilliseconds(400), AcceptMatchingProposals: false), () => Task.CompletedTask, lease.Token);
         }
