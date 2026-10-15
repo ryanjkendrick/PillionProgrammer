@@ -75,6 +75,8 @@ public class ContractV13Tests
         { typeof(ChatChunk), nameof(ChatChunk.Citations), 8 },
         { typeof(ChatRequest), nameof(ChatRequest.RetrievalMode), 9 },
         { typeof(ChatRequest), nameof(ChatRequest.MaxRetrievedChunks), 10 },
+        { typeof(ChatRequest), nameof(ChatRequest.ExcludedContextKeys), 11 },
+        { typeof(ContextReportItemDto), nameof(ContextReportItemDto.ContextKey), 9 },
         { typeof(MentionRequest), nameof(MentionRequest.Qualifier), 7 },
         { typeof(MentionRequest), nameof(MentionRequest.Arguments), 8 },
         { typeof(MentionResolution), nameof(MentionResolution.Citations), 12 },
@@ -269,6 +271,19 @@ public class ContractV13Tests
         Assert.Empty(request.Arguments);
     }
 
+    [Fact]
+    public void ARequestWithoutExclusions_AndAReportItemWithoutAKey_ReadWithEmptyDefaults()
+    {
+        var request = MessagePackSerializer.Deserialize<ChatRequest>(MessagePackSerializer.Serialize(new RequestIdOnly { RequestId = "r" }, Options), Options);
+        Assert.Equal("r", request.RequestId);
+        Assert.Empty(request.ExcludedContextKeys);
+
+        var item = MessagePackSerializer.Deserialize<ContextReportItemDto>(MessagePackSerializer.Serialize(new RequestIdOnly { RequestId = "pin" }, Options), Options);
+        Assert.Equal("pin", item.Kind);
+        Assert.Equal(string.Empty, item.ContextKey);
+        Assert.Equal(-1, item.PinIndex);
+    }
+
     private static string[] Duplicates(IEnumerable<Type> contracts) => contracts
         .SelectMany(t => t.GetMethods().Select(m => (Contract: t.Name, m.Name)))
         .GroupBy(m => m.Name, StringComparer.Ordinal)
@@ -294,6 +309,14 @@ public class ContractV13Tests
 
         [DataMember(Order = 4)]
         public DateTime? LastUpdatedUtc { get; set; }
+    }
+
+    /// <summary>A DTO with only its first member, as a peer that knows none of the later ones sends it.</summary>
+    [DataContract]
+    public sealed class RequestIdOnly
+    {
+        [DataMember(Order = 0)]
+        public string RequestId { get; set; } = string.Empty;
     }
 
     /// <summary><see cref="ChatChunk"/> as contract 1.2 defined it.</summary>

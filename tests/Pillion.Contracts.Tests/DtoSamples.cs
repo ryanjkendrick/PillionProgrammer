@@ -77,6 +77,7 @@ internal static class DtoSamples
             ProjectRules = "Use file-scoped namespaces.",
             RetrievalMode = RetrievalMode.On,
             MaxRetrievedChunks = 12,
+            ExcludedContextKeys = ["0123456789abcdef0123456789abcdef:7", "repoMap"],
         },
         new ChatChunk
         {
@@ -194,7 +195,8 @@ internal static class DtoSamples
             Redacts = true,
             RedactionCount = 1,
         },
-        new ContextReportItemDto { Kind = "history", Name = "Recent history (4 messages)", Tokens = 400, OriginalTokens = 800, Truncated = true, Dropped = true, Note = "Summarised.", PinIndex = 2, RedactionCount = 3 },
+        new ContextReportItemDto { Kind = "history", Name = "Recent history (4 messages)", Tokens = 400, OriginalTokens = 800, Truncated = true, Dropped = true, Note = "Summarised.", PinIndex = 2, RedactionCount = 3, ContextKey = "repoMap" },
+
         new SearchRequest
         {
             Query = "where is the pipe opened",
