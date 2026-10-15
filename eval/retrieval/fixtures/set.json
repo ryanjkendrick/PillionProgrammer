@@ -1,0 +1,8 @@
+{
+  "name": "fixtures",
+  "description": "Questions over the Context Engine's chunker fixtures (tests/Pillion.ContextEngine.Tests/Fixtures, every language, as distractors too) and the indexing pipeline's small shop repository (tests/Pillion.Host.Tests/Indexing/Fixtures/shop), all MIT code in this repository. The queries target the C#, TypeScript and Python files. The corpus is tiny (24 files), so file recall at 10 is easy; the symbol figures and the mean reciprocal rank carry the signal. A sanity set for the harness and the smoke test, not the gate's fixture repositories.",
+  "corpus": [
+    { "path": "../../../tests/Pillion.ContextEngine.Tests/Fixtures", "as": "engine" },
+    { "path": "../../../tests/Pillion.Host.Tests/Indexing/Fixtures/shop", "as": "shop" }
+  ]
+}

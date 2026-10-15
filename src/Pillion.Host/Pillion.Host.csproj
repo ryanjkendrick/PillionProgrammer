@@ -38,6 +38,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Pillion.Host.Tests" />
+    <!-- The evaluation harness (tools/eval, work item 2.16) composes the indexing pipeline and retrieval in process. -->
+    <InternalsVisibleTo Include="Pillion.Eval" />
   </ItemGroup>
 
   <!--
