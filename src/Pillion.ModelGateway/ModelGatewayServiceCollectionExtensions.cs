@@ -152,7 +152,8 @@ public static class ModelGatewayServiceCollectionExtensions
             sp.GetRequiredService<AutocompleteCounters>(),
             sp.GetRequiredService<PromptEvaluationRates>(),
             sp.GetRequiredService<ContextAssembler>(),
-            sp.GetRequiredService<LocalResidencyMap>()));
+            sp.GetRequiredService<LocalResidencyMap>(),
+            sp.GetService<IAutocompleteSnippetSource>()));
 
         // Test connection probes the named provider through the gateway (replacing the settings' NoProviderTester).
         services.Replace(ServiceDescriptor.Singleton<IProviderTester, GatewayProviderTester>());

@@ -34,6 +34,29 @@ internal static class RetrievalServiceCollectionExtensions
             sp.GetService<RetrievalOptions>(),
             sp.GetService<TimeProvider>(),
             sp.GetService<ILogger<RetrievalService>>()));
+
+        // Context assembly v2 (work item 2.12): retrieved chunks and the repo map for chat, snippets for autocomplete and
+        // related code for inline edits, all through one helper that resolves IRetrievalService lazily (it embeds questions
+        // through the gateway, which takes the snippet source).
+        services.TryAddSingleton(sp => new CodeContextRetriever(
+            sp,
+            sp.GetRequiredService<IIndexCatalog>(),
+            sp.GetRequiredService<IFeatureFlags>(),
+            sp.GetService<WorkspaceQueries.ISymbolGraphProvider>(),
+            sp.GetService<ILogger<CodeContextRetriever>>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IContextSource, RetrievalContextSource>(sp => new RetrievalContextSource(
+            sp.GetRequiredService<CodeContextRetriever>(),
+            sp.GetService<TimeProvider>())));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IContextSource, RepoMapContextSource>(sp => new RepoMapContextSource(
+            sp.GetRequiredService<CodeContextRetriever>(),
+            sp.GetRequiredService<ITokenCounter>(),
+            sp.GetRequiredService<ContextAssemblerOptions>())));
+        services.TryAddSingleton(sp => new AutocompleteSnippetProvider(
+            sp.GetRequiredService<CodeContextRetriever>(),
+            sp.GetService<TimeProvider>(),
+            sp.GetService<ILogger<AutocompleteSnippetProvider>>()));
+        services.TryAddSingleton<IAutocompleteSnippetSource>(sp => sp.GetRequiredService<AutocompleteSnippetProvider>());
+        services.TryAddSingleton<IInlineEditContext>(sp => new InlineEditRetrieval(sp.GetRequiredService<CodeContextRetriever>()));
         return services;
     }
 }
