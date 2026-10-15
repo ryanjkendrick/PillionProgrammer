@@ -130,6 +130,17 @@
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.13" />
   </ItemGroup>
 
+  <!--
+    Repository discovery and hashing (work item 2.3, design section 7), in src/Pillion.Indexing.
+    - System.IO.Hashing 10.0.13 (MIT) is the newest stable release (the 11.0 line is preview): XxHash64, the per-file
+      content hash. On net10.0 it has no dependencies. Its notice is in THIRD-PARTY-NOTICES.txt.
+    No gitignore package is used: the gitwildmatch subset is implemented in Pillion.Indexing (Discovery/Ignore), see
+    THIRD-PARTY-NOTICES.txt for the reasoning.
+  -->
+  <ItemGroup>
+    <PackageVersion Include="System.IO.Hashing" Version="10.0.13" />
+  </ItemGroup>
+
   <!-- Tests. -->
   <ItemGroup>
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />

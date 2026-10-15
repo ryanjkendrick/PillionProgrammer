@@ -16,7 +16,9 @@
       "tests\\Pillion.FakeHost\\Pillion.FakeHost.csproj",
       "tests\\Pillion.VisualStudio.Tests\\Pillion.VisualStudio.Tests.csproj",
       "tests\\Pillion.VisualStudio.IntegrationTests\\Pillion.VisualStudio.IntegrationTests.csproj",
-      "tests\\Pillion.VisualStudio.IntegrationTests.VS2022\\Pillion.VisualStudio.IntegrationTests.VS2022.csproj"
+      "tests\\Pillion.VisualStudio.IntegrationTests.VS2022\\Pillion.VisualStudio.IntegrationTests.VS2022.csproj",
+      "src\\Pillion.Indexing\\Pillion.Indexing.csproj",
+      "tests\\Pillion.Indexing.Tests\\Pillion.Indexing.Tests.csproj"
     ]
   }
 }

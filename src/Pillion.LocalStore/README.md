@@ -71,6 +71,11 @@ Retention (`ConversationRetention`): conversations and the Outbound log are kept
   - `schema_version` older: the file and its WAL are copied to `<file>.v<old>.bak` (and `.bak-wal`), then every missing
     migration runs in the same transaction, which also writes the new versions. A failure rolls everything back
     (`MigrationFailed`) and leaves the file at its old version.
+- `EncryptedDatabaseOptions.ReadOnly` opens an existing database for a host that does not own it (the index's non-writers,
+  see `src/Pillion.Indexing/README.md`): the file and its key must exist (`DatabaseMissing`, `KeyMissing`; a key is never
+  created), the journal mode is left alone, no migration runs (an older schema is refused with `NeedsMigration`, a newer
+  incompatible one with `NewerSchema`), reads work alongside the owner's writes, and `WriteAsync` and `VacuumAsync` throw
+  `InvalidOperationException`. `IsReadOnly` tells which kind of database you hold.
 - Every file carries a version: databases in `meta`, key files in their header byte, `settings.json` in its `version`.
 
 ## Adding a migration
@@ -90,7 +95,7 @@ Retention (`ConversationRetention`): conversations and the Outbound log are kept
 
 `LocalStoreException` derives from `PillionRpcException`, so it can cross the RPC boundary unchanged. The contract has
 no storage error code yet, so every kind uses `PolicyDenied`; `Kind` (`FeatureDisabled`, `CipherUnavailable`,
-`KeyMissing`, `KeyUnreadable`, `KeyMismatch`, `NewerSchema`, `MigrationFailed`) carries the precise reason. Messages are
+`KeyMissing`, `KeyUnreadable`, `KeyMismatch`, `NewerSchema`, `MigrationFailed`, `DatabaseMissing`, `NeedsMigration`) carries the precise reason. Messages are
 written for the user and never contain key material; `Details` holds the file path.
 
 ## Native library

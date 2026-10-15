@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.Runtime.Versioning;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -26,7 +27,7 @@ public sealed partial class EncryptedDatabase : IAsyncDisposable
 {
     private readonly string _readerConnectionString;
     private readonly DatabaseKey _key;
-    private readonly SqliteConnection _writer;
+    private readonly SqliteConnection? _writer;
     private readonly SemaphoreSlim _writeGate = new(1, 1);
     private readonly SemaphoreSlim _readerSlots;
     private readonly ConcurrentBag<SqliteConnection> _idleReaders = [];
@@ -40,7 +41,7 @@ public sealed partial class EncryptedDatabase : IAsyncDisposable
         string keyPath,
         string readerConnectionString,
         DatabaseKey key,
-        SqliteConnection writer,
+        SqliteConnection? writer,
         EncryptedDatabaseOptions options,
         MigrationOutcome migration,
         ILogger logger)
@@ -59,6 +60,9 @@ public sealed partial class EncryptedDatabase : IAsyncDisposable
         OpenedAtVersion = migration.FromVersion;
         BackupPath = migration.BackupPath;
     }
+
+    /// <summary>Gets a value indicating whether the database was opened read-only (<see cref="EncryptedDatabaseOptions.ReadOnly"/>): writes fail.</summary>
+    public bool IsReadOnly => _writer is null;
 
     /// <summary>Gets the database file path.</summary>
     public string DatabasePath { get; }
@@ -110,6 +114,11 @@ public sealed partial class EncryptedDatabase : IAsyncDisposable
         var library = SqliteCipher.Library;
         var path = Path.GetFullPath(options.DatabasePath);
         var keyPath = options.ResolvedKeyFilePath;
+        if (options.ReadOnly)
+        {
+            return OpenReadOnly(options, schema, path, keyPath, library, logger);
+        }
+
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
         var databaseExists = File.Exists(path) && new FileInfo(path).Length > 0;
@@ -136,6 +145,84 @@ public sealed partial class EncryptedDatabase : IAsyncDisposable
     }
 
     /// <summary>
+    /// Opens an existing database read-only: no file, key or table is created, the journal mode is left alone and no
+    /// migration runs. A schema this build cannot read is refused exactly as a read-write open refuses it; an older schema
+    /// is refused too, because only the owner may migrate.
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    private static EncryptedDatabase OpenReadOnly(
+        EncryptedDatabaseOptions options,
+        StoreSchema schema,
+        string path,
+        string keyPath,
+        CipherLibraryInfo library,
+        ILogger logger)
+    {
+        if (!File.Exists(path) || new FileInfo(path).Length == 0)
+        {
+            throw new LocalStoreException(
+                LocalStoreErrorKind.DatabaseMissing,
+                $"Pillion's encrypted database ({Path.GetFileName(path)}) does not exist yet, so it cannot be opened read-only.",
+                "Wait for the Visual Studio instance that owns it to create it.",
+                path);
+        }
+
+        var key = DatabaseKeyFile.LoadOrCreate(keyPath, databaseExists: true);
+        SqliteConnection? probe = null;
+        try
+        {
+            var busyTimeoutMs = BusyTimeoutMilliseconds(options.BusyTimeout);
+            var readerConnectionString = BuildConnectionString(path, SqliteOpenMode.ReadOnly);
+
+            // The first connection also reads the schema versions; it joins the pool afterwards.
+            probe = OpenConnection(readerConnectionString, path, key, busyTimeoutMs, reader: true);
+            int version;
+            int minReader;
+            try
+            {
+                version = ReadMetaInt(probe, null, MetaKeys.SchemaVersion);
+                minReader = ReadMetaInt(probe, null, MetaKeys.MinReaderVersion);
+            }
+            catch (SqliteException)
+            {
+                // The owner has created the file but not its meta table yet.
+                version = 0;
+                minReader = 0;
+            }
+
+            if (minReader > schema.CurrentVersion)
+            {
+                throw new LocalStoreException(
+                    LocalStoreErrorKind.NewerSchema,
+                    $"Pillion's {schema.Name} database was written by a newer Pillion Programmer: it has schema version {version} and needs a reader of version {minReader} or later, and this version reads up to {schema.CurrentVersion}. It was not opened or changed.",
+                    "Update Pillion Programmer in this Visual Studio to the version that wrote the database.",
+                    path);
+            }
+
+            if (version < schema.CurrentVersion)
+            {
+                throw new LocalStoreException(
+                    LocalStoreErrorKind.NeedsMigration,
+                    $"Pillion's {schema.Name} database has schema version {version} and this version reads {schema.CurrentVersion}; only the Visual Studio instance that owns it can upgrade it, so it was opened by nobody.",
+                    "Wait for the owning instance to finish, or close it so this one can take over.",
+                    path);
+            }
+
+            LogOpened(logger, path, version, minReader, library.CipherVersion, library.SqliteVersion);
+            var database = new EncryptedDatabase(path, keyPath, readerConnectionString, key, null, options, new MigrationOutcome(version, version, minReader, BackupPath: null), logger);
+            database._idleReaders.Add(probe);
+            probe = null;
+            return database;
+        }
+        catch
+        {
+            probe?.Dispose();
+            key.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Runs a write on the process's single writer connection, in its own <c>BEGIN IMMEDIATE</c> transaction that is
     /// committed when <paramref name="work"/> completes and rolled back when it throws. Writes queue up and run one at a time.
     /// </summary>
@@ -150,8 +237,9 @@ public sealed partial class EncryptedDatabase : IAsyncDisposable
         try
         {
             ThrowIfDisposed();
-            using var transaction = _writer.BeginTransaction(deferred: false);
-            var result = await work(_writer, transaction, cancellationToken).ConfigureAwait(false);
+            var writer = _writer ?? throw new InvalidOperationException("The database was opened read-only; only the instance that owns it can write.");
+            using var transaction = writer.BeginTransaction(deferred: false);
+            var result = await work(writer, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit();
             return result;
         }
@@ -231,8 +319,9 @@ public sealed partial class EncryptedDatabase : IAsyncDisposable
         try
         {
             ThrowIfDisposed();
-            Execute(_writer, "VACUUM");
-            TryCheckpoint(_writer);
+            var writer = _writer ?? throw new InvalidOperationException("The database was opened read-only; only the instance that owns it can write.");
+            Execute(writer, "VACUUM");
+            TryCheckpoint(writer);
         }
         finally
         {
@@ -278,7 +367,7 @@ public sealed partial class EncryptedDatabase : IAsyncDisposable
                 reader.Dispose();
             }
 
-            _writer.Dispose();
+            _writer?.Dispose();
             _key.Dispose();
         }
         finally
@@ -510,7 +599,7 @@ public sealed partial class EncryptedDatabase : IAsyncDisposable
         }
     }
 
-    private static int ReadMetaInt(SqliteConnection connection, SqliteTransaction transaction, string key)
+    private static int ReadMetaInt(SqliteConnection connection, SqliteTransaction? transaction, string key)
     {
         var value = ExecuteScalar(connection, transaction, "SELECT value FROM meta WHERE key = $key", ("$key", key)) as string;
         return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number) ? number : 0;
