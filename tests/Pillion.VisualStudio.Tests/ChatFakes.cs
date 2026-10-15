@@ -121,6 +121,23 @@ internal sealed class FakeHostConnection : IHostConnection
         }
     }
 
+    /// <summary>Gets the notifications sent while the host was connected, in order.</summary>
+    public ConcurrentQueue<(string Method, object? Argument)> Notifications { get; } = new();
+
+    public Task<bool> NotifyAsync(string method, object? argument)
+    {
+        lock (_gate)
+        {
+            if (_state is not (HostState.Ready or HostState.Degraded))
+            {
+                return Task.FromResult(false);
+            }
+
+            Notifications.Enqueue((method, argument));
+            return Task.FromResult(true);
+        }
+    }
+
     public Task WhenReadyAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }
 

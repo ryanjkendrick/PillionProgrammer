@@ -141,8 +141,8 @@ migrations append after version 2; leave the earlier SQL alone.
    writes the `meta` identity rows and `state.json`. `IndexStore.Writer` is its own endpoint.
 3. Everyone else (`IndexRole.Reader`): opens `index.db` read-only (`EncryptedDatabaseOptions.ReadOnly`: nothing created,
    journal mode and schema untouched, writes throw) and gets `IndexStore.Writer`, an `IndexWriterEndpoint` with the
-   owner's pipe name. Item 2.9 does not forward to it yet (a reader re-sweeps when it becomes the writer; see the host README, Readers). While the owner has not finished creating or migrating the
-   database the reader retries (20 times, 250 ms apart by default), electing again each round, then gives up with the
+   owner's pipe name. Item 2.9 does not forward to it yet (a reader re-sweeps when it becomes the writer; see the host
+   README, Readers). While the owner has not finished creating or migrating the database the reader retries (20 times, 250 ms apart by default), electing again each round, then gives up with the
    `LocalStoreException` that stopped it.
 4. A lock is stale when its process id does not exist, or exists but started more than 2 seconds away from the recorded
    start time (the id was reused), or the file cannot be parsed. A stale lock is reclaimed under a short-lived guard file

@@ -59,6 +59,18 @@ public interface IHostConnection
         where T : class;
 
     /// <summary>
+    /// Sends a JSON-RPC notification (no response) to the host on the live connection, for example <c>ideActivityChanged</c>
+    /// (contract 1.3). Call it off the UI thread.
+    /// </summary>
+    /// <param name="method">The notification's name.</param>
+    /// <param name="argument">The notification's one positional argument.</param>
+    /// <returns>
+    /// <see langword="true"/> when the notification was written; <see langword="false"/> when no handshaken connection exists
+    /// (the host is starting, restarting or failed) or the connection was lost meanwhile. Never throws for those cases.
+    /// </returns>
+    Task<bool> NotifyAsync(string method, object? argument);
+
+    /// <summary>
     /// Waits until the host is <see cref="HostState.Ready"/> or <see cref="HostState.Degraded"/> with a live
     /// connection. Completes immediately if it already is. Keeps waiting through <see cref="HostState.Failed"/>,
     /// because the user can retry; pass a token to give up, and watch <see cref="StateChanged"/> to show failures.

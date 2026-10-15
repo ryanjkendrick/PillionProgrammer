@@ -54,6 +54,17 @@ public interface IHostSession : IDisposable
         where T : class;
 
     /// <summary>
+    /// Sends a JSON-RPC notification (no response) to the host on this connection, for example <c>ideActivityChanged</c>.
+    /// </summary>
+    /// <param name="method">The notification's name.</param>
+    /// <param name="argument">The notification's one positional argument (<see langword="null"/> is sent as a null argument).</param>
+    /// <returns>
+    /// <see langword="true"/> when the notification was written to the connection; <see langword="false"/> when the session is
+    /// disposed or the connection is lost. Never throws for those cases.
+    /// </returns>
+    Task<bool> NotifyAsync(string method, object? argument);
+
+    /// <summary>
     /// Asks the host to shut down, waits up to <paramref name="timeout"/> for it to exit and kills the process tree
     /// if it is still alive.
     /// </summary>
