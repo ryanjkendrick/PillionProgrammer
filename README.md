@@ -34,6 +34,7 @@ src/
   Pillion.Contracts/             RPC interfaces and DTOs (netstandard2.0); see its README for the versioning rule
   Pillion.Common/                Host-side settings, secrets, redaction, connectivity (net10.0, placeholder)
   Pillion.ModelGateway/          Model providers and routing (net10.0, placeholder)
+  Pillion.LocalStore/            Encrypted SQLite databases (conversations.db) for the host (net10.0); see its README
   Pillion.Host/                  Pillion Host console process (net10.0); see its README for the launch protocol
   Pillion.VisualStudio/          The Visual Studio extension (net48, produces Pillion.VisualStudio.vsix)
   Pillion.VisualStudio.Core/     Host supervisor, RPC client and logger for the extension (net48, no VS SDK)
@@ -42,6 +43,7 @@ tests/
   Pillion.Common.Tests/
   Pillion.ModelGateway.Tests/
   Pillion.Host.Tests/
+  Pillion.LocalStore.Tests/      Encryption, keys, WAL, writer queue, migrations and the conversations repository
   Pillion.VisualStudio.Tests/    Supervisor, launch protocol and signature policy tests (net48)
   Pillion.VisualStudio.IntegrationTests/         Tests inside the Visual Studio 2026 Experimental Instance; see its README
   Pillion.VisualStudio.IntegrationTests.VS2022/  The same tests built for Visual Studio 2022 17.14
