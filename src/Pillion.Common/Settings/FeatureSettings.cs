@@ -56,6 +56,9 @@ public static class FeatureNames
     /// <summary>The bundled embedding provider: the in-process ONNX Runtime model shipped with the extension and the models downloaded on request (work item 2.7). It also needs <see cref="Embeddings"/>.</summary>
     public const string BundledEmbeddings = "bundledEmbeddings";
 
+    /// <summary>The Index window, its status bar indicator and the Indexing options page in Visual Studio (work item 2.15).</summary>
+    public const string IndexWindow = "indexWindow";
+
     /// <summary>Gets every feature flag name, in the order they are written to <c>settings.json</c>.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
@@ -77,6 +80,7 @@ public static class FeatureNames
         Indexing,
         Embeddings,
         BundledEmbeddings,
+        IndexWindow,
     ];
 }
 
@@ -146,6 +150,7 @@ public sealed class FeatureSettings : SettingsNode
             "indexing" => Indexing,
             "embeddings" => Embeddings,
             "bundledembeddings" => BundledEmbeddings,
+            "indexwindow" => IndexWindow,
             _ => true,
         };
     }
@@ -212,6 +217,9 @@ public sealed class FeatureSettings : SettingsNode
             case "bundledembeddings":
                 BundledEmbeddings = false;
                 break;
+            case "indexwindow":
+                IndexWindow = false;
+                break;
         }
     }
 
@@ -237,4 +245,7 @@ public sealed class FeatureSettings : SettingsNode
     /// extension (and models downloaded on request) runs in the host, with no network. When off, the provider is hidden from routing.
     /// </summary>
     public bool BundledEmbeddings { get; set; } = true;
+
+    /// <summary>Gets or sets a value indicating whether the Pillion Index window, the status bar indexing indicator and the Indexing options page are available in Visual Studio. The host indexes either way; this only hides the views.</summary>
+    public bool IndexWindow { get; set; } = true;
 }
