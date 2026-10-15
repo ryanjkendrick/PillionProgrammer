@@ -58,7 +58,7 @@ public sealed class RoutingOptionsViewModel : OptionsPageViewModel
             new(TaskClass.Agent, "Agent", "Planning and steps of autonomous agent sessions.", "agent", cloudSwitchDefault: false,
                 "Off by default: the agent needs its own switch. Fixes for failed builds and tests (self-healing) have theirs under Privacy."),
             new(TaskClass.Embedding, "Embedding", "Indexing and search over your code.", cloudSwitchKey: null, cloudSwitchDefault: false,
-                "Always runs on this machine, so there is no cloud switch."),
+                "Runs on this machine. A cloud embedding model needs cloudSwitches.embedding set to true in settings.json (off by default) and a cloud profile or model; this page has no switch for it."),
             new(TaskClass.Summarise, "Summarise", "Compressing long chat history so it fits the context window.", cloudSwitchKey: null, cloudSwitchDefault: false,
                 "Has no cloud switch of its own; Local-only mode still applies.", noSwitchText: "No switch"),
             new(TaskClass.Vision, "Vision", "Requests that include screenshots or images.", "vision", cloudSwitchDefault: true,

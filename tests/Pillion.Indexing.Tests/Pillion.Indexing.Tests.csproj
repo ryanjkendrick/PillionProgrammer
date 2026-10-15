@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <!--
+      The test assembly doubles as the helper for the cross-process lock tests: Program.cs dispatches "lock-helper" runs
+      (see LockHelper.cs), and a normal test host never calls Main.
+    -->
+    <GenerateProgramFile>false</GenerateProgramFile>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- ServiceCollection.BuildServiceProvider for the registration test. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Pillion.Indexing\Pillion.Indexing.csproj" />
+  </ItemGroup>
+
+</Project>

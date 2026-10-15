@@ -35,6 +35,14 @@ public enum ProviderKind
     /// <summary>The Mistral API.</summary>
     [JsonStringEnumMemberName("mistral")]
     Mistral,
+
+    /// <summary>
+    /// The embedding models that run inside Pillion Host on ONNX Runtime (work item 2.7): the bundled default and the models
+    /// downloaded on request. Always local. The gateway adds a provider of this kind with the id <c>bundled</c> on its own; an
+    /// entry in <c>providers</c> is only needed to set its <c>proxy</c> or <c>caBundle</c> for downloads, or to disable it.
+    /// </summary>
+    [JsonStringEnumMemberName("bundled")]
+    Bundled,
 }
 
 /// <summary>How much the agent may do without asking.</summary>
@@ -133,8 +141,8 @@ public sealed class ModelsSettings : SettingsNode
 }
 
 /// <summary>
-/// Which task classes may use cloud providers. A cloud key enables chat only; autocomplete, agent and self-healing
-/// each need their own switch.
+/// Which task classes may use cloud providers. A cloud key enables chat only; autocomplete, agent, self-healing and
+/// embedding each need their own switch.
 /// </summary>
 public sealed class CloudSwitchSettings : SettingsNode
 {
@@ -155,6 +163,14 @@ public sealed class CloudSwitchSettings : SettingsNode
 
     /// <summary>Gets or sets a value indicating whether vision requests may use cloud providers.</summary>
     public bool Vision { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether embeddings of your code may be computed by a cloud provider. Off by default:
+    /// the index is built by local models (Ollama, a local OpenAI-compatible server, the bundled model) and nothing is sent
+    /// anywhere. Turning it on lets <c>routing.tasks.embedding</c> or an explicit model name a cloud embedding model; Local-only
+    /// still wins.
+    /// </summary>
+    public bool Embedding { get; set; }
 }
 
 /// <summary>Privacy settings.</summary>
@@ -198,6 +214,12 @@ public sealed class IndexingSettings : SettingsNode
 
     /// <summary>Gets or sets a value indicating whether indexing pauses while on battery power.</summary>
     public bool PauseOnBattery { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets how many days an index may go unopened before it is deleted (design section 10, Retention). Zero or
+    /// less turns the age rule off; an index whose repository folder no longer exists is deleted either way.
+    /// </summary>
+    public int RetentionDays { get; set; } = 30;
 }
 
 /// <summary>Logging settings.</summary>

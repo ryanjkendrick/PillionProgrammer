@@ -103,6 +103,25 @@
   </ItemGroup>
 
   <!--
+    Bundled embeddings (work item 2.7, design section 7, Embed): ONNX Runtime runs the bundled embedding model in the host.
+    Microsoft.ML.OnnxRuntime.DirectML (MIT) carries onnxruntime.dll built with both the CPU and the DirectML execution
+    providers, so one package serves the CPU path and the GPU path; it is the default (PillionOnnxRuntimeFlavor=directml in
+    Pillion.ModelGateway.csproj). Its newest release is 1.24.4 (2026-03-17): DirectML is in maintenance and the DirectML
+    package stopped at 1.24, while the CPU-only Microsoft.ML.OnnxRuntime has moved on to 1.31. Both are pinned to 1.24.4
+    so the managed API (Microsoft.ML.OnnxRuntime.Managed, MIT) is the same whichever flavour is built; measured on
+    2026-10-15, 1.31.0 was no faster than 1.24.4 on CPU for bge-small (9.3 chunks a second either way, batch 32 of 512
+    tokens, 8 threads). Microsoft.AI.DirectML (DirectML.dll, 18.5 MB, x64) is NOT open source: it ships under the Microsoft
+    DirectML licence terms, which allow redistribution inside an application and include a data-collection clause; see
+    THIRD-PARTY-NOTICES.txt. Building with -p:PillionOnnxRuntimeFlavor=cpu drops DirectML and uses the CPU-only package of
+    the same version.
+  -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.24.4" />
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.24.4" />
+    <PackageVersion Include="Microsoft.AI.DirectML" Version="1.15.4" />
+  </ItemGroup>
+
+  <!--
     Roslyn's parsers, used by Pillion Host for syntax validation only (work item 1.8, design section 8): an inline edit
     to a C# or VB file is parsed with CSharpSyntaxTree / VisualBasicSyntaxTree to count syntax errors before the VSIX
     previews it. Nothing is compiled and no workspace is loaded. 5.0.0 is the newest stable release in the local
@@ -111,6 +130,34 @@
   <ItemGroup>
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.VisualBasic" Version="5.0.0" />
+  </ItemGroup>
+
+  <!--
+    Local Store (work item 2.1, design section 10): Pillion Host's encrypted SQLite databases, in src/Pillion.LocalStore.
+    - SQLitePCLRaw.bundle_e_sqlite3mc 2.1.11 (Apache-2.0) is the newest release of the bundle (2025-03-07; the SQLitePCLRaw
+      3.x line ships no e_sqlite3mc bundle). It carries the native e_sqlite3mc.dll, SQLite3 Multiple Ciphers 2.1.0 on
+      SQLite 3.49.1 (MIT and public domain), whose default cipher is ChaCha20-Poly1305. Verified on win-x64 under .NET 10
+      by tests/Pillion.LocalStore.Tests (EncryptionTests). Its notice is in THIRD-PARTY-NOTICES.txt.
+    - Microsoft.Data.Sqlite.Core 10.0.13 (MIT) is the newest stable release; the .Core package brings no native SQLite of
+      its own, so the only native library is e_sqlite3mc. It pulls SQLitePCLRaw.core 2.1.13, which the 2.1.11 provider
+      runs on (same 2.1 line).
+    - System.Security.Cryptography.ProtectedData 10.0.13 (MIT): DPAPI, which protects each database key (key.bin).
+  -->
+  <ItemGroup>
+    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3mc" Version="2.1.11" />
+    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="10.0.13" />
+    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.13" />
+  </ItemGroup>
+
+  <!--
+    Repository discovery and hashing (work item 2.3, design section 7), in src/Pillion.Indexing.
+    - System.IO.Hashing 10.0.13 (MIT) is the newest stable release (the 11.0 line is preview): XxHash64, the per-file
+      content hash. On net10.0 it has no dependencies. Its notice is in THIRD-PARTY-NOTICES.txt.
+    No gitignore package is used: the gitwildmatch subset is implemented in Pillion.Indexing (Discovery/Ignore), see
+    THIRD-PARTY-NOTICES.txt for the reasoning.
+  -->
+  <ItemGroup>
+    <PackageVersion Include="System.IO.Hashing" Version="10.0.13" />
   </ItemGroup>
 
   <!--

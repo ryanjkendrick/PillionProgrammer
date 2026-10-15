@@ -4,7 +4,8 @@ The only component that talks to a language model (design document section 6). P
 `services.AddPillionModelGateway()` and serves it to the VSIX as `IModelService` (`src/Pillion.Host/Models/ModelRpcService.cs`).
 
 ```
-Abstractions/   IModelProvider, IModelProviderFactory, IFimClient + FimRequest, ModelCapabilityDescriptor, ProviderException
+Abstractions/   IModelProvider (chat client, FIM client, embedding generator), IModelProviderFactory, IFimClient + FimRequest, ModelCapabilityDescriptor, ProviderException
+Embeddings/     EmbeddingRequest / EmbeddingResult / EmbeddedVector / EmbeddingModelInfo, EmbeddingVectors (normalise, int8 quantise)
 Catalog/        catalog.json (data) and ModelCatalog: default model per profile per provider kind, capabilities per family
 Routing/        IModelRouter / ModelRouter, RoutingRequest, RoutedModel, IProviderReachability, ICostGovernor
 Resilience/     CircuitBreakerRegistry + IProviderHealthSink, ConcurrencyLimiter, IProgressSink
@@ -20,7 +21,8 @@ Providers/Ollama/  The native Ollama adapter and its residency manager (OllamaRe
 Providers/OpenAICompatible/  The OpenAI-compatible adapter (OpenAI, LM Studio, llama.cpp, vLLM, OpenRouter, gateways)
 Providers/Anthropic/  Providers/Gemini/  Providers/Mistral/  Providers/AzureOpenAI/  The cloud adapters (no SDKs)
 Providers/Cloud/   HTTP, SSE, error mapping and endpoint/proxy/CA plumbing shared by the four cloud adapters
-ModelGateway.cs    IModelGateway: ChatAsync, CompleteAsync, ListModelsAsync, TestProviderAsync
+ModelGateway.cs    IModelGateway: ChatAsync, CompleteAsync, EmbedAsync, ListModelsAsync, TestProviderAsync
+ModelGateway.Embedding.cs  EmbedAsync: routing, batching, redaction, Outbound records (see Embeddings)
 StreamAttempt.cs   One request against one model: breaker, concurrency slot, retries, timeouts, Outbound record
 ```
 
@@ -29,7 +31,7 @@ StreamAttempt.cs   One request against one model: breaker, concurrency slot, ret
 1. **Route.** `ModelRouter` picks a profile: the request's, else `routing.tasks`, else the Auto policy (Autocomplete:
    Local-fast when a local FIM model is installed, else cloud Fast only with the autocomplete cloud switch on; Chat and
    Inline edit: Balanced online, Local-strong offline; Agent and Vision: Frontier online, Local-strong offline;
-   Embedding: always local; Summarise: Fast online, Local-fast offline, following the Chat cloud switch). "Online" means a cloud provider is allowed for the task class and reachable. The profile
+   Embedding: local under Auto, a cloud model only when a cloud profile or model is asked for and `cloudSwitches.embedding` is on; Summarise: Fast online, Local-fast offline, following the Chat cloud switch). "Online" means a cloud provider is allowed for the task class and reachable. The profile
    becomes a fallback chain (the next profile in the same locality, then local) and each profile becomes concrete
    candidates: `routing.profiles` (bare or `provider/model`), else the catalog default for the provider kind, else the
    first allowed (`providers[].models`) or installed model that can do the job. Candidates are filtered in the design's
@@ -53,7 +55,109 @@ StreamAttempt.cs   One request against one model: breaker, concurrency slot, ret
    outcome, and for an assembled chat request the number of context items and how many were truncated or dropped)
    plus one structured log line; never prompt text. Autocomplete cache hits are recorded too.
 
-Autocomplete has its own steps (budget, header, cache, stops); see [Autocomplete](#autocomplete).
+Autocomplete has its own steps (budget, header, cache, stops); see [Autocomplete](#autocomplete). Embeddings have theirs
+(batches, ordering, vectors); see [Embeddings](#embeddings).
+
+## Embeddings
+
+Work item 2.6. `IModelGateway.EmbedAsync(EmbeddingRequest, ct)` is the one way the host turns text into vectors, for the
+index (the Embed step of the pipeline, design section 7) and for search queries. It needs `features.modelGateway` and
+`features.embeddings`; otherwise it fails with `PolicyDenied` naming the flag.
+
+- **Routing.** The `Embedding` task class goes through the same order as chat and FIM: policy (Local-only), the cloud
+  switch, connectivity (and open circuits), capability (`Embeddings`, and the longest text against the model's window),
+  cost caps, then an explicit `EmbeddingRequest.ModelId`. `cloudSwitches.embedding` is **off by default**, so nothing is
+  sent to a cloud provider unless the user turns it on; Local-only beats it. Under Auto the class stays local even with the
+  switch on: a cloud model is used only when `routing.tasks.embedding` (or `EmbeddingRequest.Profile`) names a cloud
+  profile, or the request names the model. A remote Ollama server counts as cloud. The gateway checks the same two
+  conditions again before it hands a batch to a cloud provider. Which model: `routing.profiles` applies only when it names
+  an embedding model (it names chat and completion models otherwise); then `embeddingDefaults` in the catalog, per
+  provider kind, in order (`qwen3-embedding:0.6b`, `nomic-embed-text` for Ollama; a provisional order until the retrieval
+  benchmark, work item 2.16); then any allowed or installed model with the capability.
+- **Batches.** Inputs go out in batches of `ModelGatewayOptions.EmbeddingBatchSize` (32; `EmbeddingRequest.BatchSize`
+  overrides it), one provider request and one Outbound record per batch (`{RequestId}/b{n}`: task class `Embedding`,
+  locality, estimated prompt tokens, duration, outcome, redaction count). Each batch takes a circuit-breaker permit and a
+  concurrency slot (a lane of its own, one batch per provider, `EmbeddingConcurrency`, so indexing cannot crowd out chat) and is retried on 429 and 5xx like a chat request. Results come back
+  in input order. Fallback candidates are tried only until a batch has succeeded: vectors of two models cannot be
+  compared, so the rest of the call stays on that model and a batch that fails then is reported, not moved.
+- **Failures.** A batch that fails is listed in `EmbeddingResult.Failures` (first input, count, error) and its vectors
+  are `null`; the other batches still return. After `EmbeddingMaxConsecutiveFailures` (3) failed batches in a row the rest
+  is skipped (`Skipped`), so a provider that is down is not asked a thousand times. When no batch succeeds the call throws
+  the last error. A provider answer with the wrong number of vectors, vectors of different sizes, a size that differs from
+  the earlier batches, or a value that is not a number fails the batch.
+- **Vectors.** Every vector is unit-normalised, then quantised to int8 with a symmetric scale per vector (`q = round(x /
+  scale)`, `scale = max|x| / 127`, so `x = q * scale`; the scale is returned). `IncludeFloat32` also returns the
+  unit-normalised float32 vector, for the recall-loss measurement of work item 2.16. `EmbeddingVectors` has the helpers
+  (`Normalize`, `Quantize`, `Dequantize`, `Process`, and cosine over float32 or int8).
+- **Model information.** `EmbeddingResult.Model` is the `EmbeddingModelInfo` the index `meta` stores: provider, model id,
+  dimensions (read from the first response, never from the catalog), tokenizer family and maximum input tokens (from the
+  catalog; `unknown` and the context window for a model it does not describe). Changing any of them means re-embedding.
+- **Passages and queries.** `EmbeddingRequest.Purpose` chooses between `Document` (the default) and `Query`. The catalog's
+  `embedding.documentPrefix` and `queryPrefix` are put in front of the text (nomic: `search_document: ` and
+  `search_query: `; Qwen3-Embedding: an instruction for queries), and Gemini's task type becomes `RETRIEVAL_DOCUMENT` or
+  `RETRIEVAL_QUERY`. `Dimensions` asks a model that supports it (catalog `supportsDimensions`) for shorter vectors; it is not
+  sent to one that does not.
+- **Privacy.** Texts bound for a cloud provider (or any provider when `privacy.redactForLocalProviders` is on) go through the
+  secret scanner first and a secret is replaced by its placeholder; there is no response text to restore. The Outbound log
+  counts the redactions. The files the index never reads (secret-bearing ones) do not reach this path at all.
+- **Adapters.** Ollama `POST /api/embed` (a batch in, one vector per text out; always with a small `num_ctx`, see below),
+  OpenAI-compatible, Mistral and Azure OpenAI `POST …/embeddings` (one shared request and response shape; `dimensions` when
+  asked; Azure names the deployment in the path), Gemini `embedContent` for one text and `batchEmbedContents` for several
+  (at most 100 per request; closes issue #61). Anthropic has no embeddings endpoint: its capability is false and
+  `GetEmbeddingGenerator` returns `null`, as it does for any model a provider reports without the capability.
+- **Residency (Ollama).** An embedding model follows the residency rules above: one resident configuration per model, and a
+  model that is resident at a big enough context is reused. It is loaded with a small `num_ctx` (the catalog's
+  recommendation for the GPU tier, else 2,048, raised for a longer text), because Ollama would otherwise load the whole
+  32,768-token window of `qwen3-embedding:0.6b` (5.8 GB against 2.2 GB, measured). `keep_alive` is `5m`
+  (`"embeddingKeepAlive"` in the provider entry): an index run sends batches back to back and the model gives its memory
+  back soon after. An embedding model never pushes a resident model off the GPU: when the tier's memory minus what is
+  resident (from `/api/ps`) is less than the model needs, or the catalog cannot say what it needs and something else is
+  resident, the request is sent with `num_gpu: 0` and the model runs on the CPU (the status bar shows it with no GPU
+  memory). A resident instance that is too small is unloaded through `/api/embed` with `keep_alive: 0` (embedding models have no
+  `/api/generate`) and loaded again at the size needed.
+- **Feature flags and settings.** `features.embeddings` (default on) beside `features.modelGateway`, and
+  `cloudSwitches.embedding` (default off). `routing.tasks.embedding` already existed.
+### Bundled models (`Providers/Bundled`)
+
+Work item 2.7. The provider of kind `bundled` (id `bundled`) runs ONNX embedding models inside the host with ONNX Runtime
+1.24.4, so indexing works offline with nothing installed. The registry adds it on its own after the configured providers;
+a `providers` entry of kind `bundled` replaces the implicit one (to set `proxy` or `caBundle` for downloads, or
+`"enabled": false`). `features.bundledEmbeddings` (default on) switches it off.
+
+- **Models.** `Models/models.manifest.json` (compiled into this assembly, so the trusted copy carries its signature) lists
+  `bge-small-en-v1.5` (int8, 384 dimensions, 512 WordPiece tokens, CLS pooling, MIT; bundled), `multilingual-e5-small`
+  (int8, 384, 512 SentencePiece tokens, mean pooling, MIT) and `jina-embeddings-v2-base-code` (int8, 768, 8,192 BPE tokens
+  capped at `MaxSequenceTokens` 2,048, mean pooling, Apache-2.0); the last two download on request. Every file has a pinned
+  `resolve/<commit>/` URL, SHA-256 and size. `build/BundledModels.targets` downloads the bundled model at build time (see
+  CONTRIBUTING.md) and the VSIX carries it under `Host\models\`.
+- **Finding and verifying.** `BundledModelLocator` looks in `Host\models\<id>\` first, then
+  `%LOCALAPPDATA%\PillionProgrammer\models\<id>\`. A folder is used only when every required file matches the manifest's size
+  and SHA-256; verdicts are kept per file (path, size, time stamp) for the life of the process, so each file is hashed
+  once per host start (`BundledModelWarmup` does it in the background at start-up). The graph and tokenizer files are read
+  into memory, hashed again and loaded from those bytes, so a file swapped after the check is still refused.
+- **Routing.** `embeddingDefaults.bundled` names the three models; `embeddingProviderOrder` (`["bundled"]`) makes the
+  Embedding task class try the bundled kind before the others, so the bundled model is the default with or without an
+  Ollama embedding model. A model named by `routing.profiles` or an explicit model id still wins. This order is
+  provisional until the retrieval benchmark (work item 2.16). The bundled families report a context window of 1,048,576
+  because the provider truncates every input to the model's limit itself; `maxInputTokens` is the chunk cap.
+- **Inference.** `OnnxEmbeddingModel` tokenises (truncating the content and keeping the end token, like the Python
+  tokenizer), sorts a batch longest first, splits it into runs within `MaxAttentionCells` (32 x 512 x 512, so a long Jina
+  input does not need gigabytes), pads, runs, pools (CLS or masked mean) and normalises. Threads: `IntraOpThreads`, half
+  the logical processors; idle intra-op threads do not spin. Inference is serialised per model, and calls go through the
+  gateway's Embedding lane. A session unused for `IdleUnloadAfter` (5 minutes) is released.
+- **DirectML.** With `ExecutionProvider` `Auto`, a model loads on DirectML when the GPU tier (`models.gpuTier`, else
+  detected) is not `cpu`: the FP16 graph when its optional file is present and verified, else the int8 graph. If DirectML
+  cannot start or a run fails, the failure is logged once and the models run on the CPU for the rest of the process.
+  `-p:PillionOnnxRuntimeFlavor=cpu` builds against the CPU-only package (no `DirectML.dll`).
+- **Tokenizers.** `EmbeddingTokenizer` (with `IEmbeddingTokenCounter`, which `BundledModelRuntime.GetTokenCounter` and the
+  generator's `GetService` hand to the chunker): WordPiece on Microsoft.ML.Tokenizers' `BertTokenizer` with the Python
+  tokenizer's punctuation splitting (version 2.0.0 drops ASCII symbols such as `<=>` and keeps `_` inside words), XLM-R
+  SentencePiece with fairseq's id offset, and RoBERTa byte-level BPE from `tokenizer.json`. Each is checked against the
+  ids of the Hugging Face tokenizers library.
+- **Downloads.** `ModelDownloadService.DownloadAsync(modelId, progress, includeOptional, ct)` fetches a manifest model into
+  the user's models folder: manifest URLs only (callers name an id), streamed to a temporary file while hashed, checked
+  for size and SHA-256, renamed into place; redirects are followed only to https; the cloud adapters' proxy and CA bundle
+  handling applies; nothing is fetched under Local-only or with the flag off. No UI calls it yet.
 
 ## Autocomplete
 
@@ -334,6 +438,8 @@ when settings change and reused when their entry did not.
 - Errors: 404 or "model ... not found" is `ModelNotInstalled`; connection failures are `ProviderUnavailable`; context
   length errors are `ContextOverflow`; "does not support insert" is `ProviderUnavailable` without counting against the
   circuit.
+- Embeddings: `api/embed` with the batch as `input`, `options.num_ctx` from the residency manager, `keep_alive` `5m`, and
+  `options.num_gpu` 0 when the GPU is full (see Embeddings).
 - A loopback endpoint is local; any other host is treated as a cloud boundary (redacted, blocked by Local-only).
 
 ### OpenAI-compatible (`Providers/OpenAICompatible`)
@@ -396,9 +502,9 @@ sent or read in phase 1.
 | Kind | Chat | FIM | Embeddings | Default endpoint | Credential | Flag |
 | --- | --- | --- | --- | --- | --- | --- |
 | `anthropic` | `POST /v1/messages` (SSE) | No (chat-framed only) | No | `https://api.anthropic.com` | `x-api-key` | `anthropicProvider` |
-| `gemini` | `POST /v1beta/models/{model}:streamGenerateContent?alt=sse` | No (chat-framed only) | Not implemented (TODO below) | `https://generativelanguage.googleapis.com` | `x-goog-api-key` | `geminiProvider` |
-| `mistral` | `POST /v1/chat/completions` (OpenAI-shaped SSE) | `POST /v1/fim/completions` for Codestral | Not implemented | `https://api.mistral.ai/v1` | `Authorization: Bearer` | `mistralProvider` |
-| `azure-openai` | `POST /openai/deployments/{deployment}/chat/completions?api-version=` (SSE) | No (chat-framed only) | Not implemented | none: `https://<resource>.openai.azure.com` | `api-key`, or an Entra ID bearer token | `azureOpenAIProvider` |
+| `gemini` | `POST /v1beta/models/{model}:streamGenerateContent?alt=sse` | No (chat-framed only) | `:embedContent` (one text), `:batchEmbedContents` (several) | `https://generativelanguage.googleapis.com` | `x-goog-api-key` | `geminiProvider` |
+| `mistral` | `POST /v1/chat/completions` (OpenAI-shaped SSE) | `POST /v1/fim/completions` for Codestral | `POST /v1/embeddings` | `https://api.mistral.ai/v1` | `Authorization: Bearer` | `mistralProvider` |
+| `azure-openai` | `POST /openai/deployments/{deployment}/chat/completions?api-version=` (SSE) | No (chat-framed only) | `POST /openai/deployments/{deployment}/embeddings?api-version=` | none: `https://<resource>.openai.azure.com` | `api-key`, or an Entra ID bearer token | `azureOpenAIProvider` |
 
 Common to all four:
 
@@ -459,9 +565,10 @@ Common to all four:
 - Models: `GET /{apiVersion}/models?pageSize=1000`, following `nextPageToken`, reading `inputTokenLimit`,
   `outputTokenLimit` and `supportedGenerationMethods` (`generateContent` is chat, `embedContent` is an embedding model).
 - A blocked prompt (`promptFeedback.blockReason`) ends the stream with a ContentFilter finish and no text.
-- TODO: embeddings through `embedContent` (and `batchEmbedContents`) are not implemented. The gateway has no embedding
-  path on `IModelProvider` yet; embedding models are listed with the Embeddings capability so the router and the context
-  engine can find them once that path exists.
+- Embeddings (issue #61): `GetEmbeddingGenerator` posts one text to `:embedContent` and several to `:batchEmbedContents`
+  (split at the API's limit of 100 requests), with `taskType` `RETRIEVAL_DOCUMENT` or `RETRIEVAL_QUERY` by the request's
+  purpose and `outputDimensionality` when dimensions are asked for. Embedding models are listed with the Embeddings
+  capability, so the router finds them.
 - Catalog: Fast `gemini-3.5-flash-lite`, Balanced `gemini-3.8-flash`, Frontier `gemini-3.1-pro-preview` (a preview
   model: the Gemini models page lists no stable 3.x Pro model).
 
@@ -510,6 +617,7 @@ Common to all four:
 | `ICostGovernor` | `NoCostCaps` | Cost governance (phase 1) |
 | `IOutboundLog` | `InMemoryOutboundLog` | Persistence with the audit trail |
 | `IModelProviderFactory` | Ollama, OpenAI-compatible, OpenAI, Anthropic, Gemini, Mistral, Azure OpenAI | In-process plug-ins are out of version 1 |
+| `IEmbeddingGenerator<string, Embedding<float>>` | `IModelProvider.GetEmbeddingGenerator(modelId)`: Ollama, OpenAI-compatible, Mistral, Azure OpenAI, Gemini; `null` for Anthropic and by default | The bundled ONNX model (work item 2.7) |
 | `IContextSource` | none | The index (phase 2): retrieved chunks (`ContextSlot.RetrievedChunks`) and the repository map (`ContextSlot.RepoMap`); register with `AddSingleton<IContextSource, ...>` |
 | `ITokenCredentialProvider` | none (Azure OpenAI then uses keys) | Pillion Host: an `Azure.Identity` `TokenCredential` for Entra ID (a later item) |
 
@@ -535,4 +643,5 @@ multi-line output, the prompt-cache hit (`prompt_eval_duration`), the recorded c
 total latency percentiles for qwen2.5-coder:1.5b and :7b to the test output (`--logger "console;verbosity=detailed"`).
 Residency: `Ollama/OllamaResidencyTests` runs the adapter against a stateful fake server that, like Ollama, never starts a second runner of a model beside a resident one on a full GPU (reuse of the resident size, release and reload on 8 GB with the pin restored, the second instance on 16 GB, the load and unload timeouts, `ContextOverflow`, the 30 s `/api/ps` cache, the `models.residentContext` override); `Ollama/OllamaResidencyLiveTests` (Live) repeats the 8 GB scenarios against the real server and restores what was resident. It is skipped when another model is resident at discovery, and writes "NOT RUN" to the test output and returns when one appears afterwards: a 7B model cannot be reloaded beside another model on an 8 GB card, and the test does not evict other people's models.
 Context assembly: `Context/` covers truncation, the exclusion and secret-file rules, the assembler (budget maths, priority, caps, summary trigger and cache, stable leading sections, the phase 2 hooks), chat through the gateway with fake providers, a timing benchmark, and `ContextLiveTests` (Live: a pinned file answered by gemma4:e2b, the summariser on a long fake history).
+Embeddings: `Embeddings/` covers routing of the Embedding task class (Local-only, the cloud switch off and on, capability, the catalog's preferences, `routing.profiles`), normalisation and quantisation (round-trip error, recorded scale, ranking), the gateway (batch sizes and order, partial failures, skipping after repeated failures, fallback before the first success and none after, one Outbound record per batch, redaction, the feature flags, the concurrency limit, the circuit breaker, cancellation), the four HTTP adapters against recorded wire shapes (`Fixtures/<Name>/embed*.json`, `embeddings.json`, six-component vectors) and the Ollama residency rules against the stateful fake server (GPU free, shared, full, too-small instance, concurrent batches). `Embeddings/EmbeddingLiveTests` (Live) runs `qwen3-embedding:0.6b` on the local Ollama: dimensions against the catalog, near duplicates against unrelated sentences in float32 and int8, a batch through the gateway with the Outbound log, and a query finding its passage; it unloads only the embedding model afterwards.
 Run only live tests with `dotnet test --filter Category=Live`, or exclude them with `--filter Category!=Live`.

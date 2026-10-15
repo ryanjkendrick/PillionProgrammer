@@ -9,11 +9,14 @@ public enum ConcurrencyLane
     /// <summary>Autocomplete: one request in flight per provider.</summary>
     Autocomplete,
 
-    /// <summary>Chat, inline edit, vision and embedding: two in flight per provider.</summary>
+    /// <summary>Chat, inline edit, vision and summarise: two in flight per provider.</summary>
     Chat,
 
     /// <summary>Agent: one in flight per provider.</summary>
     Agent,
+
+    /// <summary>Embedding: one batch in flight per provider, so that indexing cannot crowd out chat on the same server.</summary>
+    Embedding,
 }
 
 /// <summary>
@@ -41,6 +44,7 @@ public sealed class ConcurrencyLimiter
     {
         TaskClass.Autocomplete => ConcurrencyLane.Autocomplete,
         TaskClass.Agent => ConcurrencyLane.Agent,
+        TaskClass.Embedding => ConcurrencyLane.Embedding,
         _ => ConcurrencyLane.Chat,
     };
 
@@ -51,6 +55,7 @@ public sealed class ConcurrencyLimiter
     {
         ConcurrencyLane.Autocomplete => _options.AutocompleteConcurrency,
         ConcurrencyLane.Agent => _options.AgentConcurrency,
+        ConcurrencyLane.Embedding => _options.EmbeddingConcurrency,
         _ => _options.ChatConcurrency,
     };
 

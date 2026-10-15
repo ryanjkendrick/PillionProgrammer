@@ -1,0 +1,105 @@
+# Phase 2: Context
+
+Phase 2 gives every feature the answer to one question: which few thousand tokens of this repository should the model see? It adds the Context Engine (indexing pipeline, embeddings, hybrid retrieval, repo map), the encrypted Local Store that persists conversations and the index, the full `@`-mention set with cited answers, workspace queries to Roslyn, and the Index window. It closes at Gate 2.
+
+The design document is the specification: https://claude.ai/code/artifact/02f3ee51-8712-47d2-89af-3c7f6f1559fb (export in [design-document.md](design-document.md)). Section numbers below refer to it; sections 7 (Context Engine), 10 (data design) and 13 (budgets) carry most of this phase.
+
+## What phase 1 left us
+
+- Ghost-text autocomplete, inline chat, a Chat window with `@file`, `@folder`, `@selection`, `@errors` and `@clipboard`, the Context Inspector and the Outbound log view, six provider adapters, contract 1.2, in-IDE integration tests on both Visual Studio versions and the Gate 1 suite ([gate-1-report.md](gate-1-report.md): 12 of 17 rows pass, two fail on decisions still open, three await the product owner).
+- Hooks phase 1 left for this phase (issue #67): conversations and pins live in memory for the session; `@file` and `@folder` resolve against the solution file list; `IContextService.SearchAsync` returns an empty array and `GetIndexStatusAsync` reports nothing indexed; the context assembler already has `RepoMap` and `RetrievedChunks` sources with their own budget caps; the Index window does not exist; IDE signals (build, documents, diagnostics, Output panes) are in place for the pause-during-build rule; `IWorkspaceQueryService` is a VSIX-side RPC target the host can already call.
+- Not yet present anywhere: SQLite, an embedding generator, ONNX Runtime, a git library, a parser for languages other than C# and VB.
+- Gate 1 rows still open feed this phase: the prefix cache hit rate row (issue #47) is where retrieval must keep the autocomplete prompt stable, and the evaluation harness (1.17, issue #50) gets its retrieval slice here.
+
+## Gate 2
+
+Gate 2 is "recall at 10 of 0.85 on fixture repos; 1,000,000 lines indexed in 30 minutes on CPU" (section 17), plus the other section 13 budgets this phase makes measurable. Everything is measured on the reference machine (8-core CPU, 32 GB, 8 GB GPU), online and with the network disabled.
+
+| Criterion | Target | Evidence |
+| --- | --- | --- |
+| Retrieval quality | Recall at 10 of 0.85 and the mean reciprocal rank recorded on the fixture repositories with the bundled model; 0.90 with the code model if it ships; int8 recall loss against float32 within 2 points (section 15) | Retrieval evaluation slice (2.16) |
+| Initial index, 100,000 lines (about 10,000 chunks), bundled model, CPU | 3 minutes or less | Performance suite on a fixture repository |
+| Initial index, 1,000,000 lines, CPU | 30 minutes or less, in the background, partial results searchable after the first minute | Performance suite on a generated repository |
+| One saved file becomes searchable | 500 ms or less | Performance suite through the IDE save path |
+| Branch switch touching 500 files | 30 s or less | Performance suite with a scripted checkout |
+| Semantic search query | p50 100 ms, p95 300 ms on a 100,000-chunk index, hybrid without the reranker | Performance suite |
+| Context assembly with retrieval | p50 150 ms, p95 400 ms on a 100,000-chunk index | Performance suite |
+| Workspace query answered by devenv.exe | p50 300 ms, p95 2 s, off the UI thread, one in flight, at most 5 a second | Integration test and performance suite |
+| Host memory while indexing | 1.5 GB or less by default; the embedding batch halves under pressure, then indexing pauses | Performance suite |
+| Index on disk | About 1.5 KB per chunk | Performance suite |
+| Indexing never disturbs the IDE | Below-normal priority, at most half the cores; paused during build, test and debug and on battery saver; keystroke latency unchanged with indexing running | Component test plus the Gate 1 keystroke scenario with indexing on |
+| Persistence | Conversations, pins and the Outbound log survive a host restart and a Visual Studio restart; two hosts (two Visual Studio instances) share one index with one writer; a stale lock is reclaimed | Component tests with two hosts; integration test |
+| Encryption at rest | `index.db` and `conversations.db` unreadable without the DPAPI-protected key; the key file has a user-only ACL; no plain-text copy of chunk text outside the database | Component test; a scripted check that opens the file with plain SQLite and fails |
+| Secret-file exclusion | Secret-bearing files are not indexed, are listed in the Index window, and need per-file approval as a pin | Component test; the phase 1 approval path |
+| Cited answers | Chat replies that used retrieved chunks cite `file:line` spans; citations open the location | Integration test |
+| Autocomplete prefix stability | Retrieved snippets in the autocomplete prompt are at most three, placed before the prefix and unchanged across keystrokes in the same member; the Gate 1 autocomplete rows do not regress | Gate 1 scenarios re-run with retrieval on |
+| Offline run | Every check above with the network adapter disabled, local models only (bundled embeddings, Ollama) | `tools/gate0/Invoke-OfflineRun.ps1 -Phase 2` |
+| CI | Green on develop with the 18.x job and the 17.14 integration-test job | CI run |
+| Feature flags | Every work item behind a flag; tests green; nothing lands red | CI run; flag list in the README |
+
+## Work items
+
+| Id | Work item | Component | Depends on | Status |
+| --- | --- | --- | --- | --- |
+| 2.1 | Local Store foundation: encrypted SQLite through `SQLitePCLRaw.bundle_e_sqlite3mc` (SQLite3 Multiple Ciphers), a 256-bit key per database protected with DPAPI for the current user and stored beside it with a user-only ACL, WAL with a busy timeout, one writer queue per process, `meta` with `schema_version` and `min_reader_version`, migrations that back the file up first, refusal of a newer major schema with a message; the `conversations.db` schema (conversations, messages, pins, Outbound log) and retention rules (section 10) | Host, Common | | |
+| 2.2 | Conversation persistence: conversations, messages, pins and the Outbound log written to and restored from `conversations.db`; the conversation list and the Outbound log view read from the store; Delete all on the Privacy page; a conversation service on the contract (contract 1.3, minor) (sections 5, 10) | Host, VSIX, Contracts | 2.1 | |
+| 2.3 | Repository discovery and hashing: repository roots from the solution's projects (relayed by the VSIX) or the opened folder; `.gitignore`, `.pillionignore`, built-in exclusions, generated and minified files, binary detection, the 1 MB cap and the secret-file exclusion list; xxHash64 per file into `files`; index identity (root, embedding model, chunker version) and the `writer.lock` election with stale-lock reclaim and read-only openers that forward update requests to the writer (sections 7, 10) | Host | 2.1 | |
+| 2.4 | Chunkers: Roslyn syntax chunks for C# and VB (a member with its doc comment, type headers, `path > namespace > type > member` breadcrumbs); tree-sitter grammars through a .NET binding for TypeScript, JavaScript, Python, C and C++, Go, Rust, Java, SQL, HTML and CSS; Razor split into its C# and markup parts; the 60-line window with 10 lines of overlap as the fallback; the chunk cap in the embedding model's own tokenizer; property-based tests (sections 7, 15) | ContextEngine | | |
+| 2.5 | Symbols and the repo map: syntax-derived definitions and name-based references for every chunked language into `symbols` and `symbol_refs`, all marked approximate; PageRank over the reference graph; the repo map rendered as a compact outline within a token cap (section 7) | ContextEngine | 2.4 | |
+| 2.6 | Embedding gateway: `IEmbeddingGenerator` through Microsoft.Extensions.AI with the `Embedding` task class routed like the others (Local-only respected, cloud switch off by default); adapters for Ollama (`nomic-embed-text`, `qwen3-embedding`), OpenAI-compatible and Gemini `embedContent` (issue #61); batches of 32, unit normalisation, int8 quantisation with the float32 vector kept for the recall-loss measurement; model dimensions and tokenizer recorded in the index `meta` (sections 6, 7) | ModelGateway | | |
+| 2.7 | Bundled embedding model: ONNX Runtime with `bge-small-en-v1.5` int8 as the default, its WordPiece tokenizer through Microsoft.ML.Tokenizers, a signed model manifest under `models\`, the DirectML execution provider with the FP16 variant when a GPU is present, and on-request download of `jina-embeddings-v2-base-code` and `multilingual-e5-small` with hash verification; `features.bundledEmbeddings` (section 7) | ModelGateway, Host | 2.6 | |
+| 2.8 | Lexical and vector storage: FTS5 over `chunks_fts` with camelCase and snake_case splitting done at write time into an identifiers column beside the whole-identifier text, BM25 ranking; `sqlite-vec` loaded as a pinned extension with a `vec0` table of int8 vectors and a precomputed `partition` column for path scoping; `IVectorIndex` with the brute-force backend (sections 7, 10) | ContextEngine, Host | 2.1 | |
+| 2.9 | Indexing pipeline: discover, hash, chunk, extract symbols, embed, store, in that order, with partial results searchable after the first batch; below-normal priority on at most half the cores; the 1.5 GB memory cap with the batch halving and pause steps; pause during build, test and debug (IDE signals) and on battery saver; progress over RPC into `GetIndexStatusAsync`; `state.json`; `features.indexing` (sections 7, 13) | Host | 2.3, 2.4, 2.5, 2.6, 2.8 | |
+| 2.10 | Watcher and incremental updates: a file-system watcher per root with 500 ms debounce, save events relayed from Visual Studio, a watch on the real git `HEAD` resolved through worktrees and submodules, a hash sweep on branch switch; one saved file searchable within 500 ms (section 7) | Host, VSIX | 2.9 | |
+| 2.11 | Hybrid retrieval: query understanding (identifier splitting, file and symbol name detection, question embedding), top 50 by BM25 and top 50 by vector similarity, exact symbol hits, a boost for open and recently edited files, Reciprocal Rank Fusion, expansion to the full member with neighbours, overlap removal and a per-file cap; `SearchAsync` implemented with `file:line` spans; the cross-encoder reranker only behind `features.reranker` and only after the licence review in section 18; `features.retrieval` (section 7) | Host, ContextEngine | 2.8, 2.5 | |
+| 2.12 | Context assembly v2 and citations: the `RetrievedChunks` and `RepoMap` sources wired to retrieval, priority order and per-item caps as designed, the budget measured on a 100,000-chunk index; autocomplete gets at most three retrieved snippets placed before the prefix and kept stable across keystrokes within the same member; chat replies cite spans and the Chat window makes them clickable (sections 5, 7) | Host, VSIX | 2.11 | |
+| 2.13 | Mentions v2: `@file` and `@folder` from the index with the fuzzy picker and folder outlines; `@symbol` (Roslyn workspace for C# and VB through the VSIX, symbol table otherwise); `@docs`; `@solution` (repo map); `@git` (working-tree diff, staged changes, last N commits through LibGit2Sharp); `@output`, `@build` and `@tests` from IDE signals; `@kind:value` disambiguation (section 7) | VSIX, Host | 2.11, 2.5 | |
+| 2.14 | Workspace queries: `find_references` and `callers_of` answered by the live Roslyn workspace through `IWorkspaceQueryService` off the UI thread, one in flight, 2 s budget, at most five a second, falling back to the index's approximate edges; used by `@symbol` and by chat for architecture questions (sections 5, 7, 13) | VSIX, Host | 2.5 | |
+| 2.15 | Index window and options: a tool window with index status and progress, disk use per index, the excluded files list with the secret-bearing ones marked, pause and resume, rebuild and delete; the Indexing options page (`indexing.exclude`, `maxMemoryMb`, `pauseOnBattery`, retention days); the status bar indexing state; `features.indexWindow` (sections 5, 10) | VSIX | 2.9 | |
+| 2.16 | Retrieval evaluation slice: three fixture repositories (C#, TypeScript, Python) and the first 60 of the 200 natural-language queries with expected files and symbols, in the private golden-set repository (issue #50); recall at 10, mean reciprocal rank and int8 loss against float32; the bundled model against the code model and the Ollama models, so the product owner can confirm the default (section 15) | Harness | 2.11 | |
+| 2.17 | Performance suite v2 and Gate 2 evidence: scripted scenarios for every budget in the table above, generated repositories for the 100,000- and 1,000,000-line cases, the Gate 1 scenarios re-run with retrieval on, the offline run extended for phase 2, the gate report (sections 13, 15) | Tests | all | |
+| 2.18 | Design document and docs: decision log, sections 7 and 10 updated with what shipped, the README flag list, the `.pillionignore` and Index window pages (section 15 definition of done) | Docs | | |
+
+Eighteen items against the design's indicative sixteen. Work items 2.1 to 2.8 are the foundations wave (store, chunkers, symbols, embeddings, storage), 2.9 to 2.15 the pipeline and features wave, 2.16 and 2.17 the evidence wave, and 2.18 runs alongside. Items without a dependency can start at once: 2.1, 2.4, 2.6 and 2.18.
+
+### New project
+
+The chunkers, symbol extraction, storage and retrieval code live in a new `src/Pillion.ContextEngine` project (.NET 10, referenced by the host, no Visual Studio dependency), with `tests/Pillion.ContextEngine.Tests`. Roslyn is already a host dependency; tree-sitter, SQLite, ONNX Runtime and LibGit2Sharp are new native dependencies and are pinned in `Directory.Packages.props` with their licences recorded in `THIRD-PARTY-NOTICES.txt`.
+
+## Decisions taken while planning phase 2
+
+| Date | Decision | Why |
+| --- | --- | --- |
+| 2026-10-15 | **Lead's decision, pending the product owner's confirmation.** The encrypted store uses the maintained `SQLitePCLRaw.bundle_e_sqlite3mc` package (SQLite3 Multiple Ciphers, MIT) instead of the in-house static build the design describes. The in-house build for x64 and Arm64 moves to phase 5, when the Arm64 host is built, if the bundle still lacks what is needed. (The sqlite-vec part of this decision was superseded the same day; see the next row) | The bundle is maintained by the SQLitePCLRaw project, ships x64 and Arm64 binaries and the same cipher the design chose; a native build pipeline is a phase of work on its own and would hold up every other item in this phase |
+| 2026-10-15 | **Lead's decision, pending the product owner's confirmation.** No sqlite-vec in this phase. Vector search runs in managed code over an in-memory copy of the int8 vectors (64 MiB cap, about 170,000 chunks at 384 dimensions) with a table scan behind it, both behind `IVectorIndex`; the plain `chunk_embeddings` table is the only vector store | Measured in 2.8 on a 100,000-chunk encrypted index: sqlite-vec answered in about 205 ms p50 because every page is decrypted on read, against the 100 ms budget; the in-memory search answers in about 3 ms. sqlite-vec also has no Windows Arm64 build and cost a second copy of every vector (about 450 bytes a chunk, which put the index over its 1.5 KB budget). An HNSW or sqlite-vec backend can return behind `IVectorIndex` for indexes beyond the cap |
+| 2026-10-15 | The 100,000-chunk storage benchmark carries `Category=Benchmark` and is excluded from the CI test filter; the gate script runs it | It takes about a minute and failed once under load; CI stays fast and deterministic |
+| 2026-10-15 | Identifier splitting for lexical search happens at write time into a second FTS5 column, not in a custom FTS5 tokenizer | A custom tokenizer needs native C code in the SQLite build; a second column gives the same BM25 behaviour with the stock `unicode61` tokenizer |
+| 2026-10-15 | Chunk text is stored encrypted in the database only; the chunk cache in memory is bounded and never written to disk; the float32 vector is kept for the recall-loss measurement during this phase and dropped before release | Keeps the "no plain copy outside the database" check simple |
+| 2026-10-15 | The reranker ships only behind a flag, off by default, after the licence review in section 18 | The review has not happened and the budgets hold without it |
+| 2026-10-15 | Gemini embeddings (issue #61) are done in 2.6 with the other adapters | One pass over the embedding abstraction is cheaper than two |
+| 2026-10-15 | Contract 1.3 is one minor bump at the wave boundary with the conversation service, index progress fields and the citation fields of chat chunks | Same batching rule as phase 1: majors must match, minors only add |
+
+## Decisions needed from the product owner during phase 2
+
+| Decision | Needed by | Context |
+| --- | --- | --- |
+| Confirm the SQLite packaging decision above | 2.1 | The design named an in-house SQLite3MultipleCiphers build; the lead proposes the maintained bundle for this phase |
+| Default embedding model | after 2.16 | The design defers this to the retrieval benchmark: bundled `bge-small-en-v1.5` against `jina-embeddings-v2-base-code` and the Ollama models already pulled (`qwen3-embedding:0.6b`) |
+| Where the private golden-set repository lives (issue #50) | 2.16 | The retrieval slice joins the completion slice there |
+| Whether the reranker's licence review happens in this phase | 2.11 | Without it the reranker stays off |
+| The Gate 1 rows still open (issues #47, #48, #51, #52) | Gate 2 | Issue #47 option 2 is assumed: the cache target is re-measured once retrieval keeps the prompt stable |
+
+## Carried over from phase 1
+
+- The evaluation harness (1.17) starts with the completion slice as soon as issue #50 is answered; the retrieval slice (2.16) joins it.
+- The cloud Fast autocomplete row of Gate 1 needs a Mistral key for Codestral or the product owner's waiver.
+- Tech-debt issues #56 to #65 stay on the board; the ones that touch code this phase changes (#57 Privacy page save, #58 duplicate DocumentOpened, #62 live-test residency) are folded into the work items that touch those files.
+
+## Working agreement
+
+- Gitflow as in phase 1: one `feature/<slug>` branch and one pull request per work item from `develop`, merged with a merge commit once CI is green and the lead has reviewed it.
+- Each pull request carries its unit and component tests and, for any in-process path, an integration test in `Pillion.VisualStudio.IntegrationTests`; nothing lands red.
+- Every work item lands behind a feature flag: `features.localStore`, `features.indexing`, `features.retrieval`, `features.bundledEmbeddings`, `features.indexWindow`, `features.workspaceQueries`, `features.reranker`, and the existing `features.mentions` for the mention additions.
+- Native dependencies are pinned by version and, where downloaded at run time (models, the `sqlite-vec` extension), verified by hash from a manifest in the repository.
+- Sub-agents do not change permissions, policy defaults or contracts without an entry in the decision log above or in the design document.
+- The product owner is asked only for decisions and gate reviews; the gate review for phase 2 adds the embedding model choice to the usual evidence.

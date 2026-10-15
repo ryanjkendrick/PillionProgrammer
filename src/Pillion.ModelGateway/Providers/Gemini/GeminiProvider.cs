@@ -12,8 +12,8 @@ namespace Pillion.ModelGateway.Providers.Gemini;
 /// The Google Gemini adapter (design section 6): the Gemini API over <see cref="HttpClient"/>, no SDK. Chat is streamed
 /// from <c>POST /v1beta/models/{model}:streamGenerateContent?alt=sse</c>; models come from <c>GET /v1beta/models</c>. The
 /// key goes in the <c>x-goog-api-key</c> header and is read from the <see cref="ISecretStore"/> for every request.
-/// Gemini has no fill-in-the-middle endpoint, so <see cref="GetFimClient"/> returns <see langword="null"/>. Embeddings
-/// (<c>embedContent</c>) are not implemented: the gateway has no embedding path to plug them into yet.
+/// Gemini has no fill-in-the-middle endpoint, so <see cref="GetFimClient"/> returns <see langword="null"/>. Embeddings use
+/// <c>embedContent</c> for one text and <c>batchEmbedContents</c> for several (<see cref="GetEmbeddingGenerator"/>).
 /// </summary>
 public sealed class GeminiProvider : IModelProvider
 {
@@ -167,6 +167,13 @@ public sealed class GeminiProvider : IModelProvider
 
         // Chat-framed only (design section 6): Gemini has no fill-in-the-middle endpoint.
         return null;
+    }
+
+    /// <inheritdoc/>
+    public IEmbeddingGenerator<string, Embedding<float>>? GetEmbeddingGenerator(string modelId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+        return new GeminiEmbeddingGenerator(this, StripPrefix(modelId));
     }
 
     /// <inheritdoc/>

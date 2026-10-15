@@ -40,10 +40,12 @@ jobs:
         id: build
         run: msbuild PillionProgrammer.sln /p:Configuration=Release /m /nologo /clp:Summary
 
+      # Benchmarks (Category=Benchmark, such as the 100,000-chunk index benchmark) take minutes and run in the gate script
+      # instead (work item 2.17); the quick performance smoke tests stay here.
       # The Visual Studio integration-test projects are not test projects for dotnet test (RunIdeTests is not set), so
       # this step never starts Visual Studio; they run in the steps below.
       - name: Test
-        run: dotnet test PillionProgrammer.NoVsix.slnf --configuration Release --no-build --logger trx --results-directory TestResults
+        run: dotnet test PillionProgrammer.NoVsix.slnf --configuration Release --no-build --filter "Category!=Benchmark" --logger trx --results-directory TestResults
 
       - name: Upload test results
         if: always()

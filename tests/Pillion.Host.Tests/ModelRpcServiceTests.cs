@@ -32,7 +32,10 @@ public sealed class ModelRpcServiceTests : IDisposable
 
         var descriptors = await models.ListModelsAsync(CancellationToken.None).WaitAsync(Wait);
 
-        var descriptor = Assert.Single(descriptors);
+        // The bundled embedding model (work item 2.7) is listed too, as an embedding model the chat picker leaves out.
+        var bundled = Assert.Single(descriptors, d => d.ProviderId == "bundled");
+        Assert.Equal(ModelCapabilities.Embeddings, bundled.Capabilities);
+        var descriptor = Assert.Single(descriptors, d => d.ProviderId != "bundled");
         Assert.Equal("fake/fake-chat:1b", descriptor.Id);
         Assert.Equal("fake-chat:1b", descriptor.ModelId);
         Assert.Equal("fake", descriptor.ProviderId);

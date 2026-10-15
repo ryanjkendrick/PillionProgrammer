@@ -150,6 +150,20 @@ public sealed class OpenAICompatibleProvider : IModelProvider
     }
 
     /// <inheritdoc/>
+    public IEmbeddingGenerator<string, Embedding<float>>? GetEmbeddingGenerator(string modelId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+
+        // POST {endpoint}/embeddings in batches. A server without the route answers 404, which surfaces as a provider error.
+        return new OpenAIShapedEmbeddingGenerator(
+            modelId,
+            DisplayName,
+            Options.Endpoint,
+            sendModel: true,
+            (model, body, cancellationToken) => _http.PostJsonAsync("embeddings", body, model, cancellationToken));
+    }
+
+    /// <inheritdoc/>
     public async Task<ProviderProbeResult> ProbeAsync(CancellationToken cancellationToken)
     {
         var probe = await ProbeDetailedAsync(cancellationToken).ConfigureAwait(false);

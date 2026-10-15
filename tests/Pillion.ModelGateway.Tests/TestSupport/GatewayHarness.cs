@@ -11,7 +11,7 @@ namespace Pillion.ModelGateway.Tests.TestSupport;
 /// </summary>
 internal sealed class GatewayHarness : IDisposable
 {
-    public GatewayHarness(bool withCloud = true, bool withLocal = true, Action<ModelGatewayOptions>? configure = null, GpuTier gpuTier = GpuTier.Gpu8GB)
+    public GatewayHarness(bool withCloud = true, bool withLocal = true, Action<ModelGatewayOptions>? configure = null, GpuTier gpuTier = GpuTier.Gpu8GB, IEnumerable<IModelProviderFactory>? extraFactories = null)
     {
         Options = new ModelGatewayOptions
         {
@@ -41,7 +41,7 @@ internal sealed class GatewayHarness : IDisposable
         }
 
         Source = new StaticGatewaySettingsSource(Settings);
-        Registry = new ProviderRegistry(Source, Secrets, [LocalFactory, CloudFactory], ModelCatalog.Default);
+        Registry = new ProviderRegistry(Source, Secrets, [LocalFactory, CloudFactory, .. extraFactories ?? []], ModelCatalog.Default);
         Breakers = new CircuitBreakerRegistry(Options, Clock, Health);
         Limiter = new ConcurrencyLimiter(Options);
         Cache = new AutocompleteCache(Options);

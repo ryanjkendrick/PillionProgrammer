@@ -14,6 +14,9 @@ namespace Pillion.ModelGateway;
 /// </summary>
 public sealed class ModelRouter : IModelRouter
 {
+    /// <summary>How a candidate was chosen when <c>routing.profiles</c> names it.</summary>
+    private const string ConfiguredHow = "routing.profiles";
+
     private static readonly Profile[] CloudProfiles = [Profile.Frontier, Profile.Balanced, Profile.Fast];
 
     private readonly IProviderRegistry _registry;
@@ -61,7 +64,7 @@ public sealed class ModelRouter : IModelRouter
     /// <summary>Gets the per-task-class cloud switch.</summary>
     /// <param name="switches">The switches.</param>
     /// <param name="taskClass">The task class.</param>
-    /// <returns>Whether the task class may use a cloud provider. Embedding never may.</returns>
+    /// <returns>Whether the task class may use a cloud provider. Embedding may only when <c>cloudSwitches.embedding</c> is on, which it is not by default.</returns>
     public static bool IsCloudAllowed(CloudSwitchSettings switches, TaskClass taskClass)
     {
         ArgumentNullException.ThrowIfNull(switches);
@@ -73,6 +76,7 @@ public sealed class ModelRouter : IModelRouter
             TaskClass.Summarise => switches.Chat,
             TaskClass.Agent => switches.Agent,
             TaskClass.Vision => switches.Vision,
+            TaskClass.Embedding => switches.Embedding,
             _ => false,
         };
     }
@@ -182,11 +186,6 @@ public sealed class ModelRouter : IModelRouter
             return "Local-only mode is on";
         }
 
-        if (taskClass == TaskClass.Embedding)
-        {
-            return "embeddings are always computed locally";
-        }
-
         return IsCloudAllowed(settings.Settings.CloudSwitches, taskClass)
             ? null
             : $"the cloud switch for {taskClass} is off";
@@ -227,7 +226,9 @@ public sealed class ModelRouter : IModelRouter
                 return online ? (Profile.Frontier, "Auto: Frontier (online)") : (Profile.LocalStrong, $"Auto: LocalStrong ({state})");
 
             case TaskClass.Embedding:
-                return (Profile.LocalFast, "Auto: local (embeddings are always local)");
+                // Embeddings stay local under Auto even when the cloud switch is on: the switch only allows a cloud
+                // embedding model that routing.tasks.embedding, a requested profile or an explicit model id names.
+                return (Profile.LocalFast, "Auto: local (embeddings stay local unless a cloud model is requested and the Embedding cloud switch is on)");
 
             case TaskClass.Summarise:
                 return online ? (Profile.Fast, "Auto: Fast (online)") : (Profile.LocalFast, $"Auto: LocalFast ({state})");
@@ -252,15 +253,34 @@ public sealed class ModelRouter : IModelRouter
         return false;
     }
 
-    /// <summary>Turns a profile into concrete candidates, one per provider of the profile's locality.</summary>
-    private IEnumerable<RoutedModel> Candidates(Profile profile, TaskClass taskClass, ProviderRegistrySnapshot snapshot)
+    /// <summary>
+    /// Turns a profile into concrete candidates, one per provider of the profile's locality, in settings order. For the
+    /// Embedding task class a model named by <c>routing.profiles</c> comes first, then the provider kinds the catalog's
+    /// <c>embeddingProviderOrder</c> lists (the bundled model, for the default experience), then the rest.
+    /// </summary>
+    private List<RoutedModel> Candidates(Profile profile, TaskClass taskClass, ProviderRegistrySnapshot snapshot)
+    {
+        var candidates = CandidatesInSettingsOrder(profile, taskClass, snapshot).ToList();
+        if (taskClass != TaskClass.Embedding || candidates.Count < 2)
+        {
+            return candidates;
+        }
+
+        return [.. candidates
+            .OrderBy(c => c.Reason == ConfiguredHow ? 0 : 1)
+            .ThenBy(c => snapshot.Find(c.ProviderId) is { } provider ? _catalog.GetEmbeddingProviderPriority(provider.Kind) : int.MaxValue)];
+    }
+
+
+
+    private IEnumerable<RoutedModel> CandidatesInSettingsOrder(Profile profile, TaskClass taskClass, ProviderRegistrySnapshot snapshot)
     {
         var settings = snapshot.Settings.Settings;
         var wantLocal = !IsCloudProfile(profile);
         settings.Routing.Profiles.TryGetValue(profile, out var configured);
         var configuredTarget = string.IsNullOrWhiteSpace(configured)
             ? ((string? ProviderId, string ModelId)?)null
-            : QualifiedModelId.Parse(configured, settings.Providers.Select(p => p.Id));
+            : QualifiedModelId.Parse(configured, snapshot.ProviderIds);
 
         foreach (var provider in snapshot.Providers)
         {
@@ -272,13 +292,18 @@ public sealed class ModelRouter : IModelRouter
             var providerSettings = snapshot.FindSettings(provider.Id)!;
             string? model;
             string how;
-            if (configuredTarget is { } target &&
+            // routing.profiles names chat and completion models, so it does not apply to embeddings unless it names an embedding model.
+            var configuredApplies = configuredTarget is { } named &&
+                (taskClass != TaskClass.Embedding ||
+                    ((named.ProviderId is null || string.Equals(named.ProviderId, provider.Id, StringComparison.OrdinalIgnoreCase)) &&
+                        Capabilities(provider.Id, named.ModelId, provider.IsLocal).Embeddings));
+            if (configuredApplies && configuredTarget is { } target &&
                 (target.ProviderId is null || string.Equals(target.ProviderId, provider.Id, StringComparison.OrdinalIgnoreCase)))
             {
                 model = target.ModelId;
-                how = "routing.profiles";
+                how = ConfiguredHow;
             }
-            else if (configuredTarget is { ProviderId: not null })
+            else if (configuredApplies && configuredTarget is { ProviderId: not null })
             {
                 continue; // The profile is pinned to another provider.
             }
@@ -298,8 +323,21 @@ public sealed class ModelRouter : IModelRouter
 
     private (string? Model, string How) DefaultModel(IModelProvider provider, ProviderSettings settings, Profile profile, TaskClass taskClass)
     {
-        var catalogModel = _catalog.GetDefaultModel(provider.Kind, profile);
         var allowed = settings.Models;
+        string? catalogModel;
+        if (taskClass == TaskClass.Embedding)
+        {
+            // The catalog lists the preferred embedding models per provider kind; the first one that is allowed and installed wins.
+            var preferred = _catalog.GetDefaultEmbeddingModels(provider.Kind);
+            catalogModel = preferred.FirstOrDefault(m =>
+                    (allowed.Count == 0 || allowed.Any(a => ModelInventory.ModelIdsEqual(a, m))) && IsInstalled(provider.Id, m) != false)
+                ?? (preferred.Count > 0 ? preferred[0] : null);
+        }
+        else
+        {
+            catalogModel = _catalog.GetDefaultModel(provider.Kind, profile);
+        }
+
         if (catalogModel is not null &&
             (allowed.Count == 0 || allowed.Any(m => ModelInventory.ModelIdsEqual(m, catalogModel))) &&
             IsInstalled(provider.Id, catalogModel) != false &&
@@ -384,7 +422,7 @@ public sealed class ModelRouter : IModelRouter
     private RoutedModel ResolveExplicit(RoutingRequest request, ProviderRegistrySnapshot snapshot, string? cloudBlockedReason, Profile autoProfile)
     {
         var settings = snapshot.Settings.Settings;
-        var (providerId, modelId) = QualifiedModelId.Parse(request.ModelId!.Trim(), settings.Providers.Select(p => p.Id));
+        var (providerId, modelId) = QualifiedModelId.Parse(request.ModelId!.Trim(), snapshot.ProviderIds);
 
         IModelProvider? provider;
         if (providerId is not null)
@@ -424,14 +462,14 @@ public sealed class ModelRouter : IModelRouter
 
         var profile = request.Profile != Profile.Auto
             ? request.Profile
-            : PinnedProfile(settings, provider, modelId) ?? (provider.IsLocal
+            : PinnedProfile(settings, snapshot.ProviderIds, provider, modelId) ?? (provider.IsLocal
                 ? (IsCloudProfile(autoProfile) ? (request.TaskClass == TaskClass.Autocomplete ? Profile.LocalFast : Profile.LocalStrong) : autoProfile)
                 : (IsCloudProfile(autoProfile) ? autoProfile : Profile.Balanced));
 
         return new RoutedModel(provider.Id, modelId, profile, provider.IsLocal, $"{request.TaskClass}: explicit model {QualifiedModelId.Format(provider.Id, modelId)}");
     }
 
-    private Profile? PinnedProfile(PillionSettings settings, IModelProvider provider, string modelId)
+    private Profile? PinnedProfile(PillionSettings settings, IEnumerable<string> providerIds, IModelProvider provider, string modelId)
     {
         foreach (var (profile, configured) in settings.Routing.Profiles)
         {
@@ -440,7 +478,7 @@ public sealed class ModelRouter : IModelRouter
                 continue;
             }
 
-            var (pinnedProvider, pinnedModel) = QualifiedModelId.Parse(configured, settings.Providers.Select(p => p.Id));
+            var (pinnedProvider, pinnedModel) = QualifiedModelId.Parse(configured, providerIds);
             if ((pinnedProvider is null || string.Equals(pinnedProvider, provider.Id, StringComparison.OrdinalIgnoreCase)) &&
                 ModelInventory.ModelIdsEqual(pinnedModel, modelId) &&
                 IsCloudProfile(profile) != provider.IsLocal)

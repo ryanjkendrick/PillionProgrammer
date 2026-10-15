@@ -45,6 +45,17 @@ public static class FeatureNames
     /// <summary>The chat window's Context Inspector and Outbound log view (work item 1.13).</summary>
     public const string OutboundLogView = "outboundLogView";
 
+    /// <summary>The Local Store: Pillion Host's encrypted SQLite databases, starting with <c>conversations.db</c> (work item 2.1).</summary>
+    public const string LocalStore = "localStore";
+
+    /// <summary>The repository indexing pipeline: discovery and hashing of repository files and the index folder ownership (work items 2.3, 2.9).</summary>
+    public const string Indexing = "indexing";
+    /// <summary>The embedding gateway: <c>IModelGateway.EmbedAsync</c> and the embedding adapters (work item 2.6). It also needs <see cref="ModelGateway"/>.</summary>
+    public const string Embeddings = "embeddings";
+
+    /// <summary>The bundled embedding provider: the in-process ONNX Runtime model shipped with the extension and the models downloaded on request (work item 2.7). It also needs <see cref="Embeddings"/>.</summary>
+    public const string BundledEmbeddings = "bundledEmbeddings";
+
     /// <summary>Gets every feature flag name, in the order they are written to <c>settings.json</c>.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
@@ -62,6 +73,10 @@ public static class FeatureNames
         InlineChat,
         Mentions,
         OutboundLogView,
+        LocalStore,
+        Indexing,
+        Embeddings,
+        BundledEmbeddings,
     ];
 }
 
@@ -127,6 +142,10 @@ public sealed class FeatureSettings : SettingsNode
             "inlinechat" => InlineChat,
             "mentions" => Mentions,
             "outboundlogview" => OutboundLogView,
+            "localstore" => LocalStore,
+            "indexing" => Indexing,
+            "embeddings" => Embeddings,
+            "bundledembeddings" => BundledEmbeddings,
             _ => true,
         };
     }
@@ -181,6 +200,18 @@ public sealed class FeatureSettings : SettingsNode
             case "outboundlogview":
                 OutboundLogView = false;
                 break;
+            case "localstore":
+                LocalStore = false;
+                break;
+            case "indexing":
+                Indexing = false;
+                break;
+            case "embeddings":
+                Embeddings = false;
+                break;
+            case "bundledembeddings":
+                BundledEmbeddings = false;
+                break;
         }
     }
 
@@ -192,4 +223,18 @@ public sealed class FeatureSettings : SettingsNode
 
     /// <summary>Gets or sets a value indicating whether the chat window shows the Context Inspector and the Outbound log, and the host answers their read methods.</summary>
     public bool OutboundLogView { get; set; } = true;
+
+    /// <summary>Gets or sets a value indicating whether Pillion Host may create and open its encrypted Local Store databases (<c>conversations.db</c>). When off, opening the store fails with a policy error.</summary>
+    public bool LocalStore { get; set; } = true;
+
+    /// <summary>Gets or sets a value indicating whether Pillion Host may discover, hash and index repository files and open index databases (<c>index\&lt;id&gt;\index.db</c>). When off, opening an index fails with a policy error and nothing is written to disk.</summary>
+    public bool Indexing { get; set; } = true;
+    /// <summary>Gets or sets a value indicating whether the embedding gateway answers requests. When off, <c>EmbedAsync</c> fails with a policy error. It also needs <see cref="ModelGateway"/>.</summary>
+    public bool Embeddings { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the bundled embedding provider is available: the ONNX model shipped with the
+    /// extension (and models downloaded on request) runs in the host, with no network. When off, the provider is hidden from routing.
+    /// </summary>
+    public bool BundledEmbeddings { get; set; } = true;
 }
