@@ -123,6 +123,8 @@ public sealed class MentionsViewModel : ObservableObject, IDisposable
     private int _lastCaret;
     private int _filesRequested;
     private bool _disposed;
+    private CancellationTokenSource? _suggestCancellation;
+    private JoinableTask? _suggestions;
 
     /// <summary>Initializes a new instance of the <see cref="MentionsViewModel"/> class.</summary>
     /// <param name="connection">The connection to Pillion Host.</param>
@@ -229,6 +231,30 @@ public sealed class MentionsViewModel : ObservableObject, IDisposable
     /// <summary>Gets the command that hides <see cref="Notice"/>.</summary>
     public DelegateCommand DismissNoticeCommand { get; }
 
+    /// <summary>Gets or sets how long typing must pause before the host is asked for symbols or documents (tests set zero).</summary>
+    internal TimeSpan SuggestionDelay { get; set; } = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>Builds the request a mention sends: its kind, the kind typed in <c>@kind:value</c> as the qualifier, and the options of <c>@git</c> and <c>@output</c> as arguments.</summary>
+    /// <param name="mention">The mention text.</param>
+    /// <param name="kind">The kind the client chose, or empty to read it from the text.</param>
+    /// <returns>The request (without the roots, files and payload, which <c>CompleteRequestAsync</c> adds).</returns>
+    internal static MentionRequest MakeRequest(string mention, string kind)
+    {
+        var parsed = MentionSyntax.Parse(mention);
+        var effective = string.IsNullOrEmpty(kind) ? parsed.Kind : kind;
+        return new MentionRequest
+        {
+            Mention = mention,
+            Kind = effective,
+            Qualifier = parsed.HasKindSeparator ? parsed.Kind : string.Empty,
+            Arguments = MentionSyntax.ArgumentsOf(parsed),
+        };
+    }
+
+    /// <summary>A task that completes when the host suggestions asked for so far have arrived (for tests).</summary>
+    /// <returns>The task.</returns>
+    internal Task WhenSuggestionsDoneAsync() => _suggestions?.JoinAsync() ?? Task.CompletedTask;
+
     /// <summary>Shows another conversation's pins. Call on the UI thread.</summary>
     /// <param name="conversation">The conversation.</param>
     public void SetConversation(ChatConversation conversation)
@@ -273,7 +299,11 @@ public sealed class MentionsViewModel : ObservableObject, IDisposable
                 conversation.Pins.Add(placeholder);
             }
 
-            var rereadable = placeholders.Where(p => IsEnabled && p.Saved.Kind is MentionKinds.File or MentionKinds.Folder && !string.IsNullOrEmpty(p.Saved.Target)).ToList();
+            // Files, folders, symbols and documents are read again by name; the repo map and git are read again as they are
+            // now. Client-only text (selection, clipboard, errors, the Output panes, the last build and tests) stays stale.
+            var rereadable = placeholders.Where(p => IsEnabled
+                && ((p.Saved.Kind is MentionKinds.File or MentionKinds.Folder or MentionKinds.Symbol or MentionKinds.Docs && !string.IsNullOrEmpty(p.Saved.Target))
+                    || p.Saved.Kind is MentionKinds.Solution or MentionKinds.Git)).ToList();
             if (rereadable.Count == 0)
             {
                 return;
@@ -285,7 +315,7 @@ public sealed class MentionsViewModel : ObservableObject, IDisposable
             {
                 try
                 {
-                    var request = new MentionRequest { Mention = "@" + pin.Kind + ":" + pin.Target, Kind = pin.Kind };
+                    var request = MakeRequest("@" + pin.Kind + (string.IsNullOrEmpty(pin.Target) ? string.Empty : ":" + pin.Target), pin.Kind);
                     await CompleteRequestAsync(request, _disposal.Token).ConfigureAwait(false);
                     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_disposal.Token);
                     timeout.CancelAfter(ResolveTimeout);
@@ -342,6 +372,7 @@ public sealed class MentionsViewModel : ObservableObject, IDisposable
         var wasOpen = Picker.IsOpen;
         var files = _files?.Current ?? WorkspaceFileList.Empty;
         Picker.Update(_lastText, caret, files);
+        ScheduleSuggestions();
         if (Picker.IsOpen && !wasOpen && _files is not null && Interlocked.Exchange(ref _filesRequested, 1) == 0)
         {
             // The picker opened: collect the file list if it is missing or stale (the cached list is shown meanwhile);
@@ -409,7 +440,7 @@ public sealed class MentionsViewModel : ObservableObject, IDisposable
         }
 
         var token = Picker.Token;
-        if (item.ItemKind == MentionPickerItemKind.Kind && MentionSyntax.TakesValue(item.MentionKind) && token is not null)
+        if (item.ItemKind == MentionPickerItemKind.Kind && MentionSyntax.OpensSubPicker(item.MentionKind) && token is not null)
         {
             var replacement = "@" + item.MentionKind + ":";
             var edit = new MentionInputEditEventArgs(token.Start, token.Length, replacement, token.Start + replacement.Length);
@@ -430,9 +461,17 @@ public sealed class MentionsViewModel : ObservableObject, IDisposable
             RequestEdit(new MentionInputEditEventArgs(token.Start, length, string.Empty, token.Start));
         }
 
-        var kind = item.MentionKind;
-        var mention = item.MentionText;
-        return ResolveAsync(new MentionRequest { Mention = mention, Kind = kind }, _conversation);
+        CancelSuggestions();
+        var request = MakeRequest(item.MentionText, item.MentionKind);
+        if (item.Prefetched is { } prefetched)
+        {
+            // The host resolved this entry while it was typed: pin that answer.
+            Notice = string.Empty;
+            Apply(request, prefetched, _conversation);
+            return Task.CompletedTask;
+        }
+
+        return ResolveAsync(request, _conversation);
     }
 
     /// <summary>Resolves a mention typed in full (for example <c>@file:src/Program.cs</c>) into a pin of the current conversation.</summary>
@@ -440,8 +479,7 @@ public sealed class MentionsViewModel : ObservableObject, IDisposable
     /// <returns>A task that completes when it has been resolved.</returns>
     public Task ResolveTextAsync(string mention)
     {
-        var parsed = MentionSyntax.Parse(mention);
-        return ResolveAsync(new MentionRequest { Mention = mention, Kind = parsed.Kind }, _conversation);
+        return ResolveAsync(MakeRequest(mention, string.Empty), _conversation);
     }
 
     /// <summary>Removes a pin from the current conversation. Call on the UI thread.</summary>
@@ -468,6 +506,7 @@ public sealed class MentionsViewModel : ObservableObject, IDisposable
             _files.Changed -= OnFilesChanged;
         }
 
+        CancelSuggestions();
         _disposal.Cancel();
     }
 
@@ -541,8 +580,111 @@ public sealed class MentionsViewModel : ObservableObject, IDisposable
             MentionSyntax.Selection => await _editor.GetSelectionAsync(cancellationToken).ConfigureAwait(false),
             MentionSyntax.Clipboard => await _editor.GetClipboardTextAsync(cancellationToken).ConfigureAwait(false),
             MentionSyntax.Errors => await _editor.GetErrorsPayloadAsync(cancellationToken).ConfigureAwait(false),
+            MentionSyntax.Output => await _editor.GetOutputPaneTextAsync(OutputPaneOf(request), cancellationToken).ConfigureAwait(false),
+            MentionSyntax.Build => await _editor.GetLastBuildAsync(cancellationToken).ConfigureAwait(false),
+            MentionSyntax.Tests => await _editor.GetTestResultsAsync(cancellationToken).ConfigureAwait(false),
             _ => request.Payload,
         };
+    }
+
+    /// <summary>The Output pane an <c>@output</c> request names (Build when it names none).</summary>
+    private static string OutputPaneOf(MentionRequest request)
+    {
+        var pane = request.Arguments?.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a))?.Trim() ?? string.Empty;
+        return pane.ToLowerInvariant() switch
+        {
+            "" or "build" => "Build",
+            "debug" => "Debug",
+            "test" or "tests" => "Tests",
+            _ => pane,
+        };
+    }
+
+    /// <summary>Asks the host for symbols or documents matching the value typed after <c>@symbol:</c> or <c>@docs:</c>, once typing pauses.</summary>
+    private void ScheduleSuggestions()
+    {
+        CancelSuggestions();
+        if (!Picker.WantsHostItems || Picker.Token is not { } token || _disposed)
+        {
+            return;
+        }
+
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_disposal.Token);
+        _suggestCancellation = cancellation;
+        var delay = SuggestionDelay;
+        _suggestions = _joinableTaskFactory.RunAsync(async () =>
+        {
+            try
+            {
+                await SuggestAsync(token, delay, cancellation.Token).ConfigureAwait(true);
+            }
+            catch (OperationCanceledException)
+            {
+                // Typing moved on, or the window is closing.
+            }
+#pragma warning disable CA1031 // Suggestions are optional; a failure only leaves the picker as it is.
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                _log?.Debug("chat.mention.suggest.failed", "Asking the host for mention matches failed.", ("kind", token.Parsed.Kind), ("error", ex.GetType().Name));
+            }
+        });
+    }
+
+    private void CancelSuggestions()
+    {
+        var pending = _suggestCancellation;
+        _suggestCancellation = null;
+        if (pending is not null)
+        {
+            pending.Cancel();
+            pending.Dispose();
+        }
+    }
+
+    private async Task SuggestAsync(MentionToken token, TimeSpan delay, CancellationToken cancellationToken)
+    {
+        await TaskScheduler.Default;
+        if (delay > TimeSpan.Zero)
+        {
+            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+        }
+
+        var kind = token.Parsed.Kind;
+        var request = MakeRequest("@" + kind + ":" + token.Parsed.Value, kind);
+        await CompleteRequestAsync(request, cancellationToken).ConfigureAwait(false);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(ResolveTimeout);
+        var result = await _connection.GetProxy<IContextService>().ResolveMentionAsync(request, timeout.Token).ConfigureAwait(false);
+        var roots = request.WorkspaceRoots ?? [];
+        var items = new List<MentionPickerItem>();
+        if (result is { IsResolved: true })
+        {
+            items.Add(kind == MentionSyntax.Symbol
+                ? MentionPickerViewModel.SymbolItem(MentionPickerItemKind.Symbol, SymbolValueOf(result), roots, result)
+                : MentionPickerViewModel.DocItem(result.FilePath ?? result.DisplayName, roots, result));
+        }
+        else if (result is { Candidates.Length: > 0 })
+        {
+            items.AddRange(result.Candidates.Select(c => kind == MentionSyntax.Symbol
+                ? MentionPickerViewModel.SymbolItem(MentionPickerItemKind.Symbol, c, roots)
+                : MentionPickerViewModel.DocItem(c, roots)));
+        }
+
+        await _joinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        if (!_disposed)
+        {
+            Picker.SetHostItems(token, items);
+        }
+    }
+
+    /// <summary>The <c>Name#path:line</c> value of a resolved symbol, from its name, file and first citation.</summary>
+    private static string SymbolValueOf(MentionResolution result)
+    {
+        var line = result.Citations is { Length: > 0 } citations ? citations[0].StartLine + 1 : 0;
+        return string.IsNullOrEmpty(result.FilePath)
+            ? result.DisplayName
+            : result.DisplayName + "#" + result.FilePath + (line > 0 ? ":" + line.ToString(System.Globalization.CultureInfo.InvariantCulture) : string.Empty);
     }
 
     private void Apply(MentionRequest request, MentionResolution result, ChatConversation conversation)
@@ -603,6 +745,8 @@ public sealed class MentionsViewModel : ObservableObject, IDisposable
             Payload = original.Payload,
             MaxTokens = original.MaxTokens,
             ApprovedSensitive = true,
+            Qualifier = original.Qualifier,
+            Arguments = original.Arguments,
         };
         return ResolveAsync(request, approval.Conversation);
     }

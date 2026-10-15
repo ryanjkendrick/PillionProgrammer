@@ -130,6 +130,28 @@ internal sealed class FakeEditorContext : IChatEditorContext
 
     public Task<string> GetErrorsPayloadAsync(CancellationToken cancellationToken) => Task.FromResult(Errors);
 
+    public Dictionary<string, string> Panes { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public List<string> PanesAsked { get; } = [];
+
+    public string? LastBuild { get; set; }
+
+    public string? TestResults { get; set; }
+
+    public Task<string?> GetOutputPaneTextAsync(string pane, CancellationToken cancellationToken)
+    {
+        lock (PanesAsked)
+        {
+            PanesAsked.Add(pane);
+        }
+
+        return Task.FromResult(Panes.TryGetValue(pane, out var text) ? text : null);
+    }
+
+    public Task<string?> GetLastBuildAsync(CancellationToken cancellationToken) => Task.FromResult(LastBuild);
+
+    public Task<string?> GetTestResultsAsync(CancellationToken cancellationToken) => Task.FromResult(TestResults);
+
     public Task<CurrentFileContext?> GetCurrentFileAsync(CancellationToken cancellationToken)
     {
         Interlocked.Increment(ref CurrentFileReads);
