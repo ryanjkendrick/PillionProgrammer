@@ -85,25 +85,74 @@ internal sealed class FakeFeatureFlags : IFeatureFlags
     }
 }
 
-/// <summary>A process probe the test controls: which process ids are alive and who "we" are.</summary>
-internal sealed class FakeProcessProbe : IProcessProbe
+/// <summary>The processes that exist in a test: which ids are alive and when each started.</summary>
+internal sealed class FakeProcessTable
 {
     private readonly Dictionary<int, DateTimeOffset> _alive = [];
+    private readonly object _gate = new();
 
-    public FakeProcessProbe(int processId = 1000, DateTimeOffset? start = null)
+    public static DateTimeOffset DefaultStart { get; } = new(2026, 10, 15, 8, 0, 0, TimeSpan.Zero);
+
+    public void SetAlive(int processId, DateTimeOffset? start = null)
     {
+        lock (_gate)
+        {
+            _alive[processId] = start ?? DefaultStart;
+        }
+    }
+
+    public void Kill(int processId)
+    {
+        lock (_gate)
+        {
+            _alive.Remove(processId);
+        }
+    }
+
+    public bool IsAlive(int processId, DateTimeOffset startUtc)
+    {
+        lock (_gate)
+        {
+            return _alive.TryGetValue(processId, out var start) && start == startUtc;
+        }
+    }
+
+    /// <summary>Creates the probe of one host: a process of this table that others can see.</summary>
+    public FakeProcessProbe HostProbe(int processId, DateTimeOffset? start = null)
+    {
+        SetAlive(processId, start);
+        return new FakeProcessProbe(this, processId, start ?? DefaultStart);
+    }
+}
+
+/// <summary>A process probe the test controls: "we" are one process of a <see cref="FakeProcessTable"/>.</summary>
+internal sealed class FakeProcessProbe : IProcessProbe
+{
+    private readonly FakeProcessTable _table;
+
+    public FakeProcessProbe(FakeProcessTable table, int processId, DateTimeOffset start)
+    {
+        _table = table;
         CurrentProcessId = processId;
-        CurrentProcessStart = start ?? new DateTimeOffset(2026, 10, 15, 8, 0, 0, TimeSpan.Zero);
-        _alive[processId] = CurrentProcessStart;
+        CurrentProcessStart = start;
     }
 
     public int CurrentProcessId { get; }
 
     public DateTimeOffset CurrentProcessStart { get; }
 
-    public void SetAlive(int processId, DateTimeOffset start) => _alive[processId] = start;
+    public bool IsAlive(int processId, DateTimeOffset startUtc) => _table.IsAlive(processId, startUtc);
+}
 
-    public void Kill(int processId) => _alive.Remove(processId);
+/// <summary>A clock the test sets.</summary>
+internal sealed class TestTime : TimeProvider
+{
+    public TestTime(DateTimeOffset? now = null)
+    {
+        Now = now ?? DateTimeOffset.UtcNow;
+    }
 
-    public bool IsAlive(int processId, DateTimeOffset startUtc) => _alive.TryGetValue(processId, out var start) && start == startUtc;
+    public DateTimeOffset Now { get; set; }
+
+    public override DateTimeOffset GetUtcNow() => Now;
 }

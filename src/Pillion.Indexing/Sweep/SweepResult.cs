@@ -39,8 +39,8 @@ public sealed class SweepResult
     /// <summary>Gets files that passed the rules but could not be read (locked, access denied). A stored row for such a file is kept, not deleted.</summary>
     public required IReadOnlyList<string> Unreadable { get; init; }
 
-    /// <summary>Gets how many files were read and hashed in this sweep (added, changed and touched).</summary>
-    public int FilesHashed => Added.Count + Changed.Count + Touched.Count;
+    /// <summary>Gets how many files were opened and hashed in this sweep: the added and changed ones, and the touched ones whose content turned out equal. Unchanged files are not counted; they were not opened.</summary>
+    public int FilesHashed { get; init; }
 
     /// <summary>Gets how long the sweep took.</summary>
     public TimeSpan Duration { get; init; }

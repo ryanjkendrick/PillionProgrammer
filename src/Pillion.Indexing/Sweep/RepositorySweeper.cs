@@ -73,6 +73,7 @@ public sealed class RepositorySweeper
         var secrets = new ConcurrentBag<ScanEntry>();
         var unreadable = new ConcurrentBag<string>();
         var present = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+        var hashed = 0;
 
         await Parallel.ForEachAsync(
             scanner.Walk(rootFull, cancellationToken),
@@ -120,6 +121,7 @@ public sealed class RepositorySweeper
                 FileFingerprint fingerprint;
                 try
                 {
+                    Interlocked.Increment(ref hashed);
                     fingerprint = FileHasher.Hash(Path.Combine(rootFull, entry.RelativePath.Replace('/', Path.DirectorySeparatorChar)));
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -165,6 +167,7 @@ public sealed class RepositorySweeper
             Excluded = [.. excluded.OrderBy(e => e.RelativePath, StringComparer.OrdinalIgnoreCase)],
             SecretFiles = [.. secrets.OrderBy(e => e.RelativePath, StringComparer.OrdinalIgnoreCase)],
             Unreadable = [.. unreadable.Order(StringComparer.OrdinalIgnoreCase)],
+            FilesHashed = Volatile.Read(ref hashed),
             Duration = Stopwatch.GetElapsedTime(started),
         };
     }

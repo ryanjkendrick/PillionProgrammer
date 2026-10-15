@@ -11,6 +11,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- ServiceCollection.BuildServiceProvider for the registration test. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Pillion.Indexing\Pillion.Indexing.csproj" />
   </ItemGroup>
 

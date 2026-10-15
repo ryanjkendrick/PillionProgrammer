@@ -187,8 +187,9 @@ public sealed class WriterLock : IDisposable
             File.Move(temp, path, overwrite: false);
             return true;
         }
-        catch (IOException) when (File.Exists(path))
+        catch (IOException ex) when (IsAlreadyExists(ex) || File.Exists(path))
         {
+            // Another host holds the lock (or just did and has already been reclaimed by a third: the next read tells).
             return false;
         }
         finally
@@ -203,6 +204,9 @@ public sealed class WriterLock : IDisposable
             }
         }
     }
+
+    /// <summary>Whether a failed move says that the destination exists (ERROR_FILE_EXISTS 80 or ERROR_ALREADY_EXISTS 183).</summary>
+    private static bool IsAlreadyExists(IOException ex) => (ex.HResult & 0xFFFF) is 80 or 183;
 
     private static (LockState State, WriterLockInfo? Info) TryRead(string path)
     {
@@ -240,9 +244,10 @@ public sealed class WriterLock : IDisposable
         {
             return new FileStream(guardPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose);
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Taken by another host. A guard left behind by a machine crash is old; remove it so reclaiming is not stuck.
+            // Taken by another host (while it is being deleted on close, Windows answers "access denied"). A guard left
+            // behind by a machine crash is old; remove it so reclaiming is not stuck.
             try
             {
                 if (File.Exists(guardPath) && DateTime.UtcNow - File.GetLastWriteTimeUtc(guardPath) > TimeSpan.FromMinutes(1))
@@ -250,7 +255,7 @@ public sealed class WriterLock : IDisposable
                     File.Delete(guardPath);
                 }
             }
-            catch (IOException)
+            catch (Exception inner) when (inner is IOException or UnauthorizedAccessException)
             {
                 // Still in use.
             }
