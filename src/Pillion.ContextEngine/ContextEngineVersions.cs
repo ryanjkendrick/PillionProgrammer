@@ -10,9 +10,9 @@ public static class ContextEngineVersions
     /// The version of the chunking and symbol extraction rules, read by repository discovery (work item 2.3) into the
     /// index identity and the index <c>meta</c> table. Bump it (to the next integer) whenever the same file would produce
     /// different stored output: chunk boundaries, kinds, breadcrumbs or text; the default token counting; the
-    /// extension-to-language map; extracted definitions, references, symbol kinds, containers, signatures or symbol ids.
-    /// Do not bump it for changes that leave the output identical (refactoring, performance work, new tests). See the
-    /// README.
+    /// extension-to-language map; extracted definitions, references, symbol kinds, containers, signatures or symbol ids;
+    /// the reference resolution rules. Do not bump it for changes that leave the output identical (refactoring,
+    /// performance work, new tests) or that only change what is computed from it (ranking, the repo map). See the README.
     /// </summary>
     public const string ChunkerVersion = "1";
 }
