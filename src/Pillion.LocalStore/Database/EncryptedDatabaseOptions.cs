@@ -24,8 +24,8 @@ public sealed class EncryptedDatabaseOptions
 
     /// <summary>
     /// Gets a callback that runs on every connection (the writer and each reader) right after the key is applied and
-    /// verified, before the connection pragmas and before any migration, or <see langword="null"/> for none. The index
-    /// database uses it to load the sqlite-vec extension. An exception it throws closes the connection and fails the
+    /// verified, before the connection pragmas and before any migration, or <see langword="null"/> for none, for example
+    /// to load a SQLite extension or set a per-connection pragma. An exception it throws closes the connection and fails the
     /// open, or the read that needed the connection.
     /// </summary>
     public Action<Microsoft.Data.Sqlite.SqliteConnection>? ConnectionOpened { get; init; }

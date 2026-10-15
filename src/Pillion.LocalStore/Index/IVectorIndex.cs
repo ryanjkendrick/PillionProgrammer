@@ -6,15 +6,16 @@ namespace Pillion.LocalStore.Index;
 /// chunks; an HNSW backend for larger monorepos would be another implementation.
 /// </summary>
 /// <remarks>
-/// Both backends store vectors the same way (the plain <c>chunk_embeddings</c> table, plus the sqlite-vec table when the
-/// extension is loaded), so they differ only in how they search and either can read an index the other wrote.
+/// Every backend stores vectors the same way (the plain <c>chunk_embeddings</c> table), so they differ only in how they
+/// search and any of them can read an index another wrote. An HNSW or sqlite-vec backend for indexes beyond the
+/// in-memory cap would be another implementation.
 /// </remarks>
 public interface IVectorIndex
 {
-    /// <summary>The largest <c>k</c> a search accepts (sqlite-vec's own limit).</summary>
+    /// <summary>The largest <c>k</c> a search accepts (sqlite-vec's limit, kept so a later backend can honour it).</summary>
     const int MaxK = 4096;
 
-    /// <summary>Gets the backend name for logs and the Index window: <c>sqlite-vec</c> or <c>brute-force</c>.</summary>
+    /// <summary>Gets the backend name for logs and the Index window: <c>in-memory</c> or <c>table-scan</c>.</summary>
     string Backend { get; }
 
     /// <summary>Stores or replaces the vector of a chunk. The first vector stored fixes the index's dimension.</summary>

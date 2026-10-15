@@ -40,13 +40,11 @@ public sealed class IndexSchemaTests : IDisposable
         Assert.Equal(2, storage.Database.MinReaderVersion);
         Assert.Equal(_temp.File("index.db.v1.bak"), storage.Database.BackupPath);
         Assert.Equal(1L, await storage.CountAsync("SELECT count(*) FROM files WHERE id = 7"));
-        foreach (var table in new[] { "chunks", "chunks_fts", "chunk_embeddings", "vec_float32", "vec_deleted", "symbols", "symbol_refs" })
+        foreach (var table in new[] { "chunks", "chunks_fts", "chunk_embeddings", "vec_float32", "vec_generation", "symbols", "symbol_refs" })
         {
             Assert.Equal(1L, await storage.CountAsync($"SELECT count(*) FROM sqlite_schema WHERE name = '{table}'"));
         }
 
-        // The migration does not need sqlite-vec: the vec0 table appears only with the first vector.
-        Assert.Equal(0L, await storage.CountAsync("SELECT count(*) FROM sqlite_schema WHERE name = 'chunk_vectors'"));
 
         var ids = await storage.Chunks.ReplaceFileChunksAsync(7, [IndexTestSupport.Chunk("int Total() => 1;")]);
         Assert.Single(ids);
@@ -79,7 +77,7 @@ public sealed class IndexSchemaTests : IDisposable
     {
         await using var v1 = await EncryptedDatabase.OpenAsync(IndexTestSupport.DatabaseOptions(_temp), IndexTestSupport.SchemaV1);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => IndexStorage.CreateAsync(v1, ownsDatabase: false));
+        Assert.Throws<InvalidOperationException>(() => IndexStorage.Create(v1, ownsDatabase: false));
     }
 
     [Fact]

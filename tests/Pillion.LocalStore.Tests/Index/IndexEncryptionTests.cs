@@ -5,8 +5,8 @@ using Pillion.LocalStore.Index;
 namespace Pillion.LocalStore.Tests.Index;
 
 /// <summary>
-/// The index database stays encrypted with sqlite-vec loaded: no SQLite header, a keyless open fails, and chunk text,
-/// split identifiers and the vec0 shadow tables never reach the file or its WAL in plain text.
+/// The index database stays encrypted: no SQLite header, a keyless open fails, and chunk text, split identifiers and the
+/// schema never reach the file or its WAL in plain text.
 /// </summary>
 public sealed class IndexEncryptionTests : IDisposable
 {
@@ -16,18 +16,18 @@ public sealed class IndexEncryptionTests : IDisposable
     public void Dispose() => _temp.Dispose();
 
     [Fact]
-    public async Task WithSqliteVecLoaded_TheIndexIsEncrypted_AndNoChunkTextReachesTheDisk()
+    public async Task TheIndexIsEncrypted_AndNoChunkTextReachesTheDisk()
     {
         var path = _temp.File("index.db");
         var vector = IndexTestSupport.RandomVector(new Random(1), 384);
         await using (var storage = await IndexTestSupport.OpenAsync(_temp))
         {
-            Assert.True(storage.SqliteVecLoaded);
+
             var file = await storage.AddFileAsync("src/Secret.cs");
             await storage.Chunks.ReplaceFileChunksAsync(file, [
                 new NewChunk(1, 3, "method", "src/Secret.cs > " + Canary, "string " + Canary + "() => \"" + Canary + "\";", 20) { Embedding = vector },
             ]);
-            Assert.Equal(1L, await storage.CountAsync("SELECT count(*) FROM chunk_vectors"));
+            Assert.Equal(1L, await storage.CountAsync("SELECT count(*) FROM chunk_embeddings"));
 
             Assert.True(new FileInfo(path + "-wal").Length > 0);
             AssertNoPlainText(path + "-wal");
@@ -47,7 +47,7 @@ public sealed class IndexEncryptionTests : IDisposable
         command.CommandText = "SELECT count(*) FROM sqlite_schema";
         Assert.Equal(26, Assert.Throws<SqliteException>(() => command.ExecuteScalar()).SqliteErrorCode);
 
-        // And it reopens with its key, the extension and its data.
+        // And it reopens with its key and its data.
         await using var reopened = await IndexTestSupport.OpenAsync(_temp);
         Assert.Equal("chacha20", await reopened.Database.ScalarAsync("PRAGMA cipher"));
         Assert.Single(await reopened.Chunks.SearchLexicalAsync(Canary, 5));
@@ -69,6 +69,6 @@ public sealed class IndexEncryptionTests : IDisposable
         Assert.Equal(-1, bytes.AsSpan().IndexOf(Encoding.UTF8.GetBytes(Canary.ToLowerInvariant())));
         Assert.Equal(-1, bytes.AsSpan().IndexOf("pillion canary 7"u8));
         Assert.Equal(-1, bytes.AsSpan().IndexOf("CREATE VIRTUAL TABLE"u8));
-        Assert.Equal(-1, bytes.AsSpan().IndexOf("chunk_vectors"u8));
+        Assert.Equal(-1, bytes.AsSpan().IndexOf("chunk_embeddings"u8));
     }
 }

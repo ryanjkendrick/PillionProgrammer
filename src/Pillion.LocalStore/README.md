@@ -48,7 +48,7 @@ Retention (`ConversationRetention`): conversations and the Outbound log are kept
   every connection. SQLite3 Multiple Ciphers answers `ok`; anything else (a plain SQLite would ignore the pragma) stops
   the open, so a database is never created unencrypted. `SELECT count(*) FROM sqlite_schema` then proves the key fits.
   `EncryptedDatabaseOptions.ConnectionOpened` runs next, on every connection, before the other pragmas and any migration
-  (the index database loads sqlite-vec there).
+  (for example to load a SQLite extension).
 - A missing key for an existing database, a key file DPAPI refuses (another user or machine, or damage), and a key that
   does not open the file each fail with a `LocalStoreException` whose `Kind` says which. A new key is never made for an
   existing database.
@@ -106,7 +106,7 @@ add another SQLitePCLRaw bundle to the host: the provider is process-wide.
 ## Index storage
 
 `Index\` (work item 2.8, design sections 7 and 10) stores the chunks, the lexical index, the vectors and the symbols of
-`index\<index-id>\index.db`. The chunk text lives only in this encrypted database.
+`index\<index-id>\index.db`. The chunk text lives only in this encrypted database. No SQLite extension is needed.
 
 Schema. Index schema version 1 (the `files` table and the index identity) belongs to repository discovery (work item
 2.3). `IndexStorageSchema.Migration` is version 2 and chains after it:
@@ -120,11 +120,10 @@ only `files (id, language, partition)` and raises `min_reader_version` to 2. The
 | `chunks_fts` (FTS5, contentless, `contentless_delete=1`) | rowid = chunk id; `text` (breadcrumb, line break, text as is) and `identifiers` (split identifiers) |
 | `chunk_embeddings` | chunk\_id (cascade from `chunks`), language, partition, embedding (int8 blob) |
 | `vec_float32` | chunk\_id, embedding (float32 blob). **Development only**, for the int8 recall-loss measurement; drop before release |
-| `chunk_vectors` (sqlite-vec `vec0`, created at run time) | chunk\_id, `embedding int8[dims] distance_metric=cosine`, `language` and `partition` metadata columns |
-| `vec_deleted`, `vec_generation` | bookkeeping: chunk ids `chunk_vectors` still has to drop; a counter every change to `chunk_embeddings` bumps |
+| `vec_generation` | one counter that every change to `chunk_embeddings` bumps (triggers, so cascades count too) |
 | `symbols` | id, file\_id, name, kind, container, start\_line, end\_line, signature |
 | `symbol_refs` | from\_symbol\_id (null at file scope), to\_symbol\_id, file\_id, line, kind; cascades from both symbols |
-| `meta` | adds `vector_dimensions` and `vector_index_state` (`synced` or `stale`) |
+| `meta` | adds `vector_dimensions` |
 
 Lexical search. Identifier splitting happens at write time into the second FTS5 column (phase 2 decision of 2026-10-15),
 with the stock `unicode61` tokenizer and `tokenchars '_'`, so `get_order_total` stays one token in `text` while
@@ -135,40 +134,29 @@ prefix, and FTS5 syntax in the query is dropped. Ranking is `bm25(chunks_fts, 1.
 `IndexStorageOptions`); `LexicalHit.Score` is the negated value, so higher is better. A delete trigger on `chunks` removes
 FTS5 rows, so deletes through any path (including a cascade from `files`) keep them in step.
 
-Vectors. The int8 vectors always live in the plain table `chunk_embeddings`, which every host can read. sqlite-vec's
-`chunk_vectors` is an accelerator over it: created once the extension is loaded and the dimension is known, rebuilt from
-`chunk_embeddings` when a host without the extension changed vectors (`vector_index_state = stale`, about 2.5 s for
-100,000 chunks), and told about deleted chunks through `vec_deleted`, which the delete trigger fills. The migration never
-needs the extension. `IVectorIndex` has three implementations over the same rows, which rank alike (the brute-force
-distance is computed exactly as sqlite-vec's `distance_cosine_int8`):
+Vectors. The int8 vectors live in `chunk_embeddings`; the first vector stored fixes `meta.vector_dimensions`.
+`IVectorIndex` (`UpsertAsync`, `DeleteByFileAsync`, `SearchAsync(query, k, filter)` returning chunk id and cosine
+distance) has two implementations over the same rows, chosen with `IndexStorageOptions.VectorBackend`; both compute the
+distance in managed code with AVX2 or 128-bit SIMD and rank alike:
 
-- `AutoVectorIndex` (the default, `IndexStorage.Vectors`): brute force over an in-memory copy of the vectors while they
-  fit `IndexStorageOptions.VectorCacheMaxBytes` (64 MiB, about 170,000 chunks of 384 dimensions), then the sqlite-vec
-  KNN query, then a brute-force scan of the table. The copy holds vectors only (never text), is never written to disk,
-  and is reloaded when `vec_generation` moves; `IndexStorage.WarmVectorCacheAsync` reloads it ahead of the next search.
-- `SqliteVecIndex`: the `vec0` KNN query with `IN` filters on the metadata columns; while the table is missing or stale
-  it answers like the brute-force backend.
-- `BruteForceVectorIndex`: managed cosine with AVX2 or 128-bit SIMD over the in-memory copy or the table.
+- `AutoVectorIndex` (`VectorBackendPreference.InMemory`, the default): brute force over an in-memory copy of the vectors
+  while they fit `IndexStorageOptions.VectorCacheMaxBytes` (64 MiB, about 170,000 chunks of 384 dimensions), otherwise
+  the table scan. The copy holds vectors only (never text), is never written to disk, and is reloaded when
+  `vec_generation` moves (about 0.8 s per 100,000 chunks); `IndexStorage.WarmVectorCacheAsync` reloads it ahead of the
+  next search, for the indexing pipeline to call after each batch.
+- `TableScanVectorIndex` (`VectorBackendPreference.TableScan`): reads and decrypts `chunk_embeddings` on every search and
+  keeps no copy.
 
-Measured on the development machine with the performance test (100,000 chunks, 384 dimensions, 329-byte texts; see the
-pull request of work item 2.8 for the full figures): vector KNN (k = 50) p50 3 ms with the in-memory copy, 210 ms with
-sqlite-vec (its pages are decrypted on every read; 55 ms with `PageCacheKiB = 65536`, a 64 MiB page cache per
-connection), 370 ms scanning the table; FTS5 p50 65 ms, p95 125 ms; about 1,650 bytes per chunk on disk, of which about
-450 are the sqlite-vec copy of the vectors.
+Measured with the benchmark (`IndexPerformanceTests`, `Category=Benchmark`: 100,000 chunks, 384 dimensions, 329-byte
+synthetic texts, k = 50) on the development machine: in-memory p50 3 ms, p95 3.4 ms; table scan p50 about 400 ms;
+FTS5 p50 63 ms, p95 116 ms; about 1,210 bytes per chunk on disk (chunks about 440, FTS5 about 305, vectors about 455).
 
-sqlite-vec. A pinned run-time extension verified by hash (phase 2 decision of 2026-10-15). `sqlite-vec.manifest.json`
-records the release (0.1.9, the latest stable on 2026-10-15), the archive URL and SHA-256, the SHA-256 of `vec0.dll` and
-the licence (MIT or Apache-2.0). The binary is never committed: the `PillionAcquireSqliteVec` target in
-`Pillion.LocalStore.csproj` downloads the windows-x86\_64 archive at build time into
-`<NuGet packages folder>\pillion-native\sqlite-vec\<version>\win-x64\`, checks both hashes, and fails the build on a
-mismatch; the DLL is copied beside every project that references this one, including the host's self-contained publish
-that the VSIX packages under `Host\`. Build with `-p:PillionSkipSqliteVec=true` on a machine that cannot download it.
-At run time `SqliteVecExtension` checks the DLL's hash against the embedded manifest and loads it with
-`SqliteConnection.LoadExtension` on every connection right after the key is applied
-(`EncryptedDatabaseOptions.ConnectionOpened`); extension loading is switched off again straight after, so SQL cannot
-call `load_extension()`. When the DLL is missing, has another hash or does not load, the index works without it and the
-choice is logged once. The release has no Windows Arm64 build; Arm64 waits for the in-house SQLite build planned for
-phase 5.
+Beyond the in-memory cap. An HNSW or sqlite-vec backend can be added behind `IVectorIndex` for indexes larger than the
+in-memory cap. A sqlite-vec 0.1.9 implementation (a pinned, hash-verified `vec0.dll` downloaded at build time, a `vec0`
+table with `language` and `partition` metadata filters kept in step with `chunk_embeddings`) is in this branch's history
+at commit `6a487f9` (branch `feature/index-storage`, work item 2.8). It was dropped for this phase because, with the pages
+decrypted on every read, its KNN query took about 205 ms at 100,000 chunks, and its copy of the vectors cost about 450
+bytes per chunk. `EncryptedDatabaseOptions.ConnectionOpened` is where such an extension would be loaded.
 
 Symbols. `ISymbolRepository` stores and reads `symbols` and `symbol_refs`; extraction is work item 2.5. Replacing a
 file's symbols removes the references to them from other files too (cascade), which the extractor restores when it

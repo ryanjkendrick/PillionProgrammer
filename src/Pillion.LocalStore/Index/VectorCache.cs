@@ -3,7 +3,7 @@ using Microsoft.Data.Sqlite;
 namespace Pillion.LocalStore.Index;
 
 /// <summary>
-/// An in-memory copy of the int8 vectors of <c>chunk_embeddings</c> for the brute-force backend: one contiguous array,
+/// An in-memory copy of the int8 vectors of <c>chunk_embeddings</c> for the default backend: one contiguous array,
 /// the squared norms precomputed, and the language and partition of each row as small codes for filtering. It is tied to
 /// the <c>vec_generation</c> counter it was read at and replaced as a whole when the counter moves. It holds vectors
 /// only, never chunk text, and is never written to disk.
@@ -96,7 +96,7 @@ internal sealed class VectorCache
         return new VectorCache(generation, dimensions, [.. ids], vectors, [.. norms], [.. partitions], [.. languages], partitionCodes, languageCodes);
     }
 
-    /// <summary>Finds the nearest vectors, as <see cref="BruteForceVectorIndex.Scan"/> does over the table.</summary>
+    /// <summary>Finds the nearest vectors, as <see cref="TableScanVectorIndex.Scan"/> does over the table.</summary>
     public IReadOnlyList<VectorHit> Search(ReadOnlySpan<sbyte> query, int k, ChunkFilter filter, CancellationToken cancellationToken)
     {
         var allowedPartitions = Allowed(_partitionCodes, filter.Partitions);
@@ -107,7 +107,7 @@ internal sealed class VectorCache
         }
 
         var queryNorm = Int8Vectors.SquaredNorm(query);
-        var heap = new BruteForceVectorIndex.TopK(k);
+        var heap = new TopK(k);
         var dims = Dimensions;
         for (var row = 0; row < _ids.Length; row++)
         {

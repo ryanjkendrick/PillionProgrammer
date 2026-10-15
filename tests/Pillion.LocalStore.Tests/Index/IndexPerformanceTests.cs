@@ -8,12 +8,12 @@ namespace Pillion.LocalStore.Tests.Index;
 
 /// <summary>
 /// Design section 13 budgets on a 100,000-chunk index of 384-dimension int8 vectors and short texts: insert throughput,
-/// vector KNN and FTS5 latency (p50 and p95 over 50 queries) with both vector backends (sqlite-vec, and the default auto
-/// backend, which is brute force over the in-memory copy of the vectors), and the bytes on disk per chunk.
-/// The asserted limits carry a generous margin for CI machines; the measured figures are written to the test output.
+/// vector KNN and FTS5 latency (p50 and p95 over 50 queries) with both vector backends (the default in-memory backend and
+/// the table scan), and the bytes on disk per chunk. A benchmark (about a minute), so CI leaves it out
+/// (<c>Category!=Benchmark</c>); the Gate 2 script runs it (work item 2.17). The measured figures go to the test output.
 /// </summary>
 [Collection(IndexPerformanceGroup.Name)]
-[Trait("Category", "Performance")]
+[Trait("Category", "Benchmark")]
 public sealed class IndexPerformanceTests : IDisposable
 {
     private const int Chunks = 100_000;
@@ -24,15 +24,13 @@ public sealed class IndexPerformanceTests : IDisposable
     private const int K = 50;
 
     // Section 13: semantic search p50 100 ms and p95 300 ms (hybrid, on the reference machine, which is the development
-    // machine). Shared CI runners are slow and noisy (GitHub Actions sets CI), so there every limit is 10/3 times looser:
-    // a p95 of 1 s for the default vector backend and for FTS5. sqlite-vec is not the default path and gets twice the room.
+    // machine). On a shared CI runner (CI set) every limit is 10/3 times looser: a p95 of 1 s.
     private static readonly double Scale = string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI")) ? 1 : 10.0 / 3;
     private static readonly TimeSpan VectorP95Limit = TimeSpan.FromMilliseconds(300 * Scale);
-    private static readonly TimeSpan SqliteVecP95Limit = TimeSpan.FromMilliseconds(600 * Scale);
     private static readonly TimeSpan LexicalP95Limit = TimeSpan.FromMilliseconds(300 * Scale);
 
-    // Section 13: about 1.5 KB per chunk. Not met with both vector copies (see the report); this bound catches regressions.
-    private const double BytesPerChunkLimit = 2048;
+    // Section 13: about 1.5 KB per chunk (with these short texts).
+    private const double BytesPerChunkLimit = 1536;
 
     private static readonly string[] Verbs = ["get", "set", "update", "create", "delete", "find", "load", "save", "parse", "render", "build", "apply", "validate", "send", "compute"];
     private static readonly string[] Nouns = ["order", "customer", "invoice", "total", "payment", "address", "item", "cart", "token", "session", "index", "chunk", "vector", "file", "model", "request", "response", "user", "price", "tax"];
@@ -51,7 +49,6 @@ public sealed class IndexPerformanceTests : IDisposable
         var total = Stopwatch.StartNew();
         var random = new Random(20261015);
         await using var storage = await IndexTestSupport.OpenAsync(_temp);
-        Assert.True(storage.SqliteVecLoaded, "sqlite-vec must load for the comparison.");
 
         // Files: 20 partitions, 4 languages.
         var fileIds = new long[Chunks / ChunksPerFile];
@@ -99,11 +96,11 @@ public sealed class IndexPerformanceTests : IDisposable
 
         insert.Stop();
         Assert.Equal(Chunks, await storage.Chunks.CountChunksAsync());
-        Assert.Equal(Chunks, await storage.CountAsync("SELECT count(*) FROM chunk_vectors"));
+        Assert.Equal(Chunks, await storage.CountAsync("SELECT count(*) FROM chunk_embeddings"));
 
         var size = await storage.Chunks.GetSizeAsync();
         var bytesPerChunk = (double)size.Bytes / Chunks;
-        Report($"Insert: {Chunks:N0} chunks in {insert.Elapsed.TotalSeconds:F1} s = {Chunks / insert.Elapsed.TotalSeconds:N0} chunks/s (FTS5, int8 plain table and sqlite-vec, batches of {FilesPerBatch * ChunksPerFile})");
+        Report($"Insert: {Chunks:N0} chunks in {insert.Elapsed.TotalSeconds:F1} s = {Chunks / insert.Elapsed.TotalSeconds:N0} chunks/s (chunks, FTS5 and int8 vectors, batches of {FilesPerBatch * ChunksPerFile})");
         Report($"Disk: {size.Bytes / 1048576.0:F1} MB = {bytesPerChunk:N0} bytes per chunk (average text {textBytes / (double)Chunks:N0} bytes; WAL {size.WalBytes / 1048576.0:F1} MB; no float32 vectors)");
 
         // Queries.
@@ -113,66 +110,39 @@ public sealed class IndexPerformanceTests : IDisposable
             : Pick(random, Nouns) + " " + Pick(random, Nouns) + " " + Pick(random, Verbs)).ToList();
         var filter = new ChunkFilter { Partitions = ["src/Part3", "src/Part7"] };
 
-        var vec = await MeasureAsync(vectorQueries, q => storage.SqliteVec!.SearchAsync(q, K));
-        var vecFiltered = await MeasureAsync(vectorQueries.Take(23).ToList(), q => storage.SqliteVec!.SearchAsync(q, K, filter));
-        var cacheLoad = Stopwatch.StartNew();
-        await storage.BruteForce.SearchAsync(vectorQueries[0], K);
-        cacheLoad.Stop();
-        var brute = await MeasureAsync(vectorQueries, q => storage.Vectors.SearchAsync(q, K));
         Assert.Equal(AutoVectorIndex.Name, storage.Vectors.Backend);
-        var bruteFiltered = await MeasureAsync(vectorQueries, q => storage.Vectors.SearchAsync(q, K, filter));
+        var cacheLoad = Stopwatch.StartNew();
+        await storage.WarmVectorCacheAsync();
+        cacheLoad.Stop();
+        var inMemory = await MeasureAsync(vectorQueries, q => storage.Vectors.SearchAsync(q, K));
+        var inMemoryFiltered = await MeasureAsync(vectorQueries, q => storage.Vectors.SearchAsync(q, K, filter));
+        var scan = await MeasureAsync(vectorQueries, q => storage.TableScan.SearchAsync(q, K));
+        var scanFiltered = await MeasureAsync(vectorQueries, q => storage.TableScan.SearchAsync(q, K, filter));
         var lexical = await MeasureAsync(lexicalQueries, q => storage.Chunks.SearchLexicalAsync(q, K));
         var lexicalFiltered = await MeasureAsync(lexicalQueries, q => storage.Chunks.SearchLexicalAsync(q, K, filter));
 
-        // The table scan without the in-memory copy (indexes over the cache limit), on fewer queries: it is slow.
-        await using (var uncached = await IndexStorage.CreateAsync(storage.Database, ownsDatabase: false, new IndexStorageOptions { VectorCacheMaxBytes = 0 }))
-        {
-            var scan = await MeasureAsync(vectorQueries.Take(13).ToList(), q => uncached.BruteForce.SearchAsync(q, K));
-            Report($"Vector KNN k={K}, brute force scanning the table (no in-memory copy, 10 queries): p50 {scan.P50:F1} ms, p95 {scan.P95:F1} ms");
-        }
-
-        // sqlite-vec with a 64 MiB page cache per connection, so its pages stay decrypted in memory.
-        await using (var bigCache = await IndexStorage.OpenAsync(IndexTestSupport.DatabaseOptions(_temp), IndexTestSupport.SchemaV2, new IndexStorageOptions { PageCacheKiB = 65536 }))
-        {
-            var cached = await MeasureAsync(vectorQueries, q => bigCache.SqliteVec!.SearchAsync(q, K));
-            Report($"Vector KNN k={K}, sqlite-vec with a 64 MiB page cache: p50 {cached.P50:F1} ms, p95 {cached.P95:F1} ms");
-        }
-
-        Report($"Vector KNN k={K}, sqlite-vec:   p50 {vec.P50:F1} ms, p95 {vec.P95:F1} ms");
-        Report($"Vector KNN k={K}, auto = brute force over the in-memory copy ( {storage.Storage.CacheBytes / 1048576.0:F1} MB, loaded in {cacheLoad.Elapsed.TotalMilliseconds:F0} ms): p50 {brute.P50:F1} ms, p95 {brute.P95:F1} ms");
-        Report($"Vector KNN k={K}, 2 of 20 partitions, sqlite-vec (20 queries):  p50 {vecFiltered.P50:F1} ms, p95 {vecFiltered.P95:F1} ms");
-        Report($"Vector KNN k={K}, 2 of 20 partitions, auto (in-memory): p50 {bruteFiltered.P50:F1} ms, p95 {bruteFiltered.P95:F1} ms");
+        Report($"Vector KNN k={K}, in-memory (copy of {storage.VectorCacheBytes / 1048576.0:F1} MB, loaded in {cacheLoad.Elapsed.TotalMilliseconds:F0} ms): p50 {inMemory.P50:F1} ms, p95 {inMemory.P95:F1} ms; 2 of 20 partitions: p50 {inMemoryFiltered.P50:F1} ms, p95 {inMemoryFiltered.P95:F1} ms");
+        Report($"Vector KNN k={K}, table scan: p50 {scan.P50:F1} ms, p95 {scan.P95:F1} ms; 2 of 20 partitions: p50 {scanFiltered.P50:F1} ms, p95 {scanFiltered.P95:F1} ms");
         Report($"FTS5 BM25 k={K}: p50 {lexical.P50:F1} ms, p95 {lexical.P95:F1} ms; 2 of 20 partitions: p50 {lexicalFiltered.P50:F1} ms, p95 {lexicalFiltered.P95:F1} ms");
+
         // The backends agree on the full index too (distances to the float; the ids too, unless two distances tie).
         for (var i = 0; i < 5; i++)
         {
-            var fromVec = await storage.SqliteVec!.SearchAsync(vectorQueries[i], 10);
+            var fromScan = await storage.TableScan.SearchAsync(vectorQueries[i], 10);
             var fromMemory = await storage.Vectors.SearchAsync(vectorQueries[i], 10);
-            Assert.Equal(fromVec.Select(h => (float)h.Distance), fromMemory.Select(h => (float)h.Distance));
-            if (fromVec.Select(h => h.Distance).Distinct().Count() == fromVec.Count)
+            Assert.Equal(fromScan.Select(h => (float)h.Distance), fromMemory.Select(h => (float)h.Distance));
+            if (fromScan.Select(h => h.Distance).Distinct().Count() == fromScan.Count)
             {
-                Assert.Equal(fromVec.Select(h => h.ChunkId), fromMemory.Select(h => h.ChunkId));
+                Assert.Equal(fromScan.Select(h => h.ChunkId), fromMemory.Select(h => h.ChunkId));
             }
         }
 
-        // Rebuilding sqlite-vec from the stored vectors (after a host without the extension wrote).
-        await storage.ExecuteAsync("INSERT INTO meta (key, value) VALUES ('vector_index_state', 'stale') ON CONFLICT (key) DO UPDATE SET value = excluded.value");
-        var rebuild = Stopwatch.StartNew();
-        await using (var rebuilt = await IndexStorage.CreateAsync(storage.Database, ownsDatabase: false))
-        {
-            rebuild.Stop();
-            Assert.Equal(Chunks, await rebuilt.CountAsync("SELECT count(*) FROM chunk_vectors"));
-        }
-
-        Report($"sqlite-vec rebuild from chunk_embeddings: {rebuild.Elapsed.TotalSeconds:F1} s");
         Report($"Test body: {total.Elapsed.TotalSeconds:F1} s");
 
-        Assert.True(TimeSpan.FromMilliseconds(brute.P95) < VectorP95Limit, $"auto (in-memory brute force) p95 {brute.P95:F1} ms, limit {VectorP95Limit.TotalMilliseconds} ms");
-        Assert.True(TimeSpan.FromMilliseconds(vec.P95) < SqliteVecP95Limit, $"sqlite-vec p95 {vec.P95:F1} ms, limit {SqliteVecP95Limit.TotalMilliseconds} ms");
+        Assert.True(TimeSpan.FromMilliseconds(inMemory.P95) < VectorP95Limit, $"in-memory p95 {inMemory.P95:F1} ms, limit {VectorP95Limit.TotalMilliseconds} ms");
         Assert.True(TimeSpan.FromMilliseconds(lexical.P95) < LexicalP95Limit, $"FTS5 p95 {lexical.P95:F1} ms, limit {LexicalP95Limit.TotalMilliseconds} ms");
         Assert.True(bytesPerChunk < BytesPerChunkLimit, $"{bytesPerChunk:N0} bytes per chunk, limit {BytesPerChunkLimit}");
     }
-
     private static async Task<(double P50, double P95)> MeasureAsync<TQuery, TResult>(IReadOnlyList<TQuery> queries, Func<TQuery, Task<TResult>> run)
     {
         // Warm up: the first reads open and key reader connections and fill the page cache.

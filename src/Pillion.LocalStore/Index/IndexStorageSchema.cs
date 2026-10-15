@@ -11,11 +11,9 @@ namespace Pillion.LocalStore.Index;
 /// what <see cref="After"/> returns. Later index migrations append after this one.
 /// </para>
 /// <para>
-/// The migration never needs the sqlite-vec extension: the <c>vec0</c> table <see cref="VectorTable"/> is created later
-/// by <see cref="IndexStorage"/>, once the extension is loaded and the vector dimension is known (from
-/// <see cref="MetaKeys.VectorDimensions"/>, or from the first vector stored). The int8 vectors themselves live in the
-/// plain table <c>chunk_embeddings</c>, which every host can read; <c>chunk_vectors</c> is an accelerator rebuilt from
-/// it whenever a host without the extension changed the vectors (<see cref="MetaKeys.VectorIndexState"/>).
+/// The int8 vectors live in the plain table <c>chunk_embeddings</c>; the vector dimension is recorded in
+/// <see cref="MetaKeys.VectorDimensions"/> (by the embedding step, or by the first vector stored). Search runs in managed
+/// code (<see cref="IVectorIndex"/>); no SQLite extension is needed.
 /// </para>
 /// <para>Tables:</para>
 /// <list type="bullet">
@@ -29,14 +27,10 @@ namespace Pillion.LocalStore.Index;
 /// <item><c>chunk_embeddings</c>: chunk_id (cascade from <c>chunks</c>), language, partition, embedding (int8, one byte per dimension).</item>
 /// <item><c>vec_float32</c>: <b>development only, dropped before release</b> (phase 2 decision of 2026-10-15): chunk_id and the
 /// float32 vector, kept for the int8 recall-loss measurement (work item 2.16).</item>
-/// <item><c>vec_deleted</c>: chunk ids deleted since the <c>vec0</c> table was last updated (filled by the delete trigger, drained by
-/// the writer that has the extension), so a delete through any path, including a cascade from <c>files</c>, reaches it.</item>
-/// <item><c>vec_generation</c>: one counter that triggers on <c>chunk_embeddings</c> bump on every change, so the brute-force
-/// backend's in-memory copy of the vectors knows when to reload.</item>
+/// <item><c>vec_generation</c>: one counter that triggers on <c>chunk_embeddings</c> bump on every change (cascades included), so
+/// the in-memory copy of the vectors knows when to reload.</item>
 /// <item><c>symbols</c>: id, file_id, name, kind, container, start_line, end_line, signature (approximate, work item 2.5).</item>
 /// <item><c>symbol_refs</c>: from_symbol_id (null at file scope), to_symbol_id, file_id, line, kind (approximate, name-based).</item>
-/// <item><c>chunk_vectors</c> (created at run time): <c>vec0</c> with <c>embedding int8[dims] distance_metric=cosine</c> and the
-/// metadata columns <c>language</c> and <c>partition</c>, usable in <c>WHERE</c> filters of a KNN query.</item>
 /// </list>
 /// </remarks>
 public static class IndexStorageSchema
@@ -48,13 +42,11 @@ public static class IndexStorageSchema
     public const int Version = 2;
 
     /// <summary>
-    /// The reader version recorded with it. Raised to 2: a version 1 build that deleted a file row would leave its FTS5 and
-    /// vector rows behind (virtual tables do not cascade), so it must not write a version 2 database.
+    /// The reader version recorded with it. Raised to 2: a version 1 build does not know the chunk tables, so it must not
+    /// write a version 2 database.
     /// </summary>
     public const int MinReaderVersion = 2;
 
-    /// <summary>The name of the sqlite-vec <c>vec0</c> table.</summary>
-    public const string VectorTable = "chunk_vectors";
 
     /// <summary>Version 2: chunks, FTS5, vectors and symbols.</summary>
     internal const string Version2Sql = """
@@ -91,9 +83,6 @@ public static class IndexStorageSchema
             embedding BLOB    NOT NULL
         ) STRICT;
 
-        CREATE TABLE vec_deleted (
-            chunk_id INTEGER NOT NULL PRIMARY KEY
-        ) STRICT;
 
         -- Bumped by every change to chunk_embeddings, through any path (cascades included), so an in-memory copy of the
         -- vectors knows when it is out of date.
@@ -114,7 +103,6 @@ public static class IndexStorageSchema
 
         CREATE TRIGGER chunks_after_delete AFTER DELETE ON chunks BEGIN
             DELETE FROM chunks_fts WHERE rowid = old.id;
-            INSERT OR IGNORE INTO vec_deleted (chunk_id) VALUES (old.id);
         END;
 
         CREATE TABLE symbols (
@@ -161,10 +149,5 @@ public static class IndexStorageSchema
         /// <summary>The vector dimension of the index (written by the embedding step, or by the first vector stored).</summary>
         public const string VectorDimensions = "vector_dimensions";
 
-        /// <summary>
-        /// <c>synced</c> while <see cref="VectorTable"/> matches <c>chunk_embeddings</c>; <c>stale</c> after a host without
-        /// sqlite-vec changed vectors, until a host with it rebuilds the table.
-        /// </summary>
-        public const string VectorIndexState = "vector_index_state";
     }
 }

@@ -5,7 +5,7 @@ using System.Runtime.Intrinsics.X86;
 
 namespace Pillion.LocalStore.Index;
 
-/// <summary>int8 vector arithmetic for the brute-force backend, vectorised with SIMD where the CPU has it.</summary>
+/// <summary>int8 vector arithmetic for the vector backends, vectorised with SIMD where the CPU has it.</summary>
 internal static class Int8Vectors
 {
     /// <summary>Computes the dot product of two vectors and the squared norm of the second, exactly, in one pass.</summary>
@@ -125,9 +125,9 @@ internal static class Int8Vectors
     }
 
     /// <summary>
-    /// The cosine distance as sqlite-vec computes it for int8 vectors (<c>distance_cosine_int8</c>: exact integer sums,
-    /// <c>1 - dot / (sqrt(|a|²) * sqrt(|b|²))</c> in double, returned as a float), so both backends rank alike. A zero
-    /// vector is at distance 1 from everything.
+    /// The cosine distance of int8 vectors: exact integer sums, <c>1 - dot / (sqrt(|a|²) * sqrt(|b|²))</c> in double,
+    /// returned as a float (the formula of sqlite-vec's <c>distance_cosine_int8</c>, so a sqlite-vec backend added later
+    /// would rank alike). A zero vector is at distance 1 from everything.
     /// </summary>
     /// <param name="dot">The dot product.</param>
     /// <param name="queryNorm">The squared norm of the query.</param>

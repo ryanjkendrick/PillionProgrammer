@@ -109,7 +109,7 @@ public sealed class LexicalSearchTests : IAsyncLifetime, IDisposable
     {
         // "getordertotal" (text column) and "get order total" (identifiers column) both match chunk 1; with the text column
         // weighted to zero only the split identifiers count, so the score drops.
-        await using var weighted = await IndexStorage.CreateAsync(_storage.Database, ownsDatabase: false, new IndexStorageOptions { TextWeight = 0.0, IdentifiersWeight = 1.0 });
+        await using var weighted = IndexStorage.Create(_storage.Database, ownsDatabase: false, new IndexStorageOptions { TextWeight = 0.0, IdentifiersWeight = 1.0 });
         var normal = (await _storage.Chunks.SearchLexicalAsync("GetOrderTotal", 10)).Single(h => h.ChunkId == _orderTotalId).Score;
         var identifiersOnly = (await weighted.Chunks.SearchLexicalAsync("GetOrderTotal", 10)).Single(h => h.ChunkId == _orderTotalId).Score;
 

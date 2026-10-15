@@ -36,8 +36,6 @@ internal static class IndexTestSupport
     public static Task<IndexStorage> OpenAsync(TempDirectory temp, IndexStorageOptions? options = null) =>
         IndexStorage.OpenAsync(DatabaseOptions(temp), SchemaV2, options);
 
-    public static Task<IndexStorage> OpenWithoutExtensionAsync(TempDirectory temp) =>
-        OpenAsync(temp, new IndexStorageOptions { LoadSqliteVec = false });
 
     public static Task<long> AddFileAsync(this IndexStorage storage, string path, string? language = "csharp", string? partition = "src") =>
         storage.Database.WriteAsync(async (connection, transaction, token) =>
@@ -98,8 +96,6 @@ internal static class IndexTestSupport
         return vector;
     }
 
-    /// <summary>Whether sqlite-vec loads in this test run (the build downloads it, so it should).</summary>
-    public static bool SqliteVecAvailable => Pillion.LocalStore.Index.SqliteVec.SqliteVecExtension.Status.IsAvailable;
 
     public static SqliteConnection OpenWithoutKey(string path) => TestDatabases.OpenWithoutKey(path);
 }

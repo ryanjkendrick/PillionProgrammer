@@ -56,7 +56,7 @@ public sealed class ChunkRepository : IChunkRepository
         return Database.WriteAsync<IReadOnlyList<IReadOnlyList<long>>>(
             (connection, transaction, token) =>
             {
-                using var vectors = _vectors.BeginWrite(connection, transaction);
+                using var vectors = VectorStorage.BeginWrite(connection, transaction);
                 using var writer = new ChunkWriter(connection, transaction);
                 var results = new List<IReadOnlyList<long>>(files.Count);
                 foreach (var file in files)
@@ -65,8 +65,7 @@ public sealed class ChunkRepository : IChunkRepository
                     var (language, partition) = writer.ReadFile(file.FileId)
                         ?? throw new KeyNotFoundException($"There is no file with id {file.FileId} in the index.");
 
-                    // The delete trigger removes the FTS5 rows; the cascade removes the vectors; vec_deleted remembers the
-                    // chunk_vectors rows, dropped below.
+                    // The delete trigger removes the FTS5 rows; the cascade removes the vectors.
                     writer.DeleteChunks(file.FileId);
                     var ids = new long[file.Chunks.Count];
                     for (var i = 0; i < file.Chunks.Count; i++)
@@ -76,7 +75,7 @@ public sealed class ChunkRepository : IChunkRepository
                         ids[i] = id;
                         if (!chunk.Embedding.IsEmpty)
                         {
-                            vectors.Upsert(id, chunk.Embedding.Span, language, partition, isNew: true);
+                            vectors.Upsert(id, chunk.Embedding.Span, language, partition);
                         }
 
                         if (!chunk.EmbeddingFloat32.IsEmpty)
@@ -88,7 +87,6 @@ public sealed class ChunkRepository : IChunkRepository
                     results.Add(ids);
                 }
 
-                vectors.DrainDeleted();
                 return Task.FromResult<IReadOnlyList<IReadOnlyList<long>>>(results);
             },
             cancellationToken);
@@ -99,10 +97,8 @@ public sealed class ChunkRepository : IChunkRepository
         Database.WriteAsync(
             (connection, transaction, _) =>
             {
-                using var vectors = _vectors.BeginWrite(connection, transaction);
-                var deleted = Sql.Execute(connection, transaction, "DELETE FROM chunks WHERE file_id = $file", ("$file", fileId));
-                vectors.DrainDeleted();
-                return Task.FromResult(deleted);
+                // The delete trigger removes the FTS5 rows; the cascade removes the vectors.
+                return Task.FromResult(Sql.Execute(connection, transaction, "DELETE FROM chunks WHERE file_id = $file", ("$file", fileId)));
             },
             cancellationToken);
 
@@ -113,7 +109,7 @@ public sealed class ChunkRepository : IChunkRepository
         return Database.WriteAsync(
             (connection, transaction, token) =>
             {
-                using var vectors = _vectors.BeginWrite(connection, transaction);
+                using var vectors = VectorStorage.BeginWrite(connection, transaction);
                 using var lookup = Sql.Command(
                     connection,
                     transaction,
@@ -138,7 +134,7 @@ public sealed class ChunkRepository : IChunkRepository
                         partition = reader.IsDBNull(1) ? null : reader.GetString(1);
                     }
 
-                    vectors.Upsert(embedding.ChunkId, embedding.Vector.Span, language, partition, isNew: false);
+                    vectors.Upsert(embedding.ChunkId, embedding.Vector.Span, language, partition);
                     if (!embedding.VectorFloat32.IsEmpty)
                     {
                         vectors.UpsertFloat32(embedding.ChunkId, embedding.VectorFloat32.Span);

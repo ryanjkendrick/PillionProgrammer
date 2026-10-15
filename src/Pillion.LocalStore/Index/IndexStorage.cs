@@ -1,7 +1,5 @@
-using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Pillion.LocalStore.Index.SqliteVec;
 
 namespace Pillion.LocalStore.Index;
 
@@ -9,87 +7,63 @@ namespace Pillion.LocalStore.Index;
 public enum VectorBackendPreference
 {
     /// <summary>
-    /// <see cref="AutoVectorIndex"/>: the in-memory brute-force search while the vectors fit
-    /// <see cref="IndexStorageOptions.VectorCacheMaxBytes"/>, then sqlite-vec when the extension loaded, then the
-    /// brute-force table scan.
+    /// <see cref="AutoVectorIndex"/>, the default: brute force over the in-memory copy of the vectors while they fit
+    /// <see cref="IndexStorageOptions.VectorCacheMaxBytes"/>, then the table scan.
     /// </summary>
-    Auto,
+    InMemory,
 
-    /// <summary><see cref="SqliteVecIndex"/>; opening fails when the extension did not load.</summary>
-    SqliteVec,
-
-    /// <summary><see cref="BruteForceVectorIndex"/>, even when the extension loaded (writes still keep the sqlite-vec table in step).</summary>
-    BruteForce,
+    /// <summary><see cref="TableScanVectorIndex"/>: scan <c>chunk_embeddings</c> on every search and keep no copy.</summary>
+    TableScan,
 }
 
 /// <summary>How an <see cref="IndexStorage"/> searches.</summary>
 public sealed class IndexStorageOptions
 {
-    /// <summary>Gets the vector backend. Defaults to <see cref="VectorBackendPreference.Auto"/>.</summary>
-    public VectorBackendPreference VectorBackend { get; init; } = VectorBackendPreference.Auto;
+    /// <summary>Gets the vector backend. Defaults to <see cref="VectorBackendPreference.InMemory"/>.</summary>
+    public VectorBackendPreference VectorBackend { get; init; } = VectorBackendPreference.InMemory;
 
     /// <summary>
-    /// Gets a value indicating whether to load sqlite-vec on the database's connections (when it is available). Defaults
-    /// to <see langword="true"/>; tests turn it off to act as a host without the extension.
-    /// </summary>
-    public bool LoadSqliteVec { get; init; } = true;
-
-    /// <summary>Gets the BM25 weight of the <c>text</c> column (breadcrumb and text, whole identifiers). Defaults to 1.0.</summary>
-    public double TextWeight { get; init; } = 1.0;
-
-    /// <summary>
-    /// Gets the largest in-memory copy of the int8 vectors the brute-force backend keeps, in bytes (about the chunk count
-    /// times the dimension). Defaults to 64 MiB, enough for 170,000 chunks of 384 dimensions; 0 turns the copy off, so every
-    /// brute-force search scans the table.
+    /// Gets the largest in-memory copy of the int8 vectors the default backend keeps, in bytes (about the chunk count times
+    /// the dimension). Defaults to 64 MiB, enough for 170,000 chunks of 384 dimensions; beyond it, and at 0, searches scan
+    /// the table.
     /// </summary>
     public long VectorCacheMaxBytes { get; init; } = 64L * 1024 * 1024;
 
-    /// <summary>
-    /// Gets the page cache of each connection in KiB (SQLite's <c>cache_size</c>), or 0 for SQLite's default (2 MiB). A
-    /// larger cache keeps decrypted pages of the sqlite-vec table in memory between searches, per connection.
-    /// </summary>
-    public int PageCacheKiB { get; init; }
+    /// <summary>Gets the BM25 weight of the <c>text</c> column (breadcrumb and text, whole identifiers). Defaults to 1.0.</summary>
+    public double TextWeight { get; init; } = 1.0;
 
     /// <summary>Gets the BM25 weight of the <c>identifiers</c> column (split identifiers). Defaults to 0.5, so a whole-identifier match ranks above a split one.</summary>
     public double IdentifiersWeight { get; init; } = 0.5;
 }
 
 /// <summary>
-/// The lexical, vector and symbol storage of one index database (work item 2.8): opens the encrypted database with the
-/// sqlite-vec extension loaded on every connection right after the key (when the pinned, hash-checked library is
-/// present), chooses the vector backend and logs the choice once per process, brings the sqlite-vec table up to date,
-/// and hands out the repositories.
+/// The lexical, vector and symbol storage of one index database (work item 2.8): opens the encrypted database (or takes
+/// one already open), chooses the vector backend and logs the choice once per process, and hands out the repositories.
 /// </summary>
+/// <remarks>
+/// Vector search runs in managed code over the int8 vectors in <c>chunk_embeddings</c>. An HNSW or sqlite-vec backend can
+/// be added behind <see cref="IVectorIndex"/> for indexes beyond the in-memory cap (see the README).
+/// </remarks>
 public sealed partial class IndexStorage : IAsyncDisposable
 {
     private static int _choiceLogged;
     private readonly bool _ownsDatabase;
 
-    private IndexStorage(EncryptedDatabase database, bool ownsDatabase, bool sqliteVecLoaded, IndexStorageOptions options)
+    private IndexStorage(EncryptedDatabase database, bool ownsDatabase, IndexStorageOptions options)
     {
         Database = database;
         _ownsDatabase = ownsDatabase;
-        SqliteVecLoaded = sqliteVecLoaded;
         Options = options;
-        var vectors = new VectorStorage(database, sqliteVecLoaded, options.VectorCacheMaxBytes);
+        var vectors = new VectorStorage(database, options.VectorCacheMaxBytes);
         Storage = vectors;
         Chunks = new ChunkRepository(vectors, options.TextWeight, options.IdentifiersWeight);
         Symbols = new SymbolRepository(database);
-        SqliteVec = sqliteVecLoaded ? new SqliteVecIndex(vectors) : null;
-        BruteForce = new BruteForceVectorIndex(vectors);
-        Vectors = options.VectorBackend switch
-        {
-            VectorBackendPreference.BruteForce => BruteForce,
-            VectorBackendPreference.SqliteVec when SqliteVec is not null => SqliteVec,
-            _ => new AutoVectorIndex(vectors),
-        };
+        TableScan = new TableScanVectorIndex(vectors);
+        Vectors = options.VectorBackend == VectorBackendPreference.TableScan ? TableScan : new AutoVectorIndex(vectors);
     }
 
     /// <summary>Gets the database; repository discovery (work item 2.3) shares it for <c>files</c> and <c>meta</c>.</summary>
     public EncryptedDatabase Database { get; }
-
-    /// <summary>Gets a value indicating whether sqlite-vec is loaded on the database's connections.</summary>
-    public bool SqliteVecLoaded { get; }
 
     /// <summary>Gets the options.</summary>
     public IndexStorageOptions Options { get; }
@@ -97,11 +71,8 @@ public sealed partial class IndexStorage : IAsyncDisposable
     /// <summary>Gets the chosen vector backend.</summary>
     public IVectorIndex Vectors { get; }
 
-    /// <summary>Gets the sqlite-vec backend, or <see langword="null"/> when the extension is not loaded.</summary>
-    public SqliteVecIndex? SqliteVec { get; }
-
-    /// <summary>Gets the brute-force backend (always available; the Index window and tests compare the two).</summary>
-    public BruteForceVectorIndex BruteForce { get; }
+    /// <summary>Gets the table-scan backend (always available; tests and the Index window can compare it with the default).</summary>
+    public TableScanVectorIndex TableScan { get; }
 
     /// <summary>Gets the chunks, their FTS5 rows and lexical search.</summary>
     public IChunkRepository Chunks { get; }
@@ -109,17 +80,13 @@ public sealed partial class IndexStorage : IAsyncDisposable
     /// <summary>Gets the symbols and reference edges.</summary>
     public ISymbolRepository Symbols { get; }
 
+    /// <summary>Gets the memory held by the in-memory copy of the vectors, in bytes (0 before the first search).</summary>
+    public long VectorCacheBytes => Storage.CacheBytes;
+
     internal VectorStorage Storage { get; }
 
-    /// <summary>
-    /// Gets the per-connection hook that loads sqlite-vec when it is available; set it as
-    /// <see cref="EncryptedDatabaseOptions.ConnectionOpened"/> when opening an index database elsewhere, then pass the
-    /// database to <see cref="CreateAsync"/>.
-    /// </summary>
-    public static Action<SqliteConnection> LoadSqliteVecHook { get; } = connection => SqliteVecExtension.TryLoad(connection);
-
-    /// <summary>Opens (or creates and migrates) an index database with sqlite-vec loaded, and its storage.</summary>
-    /// <param name="databaseOptions">Where the database and its key live; its <see cref="EncryptedDatabaseOptions.ConnectionOpened"/> runs after the extension loads.</param>
+    /// <summary>Opens (or creates and migrates) an index database and its storage.</summary>
+    /// <param name="databaseOptions">Where the database and its key live.</param>
     /// <param name="schema">The index schema: version 1 (<c>files</c>) followed by <see cref="IndexStorageSchema.Migration"/>.</param>
     /// <param name="options">How to search, or <see langword="null"/> for the defaults.</param>
     /// <param name="logger">The logger.</param>
@@ -134,42 +101,10 @@ public sealed partial class IndexStorage : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(databaseOptions);
         ArgumentNullException.ThrowIfNull(schema);
-        options ??= new IndexStorageOptions();
-        var inner = databaseOptions.ConnectionOpened;
-        var loadSqliteVec = options.LoadSqliteVec;
-        var pageCacheKiB = options.PageCacheKiB;
-        void Hook(SqliteConnection connection)
-        {
-            if (loadSqliteVec)
-            {
-                SqliteVecExtension.TryLoad(connection);
-            }
-
-            if (pageCacheKiB > 0)
-            {
-                using var command = connection.CreateCommand();
-                command.CommandText = string.Create(System.Globalization.CultureInfo.InvariantCulture, $"PRAGMA cache_size = -{pageCacheKiB}");
-                command.ExecuteNonQuery();
-            }
-
-            inner?.Invoke(connection);
-        }
-
-        var database = await EncryptedDatabase.OpenAsync(
-            new EncryptedDatabaseOptions
-            {
-                DatabasePath = databaseOptions.DatabasePath,
-                KeyFilePath = databaseOptions.KeyFilePath,
-                BusyTimeout = databaseOptions.BusyTimeout,
-                MaxReaders = databaseOptions.MaxReaders,
-                ConnectionOpened = Hook,
-            },
-            schema,
-            logger,
-            cancellationToken).ConfigureAwait(false);
+        var database = await EncryptedDatabase.OpenAsync(databaseOptions, schema, logger, cancellationToken).ConfigureAwait(false);
         try
         {
-            return await CreateAsync(database, ownsDatabase: true, options, logger, cancellationToken).ConfigureAwait(false);
+            return CreateCore(database, ownsDatabase: true, options, logger);
         }
         catch
         {
@@ -178,64 +113,18 @@ public sealed partial class IndexStorage : IAsyncDisposable
         }
     }
 
-    /// <summary>Creates the storage over an index database that is already open (with <see cref="LoadSqliteVecHook"/>, for sqlite-vec).</summary>
+    /// <summary>Creates the storage over an index database that is already open.</summary>
     /// <param name="database">The database, at index schema version 2 or later.</param>
     /// <param name="ownsDatabase">Whether disposing the storage disposes the database.</param>
     /// <param name="options">How to search, or <see langword="null"/> for the defaults.</param>
     /// <param name="logger">The logger.</param>
-    /// <param name="cancellationToken">Cancels the call.</param>
     /// <returns>The storage.</returns>
-    /// <exception cref="InvalidOperationException">The database is older than index schema version 2, or sqlite-vec was required and is not loaded.</exception>
-    public static async Task<IndexStorage> CreateAsync(
-        EncryptedDatabase database,
-        bool ownsDatabase,
-        IndexStorageOptions? options = null,
-        ILogger? logger = null,
-        CancellationToken cancellationToken = default)
+    /// <exception cref="InvalidOperationException">The database is older than index schema version 2.</exception>
+    public static IndexStorage Create(EncryptedDatabase database, bool ownsDatabase, IndexStorageOptions? options = null, ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(database);
-        options ??= new IndexStorageOptions();
-        logger ??= NullLogger.Instance;
-        if (database.SchemaVersion < IndexStorageSchema.Version)
-        {
-            throw new InvalidOperationException($"The index database is at schema version {database.SchemaVersion}; index storage needs version {IndexStorageSchema.Version} or later.");
-        }
-
-        var loaded = await database.ReadAsync(
-            (connection, _) =>
-            {
-                try
-                {
-                    using var command = connection.CreateCommand();
-                    command.CommandText = "SELECT vec_version()";
-                    command.ExecuteScalar();
-                    return Task.FromResult(true);
-                }
-                catch (SqliteException)
-                {
-                    return Task.FromResult(false);
-                }
-            },
-            cancellationToken).ConfigureAwait(false);
-
-        if (options.VectorBackend == VectorBackendPreference.SqliteVec && !loaded)
-        {
-            throw new InvalidOperationException($"The sqlite-vec backend was required, but the extension is not loaded: {SqliteVecExtension.Status.Reason ?? "it was not requested for this database"}.");
-        }
-
-        var storage = new IndexStorage(database, ownsDatabase, loaded, options);
-        LogChoice(logger, storage, options);
-        var maintenance = await storage.Storage.MaintainAsync(cancellationToken).ConfigureAwait(false);
-        if (maintenance == VectorMaintenance.Rebuilt)
-        {
-            LogRebuilt(logger, database.DatabasePath);
-        }
-
-        return storage;
+        return CreateCore(database, ownsDatabase, options, logger);
     }
-
-    /// <summary>Gets the memory held by the brute-force backend's in-memory copy of the vectors, in bytes (0 before the first search).</summary>
-    public long VectorCacheBytes => Storage.CacheBytes;
 
     /// <summary>
     /// Loads (or reloads, after vectors changed) the in-memory copy of the vectors now, so the next search does not pay
@@ -261,17 +150,19 @@ public sealed partial class IndexStorage : IAsyncDisposable
         }
     }
 
-    private static void LogChoice(ILogger logger, IndexStorage storage, IndexStorageOptions options)
+    private static IndexStorage CreateCore(EncryptedDatabase database, bool ownsDatabase, IndexStorageOptions? options, ILogger? logger)
     {
-        var status = SqliteVecExtension.Status;
-        var sqliteVec = storage.SqliteVecLoaded
-            ? $"sqlite-vec {status.LoadedVersion} loaded from {status.LibraryPath}"
-            : options.LoadSqliteVec ? $"sqlite-vec unavailable: {status.Reason}" : "sqlite-vec not requested";
+        options ??= new IndexStorageOptions();
+        logger ??= NullLogger.Instance;
+        if (database.SchemaVersion < IndexStorageSchema.Version)
+        {
+            throw new InvalidOperationException($"The index database is at schema version {database.SchemaVersion}; index storage needs version {IndexStorageSchema.Version} or later.");
+        }
+
+        var storage = new IndexStorage(database, ownsDatabase, options);
         var reason = storage.Vectors is AutoVectorIndex
-            ? (storage.SqliteVecLoaded
-                ? $"in-memory brute force while the vectors fit {options.VectorCacheMaxBytes / 1048576.0:0.#} MiB, then sqlite-vec; {sqliteVec}"
-                : $"in-memory brute force while the vectors fit {options.VectorCacheMaxBytes / 1048576.0:0.#} MiB, then a table scan; {sqliteVec}")
-            : sqliteVec;
+            ? $"brute force over an in-memory copy of the vectors while they fit {options.VectorCacheMaxBytes / 1048576.0:0.#} MiB, then a table scan"
+            : "brute force over the table on every search";
         if (Interlocked.Exchange(ref _choiceLogged, 1) == 0)
         {
             LogBackend(logger, storage.Vectors.Backend, reason);
@@ -280,6 +171,8 @@ public sealed partial class IndexStorage : IAsyncDisposable
         {
             LogBackendAgain(logger, storage.Vectors.Backend, reason);
         }
+
+        return storage;
     }
 
     [LoggerMessage(EventId = 2110, Level = LogLevel.Information, Message = "Index vector search uses the {Backend} backend ({Reason}).")]
@@ -287,7 +180,4 @@ public sealed partial class IndexStorage : IAsyncDisposable
 
     [LoggerMessage(EventId = 2111, Level = LogLevel.Debug, Message = "Index vector search uses the {Backend} backend ({Reason}).")]
     private static partial void LogBackendAgain(ILogger logger, string backend, string reason);
-
-    [LoggerMessage(EventId = 2112, Level = LogLevel.Information, Message = "Rebuilt the sqlite-vec table of {Path} from its stored vectors.")]
-    private static partial void LogRebuilt(ILogger logger, string path);
 }
