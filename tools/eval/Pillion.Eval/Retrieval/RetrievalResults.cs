@@ -39,6 +39,9 @@ internal sealed record RetrievalRunOptions
     /// <summary>Gets a value indicating whether the temporary corpus and index are kept.</summary>
     public bool KeepIndex { get; init; }
 
+    /// <summary>Gets a folder that keeps each set and model's corpus and index between runs (a stopped run resumes), or <see langword="null"/> for a fresh temporary folder that is deleted.</summary>
+    public string? WorkDirectory { get; init; }
+
     /// <summary>Gets the longest indexing may take.</summary>
     public TimeSpan IndexTimeout { get; init; } = TimeSpan.FromHours(3);
 

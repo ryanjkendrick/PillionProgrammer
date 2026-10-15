@@ -30,6 +30,8 @@ internal static class Program
           --directml                      let bundled models run on DirectML (the baseline is the CPU)
           --index-timeout-min <n>         longest indexing may take (default 180)
           --keep-index                    keep the temporary corpus and index
+          --work-dir <folder>             keep each set and model's corpus and index under this folder; running
+                                          again with the same folder resumes a stopped run
           --allow-missing-files           run even when an expected file is not in the corpus
           --verbose                       show host logs at Information level
 
@@ -139,6 +141,9 @@ internal sealed class CommandLine
     /// <summary>Gets the output root, or <see langword="null"/> for the default.</summary>
     public string? Out { get; private set; }
 
+    /// <summary>Gets the work folder, or <see langword="null"/> for a temporary one.</summary>
+    public string? WorkDirectory { get; private set; }
+
     /// <summary>Gets the models folder, or <see langword="null"/> for the default.</summary>
     public string? ModelsDirectory { get; private set; }
 
@@ -184,6 +189,9 @@ internal sealed class CommandLine
                     break;
                 case "--out":
                     result.Out = Value();
+                    break;
+                case "--work-dir":
+                    result.WorkDirectory = Value();
                     break;
                 case "--models-dir":
                     result.ModelsDirectory = Value();
@@ -232,6 +240,7 @@ internal sealed class CommandLine
             OllamaEndpoint = Ollama,
             DirectML = Flags.Contains("--directml"),
             KeepIndex = Flags.Contains("--keep-index"),
+            WorkDirectory = WorkDirectory,
             IndexTimeout = IndexTimeout,
             Verbose = Flags.Contains("--verbose"),
             AllowMissingFiles = Flags.Contains("--allow-missing-files"),

@@ -92,15 +92,31 @@ internal static class RetrievalRunner
             await log.WriteLineAsync($"  Ollama resident before the run: {(residentBefore.Count == 0 ? "nothing" : string.Join(", ", residentBefore))}").ConfigureAwait(false);
         }
 
-        var temp = Path.Combine(Path.GetTempPath(), "pillion-eval", Guid.NewGuid().ToString("N")[..12]);
+        // A work folder makes the run resumable: the corpus is copied once and the index kept, so a run that was stopped
+        // picks up where the pipeline left off (files already stored are not embedded again).
+        var keep = options.KeepIndex || options.WorkDirectory is not null;
+        var temp = options.WorkDirectory is { } work
+            ? Path.Combine(Path.GetFullPath(work), $"{set.Name}__{model.FileSafeName}")
+            : Path.Combine(Path.GetTempPath(), "pillion-eval", Guid.NewGuid().ToString("N")[..12]);
         var corpusRoot = Path.Combine(temp, "corpus");
         var dataRoot = Path.Combine(temp, "data");
+        var copied = Path.Combine(temp, "corpus.complete");
         Directory.CreateDirectory(corpusRoot);
         Directory.CreateDirectory(dataRoot);
         try
         {
-            var corpusFiles = Corpus.Copy(set, corpusRoot);
-            await log.WriteLineAsync(string.Create(CultureInfo.InvariantCulture, $"  corpus: {corpusFiles.Count} files in {corpusRoot}")).ConfigureAwait(false);
+            IReadOnlyList<string> corpusFiles;
+            if (File.Exists(copied))
+            {
+                corpusFiles = Corpus.List(set);
+                await log.WriteLineAsync(string.Create(CultureInfo.InvariantCulture, $"  corpus: {corpusFiles.Count} files, already in {corpusRoot} (resuming)")).ConfigureAwait(false);
+            }
+            else
+            {
+                corpusFiles = Corpus.Copy(set, corpusRoot);
+                await File.WriteAllTextAsync(copied, DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture), cancellationToken).ConfigureAwait(false);
+                await log.WriteLineAsync(string.Create(CultureInfo.InvariantCulture, $"  corpus: {corpusFiles.Count} files in {corpusRoot}")).ConfigureAwait(false);
+            }
 
             await using var environment = await EvalEnvironment.CreateAsync(model, options, dataRoot, cancellationToken).ConfigureAwait(false);
             var clock = Stopwatch.StartNew();
@@ -131,6 +147,9 @@ internal static class RetrievalRunner
                 }
             }
 
+            var indexedFiles = indexed.Select(c => c.File).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            warnings.AddRange(set.Queries.SelectMany(q => q.ExpectedFiles.Where(f => !indexedFiles.Contains(f)).Select(f =>
+                $"{q.Id}: expected file '{f}' is in the corpus but not in the index (excluded by discovery or not chunked).")));
             warnings.AddRange(UnreachableSymbols(set, indexed));
 
             var modes = new List<ModeSummary>();
@@ -209,7 +228,7 @@ internal static class RetrievalRunner
                 await ModelIdentity.UnloadOllamaAsync(model, options.OllamaEndpoint, CancellationToken.None).ConfigureAwait(false);
             }
 
-            if (options.KeepIndex)
+            if (keep)
             {
                 await log.WriteLineAsync($"  kept {temp}").ConfigureAwait(false);
             }
