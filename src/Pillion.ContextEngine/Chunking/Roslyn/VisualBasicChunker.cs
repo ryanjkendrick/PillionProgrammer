@@ -17,7 +17,7 @@ public sealed class VisualBasicChunker : SyntaxChunker
     /// <inheritdoc />
     public override string Language => LanguageIds.VisualBasic;
 
-    private protected override List<ChunkUnit>? CollectUnits(TokenBudget budget, out string? failure)
+    private protected override List<ChunkUnit>? CollectUnits(TokenBudget budget, ResourceScope scope, out string? failure)
     {
         var document = budget.Document;
         var tree = VisualBasicSyntaxTree.ParseText(document.Text, s_parseOptions, document.Path);
@@ -72,12 +72,12 @@ public sealed class VisualBasicChunker : SyntaxChunker
                     case FieldDeclarationSyntax field:
                         var names = field.Declarators.SelectMany(d => d.Names).Select(n => n.Identifier.ValueText);
                         var fieldUnit = Add(field, ChunkKind.Member, container, string.Join(", ", names));
-                        fieldUnit.AddSplitSource(() => StatementStarts(field));
+                        fieldUnit.AddRankedSplitSource(() => StatementStarts(field));
                         break;
 
                     case MethodBlockBaseSyntax or PropertyBlockSyntax or EventBlockSyntax or MethodBaseSyntax:
                         var unit = Add(member, ChunkKind.Member, container, NameOf(member));
-                        unit.AddSplitSource(() => StatementStarts(member));
+                        unit.AddRankedSplitSource(() => StatementStarts(member));
                         break;
 
                     default:
@@ -123,11 +123,13 @@ public sealed class VisualBasicChunker : SyntaxChunker
             return unit;
         }
 
-        private IEnumerable<int> StatementStarts(SyntaxNode node) => node
+        private IEnumerable<SplitPoint> StatementStarts(SyntaxNode node) => node
             .DescendantNodes()
-            .Where(n => n is ExecutableStatementSyntax or AccessorBlockSyntax or CaseBlockSyntax
-                or ExpressionSyntax { Parent: CollectionInitializerSyntax })
-            .Select(n => Line(n.SpanStart));
+            .Where(IsSplitNode)
+            .Select(n => new SplitPoint(Line(n.SpanStart), n.Ancestors().TakeWhile(a => a != node).Count(IsSplitNode)));
+
+        private static bool IsSplitNode(SyntaxNode n) => n is ExecutableStatementSyntax or AccessorBlockSyntax
+            or CaseBlockSyntax or ExpressionSyntax { Parent: CollectionInitializerSyntax };
 
         private static string NameOf(StatementSyntax member)
         {

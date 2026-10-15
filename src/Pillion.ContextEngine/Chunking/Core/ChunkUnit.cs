@@ -8,7 +8,7 @@ namespace Pillion.ContextEngine.Chunking.Core;
 internal sealed class ChunkUnit
 {
     private List<int>? _extraSplits;
-    private List<Func<IEnumerable<int>>>? _splitSources;
+    private List<Func<IEnumerable<SplitPoint>>>? _splitSources;
 
     public ChunkUnit(int startLine, int endLine, ChunkKind kind, IReadOnlyList<string> container, string? name = null)
     {
@@ -41,8 +41,15 @@ internal sealed class ChunkUnit
     /// </summary>
     public string? MergeKey { get; init; }
 
-    /// <summary>Adds a lazily computed set of lines where a part may begin when the unit is split (statement starts).</summary>
-    public void AddSplitSource(Func<IEnumerable<int>> source) => (_splitSources ??= []).Add(source);
+    /// <summary>Adds a lazily computed set of lines where a part may begin when the unit is split, all of rank 0.</summary>
+    public void AddSplitSource(Func<IEnumerable<int>> source) =>
+        (_splitSources ??= []).Add(() => source().Select(line => new SplitPoint(line, 0)));
+
+    /// <summary>
+    /// Adds a lazily computed set of split points with ranks (statement nesting depth): when a part must end, the
+    /// assembler prefers the lowest rank among the acceptable points, so parts break between top-level statements.
+    /// </summary>
+    public void AddRankedSplitSource(Func<IEnumerable<SplitPoint>> source) => (_splitSources ??= []).Add(source);
 
     /// <summary>Adds one line where a part may begin.</summary>
     public void AddSplit(int line) => (_extraSplits ??= []).Add(line);
@@ -85,15 +92,18 @@ internal sealed class ChunkUnit
         }
     }
 
-    /// <summary>The split lines strictly inside (<paramref name="startLine"/>, <paramref name="endLine"/>], sorted.</summary>
-    public int[] ResolveSplits(int startLine, int endLine)
+    /// <summary>
+    /// The split points strictly inside (<paramref name="startLine"/>, <paramref name="endLine"/>], one per line with
+    /// the lowest rank seen for it, sorted by line.
+    /// </summary>
+    public SplitPoint[] ResolveSplits(int startLine, int endLine)
     {
-        var lines = new SortedSet<int>();
-        void Add(int line)
+        var ranks = new SortedDictionary<int, int>();
+        void Add(int line, int rank)
         {
             if (line > startLine && line <= endLine)
             {
-                lines.Add(line);
+                ranks[line] = ranks.TryGetValue(line, out var existing) ? Math.Min(existing, rank) : rank;
             }
         }
 
@@ -101,7 +111,7 @@ internal sealed class ChunkUnit
         {
             foreach (var line in _extraSplits)
             {
-                Add(line);
+                Add(line, 0);
             }
         }
 
@@ -109,13 +119,16 @@ internal sealed class ChunkUnit
         {
             foreach (var source in _splitSources)
             {
-                foreach (var line in source())
+                foreach (var point in source())
                 {
-                    Add(line);
+                    Add(point.Line, Math.Max(0, point.Rank));
                 }
             }
         }
 
-        return [.. lines];
+        return [.. ranks.Select(pair => new SplitPoint(pair.Key, pair.Value))];
     }
 }
+
+/// <summary>A line where a split part may begin; lower ranks (shallower statements) are preferred.</summary>
+internal readonly record struct SplitPoint(int Line, int Rank);

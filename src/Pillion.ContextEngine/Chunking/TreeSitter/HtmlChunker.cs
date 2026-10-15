@@ -12,26 +12,27 @@ namespace Pillion.ContextEngine.Chunking.TreeSitter;
 /// </summary>
 public sealed class HtmlChunker : SyntaxChunker
 {
-    private readonly GrammarLoader _loader = GrammarLoader.For(TreeSitterGrammars.Html.GrammarId);
 
     /// <inheritdoc />
     public override string Language => LanguageIds.Html;
 
-    private protected override List<ChunkUnit>? CollectUnits(TokenBudget budget, out string? failure) =>
-        CollectMarkup(_loader, budget, budget.Document.Text, TreeSitterGrammars.Html.MaxErrorFraction, out failure);
+    private protected override List<ChunkUnit>? CollectUnits(TokenBudget budget, ResourceScope scope, out string? failure) =>
+        CollectMarkup(Loader, budget, budget.Document.Text, TreeSitterGrammars.Html.MaxErrorFraction, scope, out failure);
 
     /// <summary>
     /// Finds markup units in <paramref name="text"/>, which has the document's length and line breaks (Razor passes
     /// its markup with the code blocks blanked out).
     /// </summary>
     internal static List<ChunkUnit>? CollectMarkup(GrammarLoader loader, TokenBudget budget, string text,
-        double maxErrorFraction, out string? failure)
+        double maxErrorFraction, ResourceScope scope, out string? failure)
     {
-        using var tree = TreeSitterChunker.Parse(loader, text, maxErrorFraction, out failure);
+        var tree = TreeSitterChunker.Parse(loader, text, maxErrorFraction, out failure);
         if (tree is null)
         {
             return null;
         }
+
+        scope.Add(tree);
 
         var units = new List<ChunkUnit>();
         new MarkupCollector(budget, units).VisitChildren(tree.RootNode, []);

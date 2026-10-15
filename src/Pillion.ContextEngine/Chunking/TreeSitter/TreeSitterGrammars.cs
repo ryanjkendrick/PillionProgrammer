@@ -25,6 +25,7 @@ public static class TreeSitterGrammars
         BodyTypes = Set("class_body"),
         FunctionValueDeclarations = Set("lexical_declaration", "variable_declaration"),
         FunctionValueTypes = s_jsFunctionValues,
+        NameFields = ["name", "property"],
     };
 
     /// <summary>TypeScript.</summary>

@@ -155,7 +155,7 @@ internal static partial class ChunkAssembler
     private static List<(int Start, int End)> Pack(TokenBudget budget, ChunkUnit unit, int start, int end, int lineBudget)
     {
         var ranges = new List<(int, int)>();
-        int[]? splits = null;
+        SplitPoint[]? splits = null;
         var part = start;
         while (part <= end)
         {
@@ -182,11 +182,25 @@ internal static partial class ChunkAssembler
 
             splits ??= unit.ResolveSplits(start, end);
             var cut = next;
-            var index = Array.BinarySearch(splits, next);
-            index = index >= 0 ? index : ~index - 1;
-            if (index >= 0 && splits[index] > part && budget.RangeTokens(part, splits[index] - 1) * 3 >= lineBudget)
+            var bestRank = int.MaxValue;
+            var index = UpperBound(splits, next) - 1;
+            for (; index >= 0 && splits[index].Line > part; index--)
             {
-                cut = splits[index];
+                var candidate = splits[index];
+                if (budget.RangeTokens(part, candidate.Line - 1) * 3 < lineBudget)
+                {
+                    break; // earlier points would leave the part less than a third full
+                }
+
+                if (candidate.Rank < bestRank)
+                {
+                    bestRank = candidate.Rank;
+                    cut = candidate.Line;
+                    if (bestRank == 0)
+                    {
+                        break;
+                    }
+                }
             }
 
             ranges.Add((part, cut - 1));
@@ -194,6 +208,27 @@ internal static partial class ChunkAssembler
         }
 
         return ranges;
+    }
+
+    /// <summary>The index of the first split point whose line is greater than <paramref name="line"/>.</summary>
+    private static int UpperBound(SplitPoint[] splits, int line)
+    {
+        var low = 0;
+        var high = splits.Length;
+        while (low < high)
+        {
+            var middle = low + ((high - low) / 2);
+            if (splits[middle].Line <= line)
+            {
+                low = middle + 1;
+            }
+            else
+            {
+                high = middle;
+            }
+        }
+
+        return low;
     }
 
     /// <summary>Checks a packed range with a real count; halves it (or truncates a single line) until it fits.</summary>

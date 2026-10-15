@@ -28,7 +28,8 @@ public abstract class SyntaxChunker : IChunker
         string? failure;
         try
         {
-            var units = CollectUnits(budget, out failure);
+            using var scope = new ResourceScope();
+            var units = CollectUnits(budget, scope, out failure);
             if (units is not null)
             {
                 return ChunkAssembler.AssemblePartitioned(budget, units, Language);
@@ -56,6 +57,9 @@ public abstract class SyntaxChunker : IChunker
         }
     }
 
-    /// <summary>Finds the units of a file, or returns null with a reason to fall back to windows.</summary>
-    private protected abstract List<ChunkUnit>? CollectUnits(TokenBudget budget, out string? failure);
+    /// <summary>
+    /// Finds the units of a file, or returns null with a reason to fall back to windows. Native resources the units
+    /// still point into (syntax trees) go in <paramref name="scope"/>, which is disposed after assembly.
+    /// </summary>
+    private protected abstract List<ChunkUnit>? CollectUnits(TokenBudget budget, ResourceScope scope, out string? failure);
 }

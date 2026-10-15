@@ -37,13 +37,15 @@ public sealed class TreeSitterChunker : SyntaxChunker
     /// <summary>True when the grammar's native library loads on this machine.</summary>
     public bool IsAvailable => _loader.Language is not null;
 
-    private protected override List<ChunkUnit>? CollectUnits(TokenBudget budget, out string? failure)
+    private protected override List<ChunkUnit>? CollectUnits(TokenBudget budget, ResourceScope scope, out string? failure)
     {
-        using var tree = Parse(_loader, budget.Document.Text, Grammar.MaxErrorFraction, out failure);
+        var tree = Parse(_loader, budget.Document.Text, Grammar.MaxErrorFraction, out failure);
         if (tree is null)
         {
             return null;
         }
+
+        scope.Add(tree);
 
         var units = new List<ChunkUnit>();
         new Collector(Grammar, budget.Document, units).Visit(tree.RootNode, []);
@@ -265,7 +267,7 @@ public sealed class TreeSitterChunker : SyntaxChunker
             {
                 MergeKey = mergeKey,
             };
-            unit.AddSplitSource(() => BlockStatementStarts(node));
+            unit.AddRankedSplitSource(() => BlockStatementStarts(node));
             units.Add(unit);
         }
 
@@ -276,7 +278,7 @@ public sealed class TreeSitterChunker : SyntaxChunker
             {
                 MergeKey = "document|" + string.Join("|", segments),
             };
-            unit.AddSplitSource(() => BlockStatementStarts(range));
+            unit.AddRankedSplitSource(() => BlockStatementStarts(range));
             units.Add(unit);
         }
 
@@ -382,37 +384,42 @@ public sealed class TreeSitterChunker : SyntaxChunker
             return null;
         }
 
-        /// <summary>Start lines of the named children of every block inside a node (iterative, any depth).</summary>
-        private List<int> BlockStatementStarts(TsNode node)
+        /// <summary>
+        /// Start lines of the named children of every block inside a node (iterative, any depth), ranked by how many
+        /// blocks enclose them, so parts break between the outermost statements when they can.
+        /// </summary>
+        private List<SplitPoint> BlockStatementStarts(TsNode node)
         {
-            var lines = new List<int>();
-            var parentIsBlock = new Stack<bool>();
+            var points = new List<SplitPoint>();
+            var saved = new Stack<(bool InsideBlock, int Depth)>();
             var insideBlock = false;
+            var depth = 0;
             using var cursor = new TsTreeCursor(node);
             while (true)
             {
                 var current = cursor.CurrentNode;
                 if (insideBlock && current.IsNamed)
                 {
-                    lines.Add(Line(current.StartIndex));
+                    points.Add(new SplitPoint(Line(current.StartIndex), depth - 1));
                 }
 
                 var isBlock = grammar.Blocks.Contains(current.Type);
                 if (cursor.GotoFirstChild())
                 {
-                    parentIsBlock.Push(insideBlock);
+                    saved.Push((insideBlock, depth));
                     insideBlock = isBlock;
+                    depth += isBlock ? 1 : 0;
                     continue;
                 }
 
                 while (!cursor.GotoNextSibling())
                 {
-                    if (parentIsBlock.Count == 0 || !cursor.GotoParent())
+                    if (saved.Count == 0 || !cursor.GotoParent())
                     {
-                        return lines;
+                        return points;
                     }
 
-                    insideBlock = parentIsBlock.Pop();
+                    (insideBlock, depth) = saved.Pop();
                 }
             }
         }

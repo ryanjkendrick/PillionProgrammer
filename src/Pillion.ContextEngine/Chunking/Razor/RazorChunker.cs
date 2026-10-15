@@ -20,7 +20,7 @@ public sealed class RazorChunker : SyntaxChunker
     /// <inheritdoc />
     public override string Language => LanguageIds.Razor;
 
-    private protected override List<ChunkUnit>? CollectUnits(TokenBudget budget, out string? failure)
+    private protected override List<ChunkUnit>? CollectUnits(TokenBudget budget, ResourceScope scope, out string? failure)
     {
         failure = null;
         var document = budget.Document;
@@ -44,7 +44,7 @@ public sealed class RazorChunker : SyntaxChunker
 
         // Markup: the same text with every code block replaced by spaces (line breaks kept, so offsets and lines match).
         var masked = Mask(text, blocks);
-        var markup = HtmlChunker.CollectMarkup(HtmlChunker.Loader, budget, masked, maxErrorFraction: 1.0, out _);
+        var markup = HtmlChunker.CollectMarkup(HtmlChunker.Loader, budget, masked, maxErrorFraction: 1.0, scope, out _);
         if (markup is not null)
         {
             units.AddRange(markup);
@@ -83,7 +83,7 @@ public sealed class RazorChunker : SyntaxChunker
         var start = document.LineOfOffset(block.Start);
         var end = document.LineOfOffset(block.Close);
         var unit = new ChunkUnit(start, end, ChunkKind.Member, container, "@{ }");
-        unit.AddSplitSource(() =>
+        unit.AddRankedSplitSource(() =>
         {
             const string Prefix = "class __RazorBlock { void __Render() {";
             var contentStart = block.Open + 1;
@@ -93,7 +93,9 @@ public sealed class RazorChunker : SyntaxChunker
             return root.DescendantNodes()
                 .OfType<StatementSyntax>()
                 .Where(s => s is not BlockSyntax && s.SpanStart >= Prefix.Length)
-                .Select(s => document.LineOfOffset(contentStart + (s.SpanStart - Prefix.Length)));
+                .Select(s => new SplitPoint(
+                    document.LineOfOffset(contentStart + (s.SpanStart - Prefix.Length)),
+                    s.Ancestors().Count(a => a is StatementSyntax and not BlockSyntax)));
         });
         units.Add(unit);
     }

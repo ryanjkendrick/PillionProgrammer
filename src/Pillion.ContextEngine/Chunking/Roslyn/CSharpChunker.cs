@@ -17,7 +17,7 @@ public sealed class CSharpChunker : SyntaxChunker
     /// <inheritdoc />
     public override string Language => LanguageIds.CSharp;
 
-    private protected override List<ChunkUnit>? CollectUnits(TokenBudget budget, out string? failure)
+    private protected override List<ChunkUnit>? CollectUnits(TokenBudget budget, ResourceScope scope, out string? failure)
     {
         var document = budget.Document;
         var tree = CSharpSyntaxTree.ParseText(document.Text, s_parseOptions, document.Path);
@@ -92,7 +92,7 @@ internal sealed class CSharpUnitCollector(SourceDocument document, Func<int, int
 
                 case GlobalStatementSyntax or IncompleteMemberSyntax:
                     var statementUnit = AddDocument(member, container);
-                    statementUnit.AddSplitSource(() => StatementStarts(member));
+                    statementUnit.AddRankedSplitSource(() => StatementStarts(member));
                     break;
 
                 case BaseFieldDeclarationSyntax field:
@@ -131,7 +131,7 @@ internal sealed class CSharpUnitCollector(SourceDocument document, Func<int, int
         {
             MergeKey = mergeKey,
         };
-        unit.AddSplitSource(() => StatementStarts(member));
+        unit.AddRankedSplitSource(() => StatementStarts(member));
         units.Add(unit);
         return unit;
     }
@@ -153,17 +153,22 @@ internal sealed class CSharpUnitCollector(SourceDocument document, Func<int, int
         return unit;
     }
 
-    /// <summary>Lines where a split part may begin: statements, accessors, switch sections and initializer elements.</summary>
-    private IEnumerable<int> StatementStarts(SyntaxNode node) => node
+    /// <summary>
+    /// Where a split part may begin: statements, accessors, switch sections and initializer elements, ranked by how
+    /// many statements enclose them inside the member, so parts break between top-level statements when they can.
+    /// </summary>
+    private IEnumerable<SplitPoint> StatementStarts(SyntaxNode node) => node
         .DescendantNodes()
-        .Where(n => n is StatementSyntax and not BlockSyntax
-            or AccessorDeclarationSyntax
-            or SwitchSectionSyntax
-            or SwitchExpressionArmSyntax
-            or ExpressionSyntax { Parent: InitializerExpressionSyntax }
-            or CollectionElementSyntax
-            or MemberDeclarationSyntax)
-        .Select(n => Line(n.SpanStart));
+        .Where(IsSplitNode)
+        .Select(n => new SplitPoint(Line(n.SpanStart), n.Ancestors().TakeWhile(a => a != node).Count(IsSplitNode)));
+
+    private static bool IsSplitNode(SyntaxNode n) => n is StatementSyntax and not BlockSyntax
+        or AccessorDeclarationSyntax
+        or SwitchSectionSyntax
+        or SwitchExpressionArmSyntax
+        or ExpressionSyntax { Parent: InitializerExpressionSyntax }
+        or CollectionElementSyntax
+        or MemberDeclarationSyntax;
 
     private static string NameOf(MemberDeclarationSyntax member) => member switch
     {

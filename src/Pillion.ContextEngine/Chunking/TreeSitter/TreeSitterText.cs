@@ -12,9 +12,21 @@ internal static class TreeSitterText
     /// <summary>The text of a name node; a C-style declarator is followed down to its identifier first.</summary>
     public static string NameText(SourceDocument document, TsNode node)
     {
-        var guard = 0;
-        while (guard++ < 32 && node.GetChildForField("declarator") is { } inner)
+        // Follow C and C++ declarators down to the name: pointer, reference, function and array declarators wrap it,
+        // usually in a "declarator" field, but a reference declarator has its inner declarator as a plain child.
+        for (var guard = 0; guard < 32; guard++)
         {
+            var inner = node.GetChildForField("declarator");
+            if (inner is null && node.Type.EndsWith("_declarator", StringComparison.Ordinal))
+            {
+                inner = FirstNamedChild(node);
+            }
+
+            if (inner is null)
+            {
+                break;
+            }
+
             node = inner;
         }
 
@@ -22,7 +34,10 @@ internal static class TreeSitterText
     }
 
     /// <summary>The text of a node's first named child (a package clause's name).</summary>
-    public static string FirstNamedChildText(SourceDocument document, TsNode node)
+    public static string FirstNamedChildText(SourceDocument document, TsNode node) =>
+        FirstNamedChild(node) is { } child ? Slice(document, child.StartIndex, child.EndIndex) : string.Empty;
+
+    private static TsNode? FirstNamedChild(TsNode node)
     {
         using var cursor = new TsTreeCursor(node);
         if (cursor.GotoFirstChild())
@@ -32,22 +47,30 @@ internal static class TreeSitterText
                 var child = cursor.CurrentNode;
                 if (child.IsNamed)
                 {
-                    return Slice(document, child.StartIndex, child.EndIndex);
+                    return child;
                 }
             }
             while (cursor.GotoNextSibling());
         }
 
-        return string.Empty;
+        return null;
     }
 
-    /// <summary>A node's first line up to an opening brace, for nodes without a name (CSS selectors, <c>@media</c>).</summary>
+    /// <summary>
+    /// A node's text up to its opening brace (or its first line when there is no brace nearby), for nodes without a
+    /// name: CSS selectors over several lines, <c>@media</c> queries.
+    /// </summary>
     public static string HeaderText(SourceDocument document, TsNode node)
     {
         var start = Math.Clamp(node.StartIndex, 0, document.Text.Length);
         var end = Math.Clamp(node.EndIndex, start, Math.Min(document.Text.Length, start + MaxNameSource));
         var span = document.Text.AsSpan(start, end - start);
-        var stop = span.IndexOfAny('{', '\n', '\r');
+        var stop = span.IndexOf('{');
+        if (stop < 0)
+        {
+            stop = span.IndexOfAny('\n', '\r');
+        }
+
         if (stop >= 0)
         {
             span = span[..stop];

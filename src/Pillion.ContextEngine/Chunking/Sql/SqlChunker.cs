@@ -15,7 +15,7 @@ public sealed partial class SqlChunker : SyntaxChunker
     /// <inheritdoc />
     public override string Language => LanguageIds.Sql;
 
-    private protected override List<ChunkUnit>? CollectUnits(TokenBudget budget, out string? failure)
+    private protected override List<ChunkUnit>? CollectUnits(TokenBudget budget, ResourceScope scope, out string? failure)
     {
         failure = null;
         var document = budget.Document;
