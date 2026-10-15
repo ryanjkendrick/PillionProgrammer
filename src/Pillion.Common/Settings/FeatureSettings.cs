@@ -45,6 +45,9 @@ public static class FeatureNames
     /// <summary>The chat window's Context Inspector and Outbound log view (work item 1.13).</summary>
     public const string OutboundLogView = "outboundLogView";
 
+    /// <summary>The Local Store: Pillion Host's encrypted SQLite databases, starting with <c>conversations.db</c> (work item 2.1).</summary>
+    public const string LocalStore = "localStore";
+
     /// <summary>Gets every feature flag name, in the order they are written to <c>settings.json</c>.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
@@ -62,6 +65,7 @@ public static class FeatureNames
         InlineChat,
         Mentions,
         OutboundLogView,
+        LocalStore,
     ];
 }
 
@@ -127,6 +131,7 @@ public sealed class FeatureSettings : SettingsNode
             "inlinechat" => InlineChat,
             "mentions" => Mentions,
             "outboundlogview" => OutboundLogView,
+            "localstore" => LocalStore,
             _ => true,
         };
     }
@@ -181,6 +186,9 @@ public sealed class FeatureSettings : SettingsNode
             case "outboundlogview":
                 OutboundLogView = false;
                 break;
+            case "localstore":
+                LocalStore = false;
+                break;
         }
     }
 
@@ -192,4 +200,7 @@ public sealed class FeatureSettings : SettingsNode
 
     /// <summary>Gets or sets a value indicating whether the chat window shows the Context Inspector and the Outbound log, and the host answers their read methods.</summary>
     public bool OutboundLogView { get; set; } = true;
+
+    /// <summary>Gets or sets a value indicating whether Pillion Host may create and open its encrypted Local Store databases (<c>conversations.db</c>). When off, opening the store fails with a policy error.</summary>
+    public bool LocalStore { get; set; } = true;
 }

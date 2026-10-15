@@ -113,6 +113,23 @@
     <PackageVersion Include="Microsoft.CodeAnalysis.VisualBasic" Version="5.0.0" />
   </ItemGroup>
 
+  <!--
+    Local Store (work item 2.1, design section 10): Pillion Host's encrypted SQLite databases, in src/Pillion.LocalStore.
+    - SQLitePCLRaw.bundle_e_sqlite3mc 2.1.11 (Apache-2.0) is the newest release of the bundle (2025-03-07; the SQLitePCLRaw
+      3.x line ships no e_sqlite3mc bundle). It carries the native e_sqlite3mc.dll, SQLite3 Multiple Ciphers 2.1.0 on
+      SQLite 3.49.1 (MIT and public domain), whose default cipher is ChaCha20-Poly1305. Verified on win-x64 under .NET 10
+      by tests/Pillion.LocalStore.Tests (EncryptionTests). Its notice is in THIRD-PARTY-NOTICES.txt.
+    - Microsoft.Data.Sqlite.Core 10.0.13 (MIT) is the newest stable release; the .Core package brings no native SQLite of
+      its own, so the only native library is e_sqlite3mc. It pulls SQLitePCLRaw.core 2.1.13, which the 2.1.11 provider
+      runs on (same 2.1 line).
+    - System.Security.Cryptography.ProtectedData 10.0.13 (MIT): DPAPI, which protects each database key (key.bin).
+  -->
+  <ItemGroup>
+    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3mc" Version="2.1.11" />
+    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="10.0.13" />
+    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.13" />
+  </ItemGroup>
+
   <!-- Tests. -->
   <ItemGroup>
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />

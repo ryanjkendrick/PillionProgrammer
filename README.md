@@ -34,6 +34,7 @@ src/
   Pillion.Contracts/             RPC interfaces and DTOs (netstandard2.0); see its README for the versioning rule
   Pillion.Common/                Host-side settings, secrets, redaction, connectivity (net10.0, placeholder)
   Pillion.ModelGateway/          Model providers and routing (net10.0, placeholder)
+  Pillion.LocalStore/            Encrypted SQLite databases (conversations.db) for the host (net10.0); see its README
   Pillion.Host/                  Pillion Host console process (net10.0); see its README for the launch protocol
   Pillion.VisualStudio/          The Visual Studio extension (net48, produces Pillion.VisualStudio.vsix)
   Pillion.VisualStudio.Core/     Host supervisor, RPC client and logger for the extension (net48, no VS SDK)
@@ -42,6 +43,7 @@ tests/
   Pillion.Common.Tests/
   Pillion.ModelGateway.Tests/
   Pillion.Host.Tests/
+  Pillion.LocalStore.Tests/      Encryption, keys, WAL, writer queue, migrations and the conversations repository
   Pillion.VisualStudio.Tests/    Supervisor, launch protocol and signature policy tests (net48)
   Pillion.VisualStudio.IntegrationTests/         Tests inside the Visual Studio 2026 Experimental Instance; see its README
   Pillion.VisualStudio.IntegrationTests.VS2022/  The same tests built for Visual Studio 2022 17.14
@@ -203,7 +205,8 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
     "autocomplete": true,
     "inlineChat": true,
     "mentions": true,
-    "outboundLogView": true
+    "outboundLogView": true,
+    "localStore": true
   }
 }
 ```
@@ -224,6 +227,7 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
 | `inlineChat` | `IInlineEditService.EditAsync` (inline chat edits, `/doc`, `/test`, `/fix`, `/explain`) fails with `PolicyDenied` and a message that names the flag, and **Pillion: Inline Chat** is disabled (an open adornment says "Inline chat is disabled by settings or policy" and cannot send). Chat, autocomplete and model listing are unaffected. |
 | `mentions` | The Chat window hides the `@` picker, the pins and **Include current file**, and sends no pins and no current file with a message (pins already made stay with their conversation and come back when the flag does). Pillion Host's `ResolveMentionAsync` is not gated; chat itself is unaffected. |
 | `outboundLogView` | The Chat window hides **Inspect** and the **Outbound log**, and `IDiagnosticsService.GetOutboundRecordsAsync` and `PreviewContextAsync` fail with `PolicyDenied` and a message that names the flag. The Outbound log itself is still kept by Pillion Host. |
+| `localStore` | Pillion Host does not create or open its encrypted Local Store (`conversations.db`, see `src/Pillion.LocalStore/README.md`): opening it fails with `PolicyDenied` and a message that names the flag, and nothing is written to disk. Nothing uses the store yet; work item 2.2 persists conversations and the Outbound log through it. |
 
 A repository can switch flags off for everyone who opens it with `disabledFeatures` in `.pillion/policy.json`, next to
 `localOnly`, `disabledTools`, `exclude` and `denyCommands`:
