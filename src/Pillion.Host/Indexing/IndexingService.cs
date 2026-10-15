@@ -380,8 +380,16 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         }
 
         var relative = PathClassifier.Normalize(full[(root.Path.Length + 1)..]);
-        if (!root.Classifier.ClassifyByName(relative).IsIncluded)
+        try
         {
+            if (!root.Classifier.ClassifyByName(relative).IsIncluded)
+            {
+                return;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The root went away: its watcher (and the next workspace change) deal with that.
             return;
         }
 
