@@ -78,6 +78,29 @@ public sealed class EncryptionTests : IDisposable
         AssertNoCanary(databasePath, canary);
     }
 
+    [Fact]
+    public async Task AfterDeleteAll_TheVacuumedFileIsStillEncrypted_AndReopens()
+    {
+        var databasePath = _temp.File("conversations.db");
+        await using (var database = await TestDatabases.OpenConversationsAsync(_temp))
+        {
+            var repository = new ConversationRepository(database);
+            await repository.SaveConversationAsync(new ConversationRecord("c1", "title", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow));
+            await repository.DeleteAllAsync();
+            await repository.SaveConversationAsync(new ConversationRecord("c2", "after vacuum", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow));
+        }
+
+        var header = new byte[16];
+        using (var stream = File.OpenRead(databasePath))
+        {
+            stream.ReadExactly(header);
+        }
+
+        Assert.NotEqual(SqliteHeader, header);
+        await using var reopened = await TestDatabases.OpenConversationsAsync(_temp);
+        Assert.Equal(["c2"], (await new ConversationRepository(reopened).ListConversationsAsync()).Select(c => c.Id));
+    }
+
     private static void AssertNoCanary(string path, string canary)
     {
         byte[] bytes;
