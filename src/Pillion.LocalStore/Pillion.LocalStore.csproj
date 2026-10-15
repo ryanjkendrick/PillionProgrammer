@@ -5,6 +5,8 @@
     Ciphers (SQLitePCLRaw.bundle_e_sqlite3mc) under Microsoft.Data.Sqlite.Core, one DPAPI-protected key per database,
     WAL, a meta table with schema versions, migrations that back the file up first, and the conversations database.
     A separate library so the phase 2 index can share it. See README.md.
+
+    The index storage (work item 2.8, Index\) adds FTS5 lexical search, int8 vector search in managed code and symbols.
   -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
