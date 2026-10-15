@@ -9,6 +9,9 @@ public sealed record ChunkOptions
     /// <summary>The smallest cap accepted; below it a breadcrumb and a line of code no longer fit.</summary>
     public const int MinimumMaxTokens = 32;
 
+    /// <summary>The default cap on one file's tree-sitter parse (issue #101): 2 s.</summary>
+    public static readonly TimeSpan DefaultParseTimeout = TimeSpan.FromSeconds(2);
+
     /// <summary>The default options: a 512-token cap counted with <see cref="TokenCounters.ApproximateWordPiece"/>.</summary>
     public static ChunkOptions Default { get; } = new();
 
@@ -36,6 +39,13 @@ public sealed record ChunkOptions
 
     /// <summary>How many lines consecutive fallback windows share (design section 7: 10).</summary>
     public int WindowOverlap { get; init; } = 10;
+
+    /// <summary>
+    /// The longest a tree-sitter parse of one file may take (every tree-sitter language; issue #101: some inputs keep a
+    /// grammar busy for minutes). Past it the parse is cancelled and the file is chunked by windows, reported through
+    /// <see cref="OnFallback"/>. Zero, negative or <see cref="Timeout.InfiniteTimeSpan"/> for no cap. Defaults to 2 s.
+    /// </summary>
+    public TimeSpan ParseTimeout { get; init; } = DefaultParseTimeout;
 
     /// <summary>
     /// Called when a syntactic chunker gives up on a file and the window chunker is used instead (a parse that fails

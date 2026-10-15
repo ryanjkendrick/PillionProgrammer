@@ -39,7 +39,7 @@ public sealed class TreeSitterChunker : SyntaxChunker
 
     private protected override List<ChunkUnit>? CollectUnits(TokenBudget budget, ResourceScope scope, out string? failure)
     {
-        var tree = Parse(_loader, budget.Document.Text, Grammar.MaxErrorFraction, out failure);
+        var tree = Parse(_loader, budget.Document.Text, Grammar.MaxErrorFraction, budget.Options.ParseTimeout, out failure);
         if (tree is null)
         {
             return null;
@@ -52,8 +52,11 @@ public sealed class TreeSitterChunker : SyntaxChunker
         return units;
     }
 
-    /// <summary>Parses text with a grammar; null with a reason when the grammar is missing or the parse failed badly.</summary>
-    internal static TsTree? Parse(GrammarLoader loader, string text, double maxErrorFraction, out string? failure)
+    /// <summary>
+    /// Parses text with a grammar; null with a reason when the grammar is missing, the parse failed badly, or it ran longer
+    /// than <paramref name="parseTimeout"/> (issue #101: the caller then falls back, the chunker to windows).
+    /// </summary>
+    internal static TsTree? Parse(GrammarLoader loader, string text, double maxErrorFraction, TimeSpan parseTimeout, out string? failure)
     {
         failure = null;
         var language = loader.Language;
@@ -64,10 +67,12 @@ public sealed class TreeSitterChunker : SyntaxChunker
         }
 
         using var parser = new TsParser(language);
-        var tree = parser.Parse(text);
+        var tree = TreeSitterTimedParse.Parse(parser, text, parseTimeout, out var timedOut);
         if (tree is null)
         {
-            failure = "The parser returned no tree.";
+            failure = timedOut
+                ? string.Create(CultureInfo.InvariantCulture, $"The parse took longer than {parseTimeout.TotalSeconds:0.###} s and was cancelled.")
+                : "The parser returned no tree.";
             return null;
         }
 

@@ -25,7 +25,7 @@ public abstract class SyntaxSymbolExtractor : ISymbolExtractor
         string? failure;
         try
         {
-            var sink = new SymbolSink(document, Language);
+            var sink = new SymbolSink(document, Language) { ParseTimeout = (options ?? SymbolExtractionOptions.Default).ParseTimeout };
             if (Collect(sink, out failure))
             {
                 return sink.ToExtraction();

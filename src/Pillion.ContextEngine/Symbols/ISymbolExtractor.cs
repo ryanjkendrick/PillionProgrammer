@@ -43,8 +43,17 @@ public sealed record SymbolExtraction(
 /// <summary>Settings for symbol extraction.</summary>
 public sealed record SymbolExtractionOptions
 {
-    /// <summary>The default options: no failure callback.</summary>
+    /// <summary>The default cap on one file's tree-sitter parse (issue #101), as for chunking: <see cref="ChunkOptions.DefaultParseTimeout"/>.</summary>
+    public static readonly TimeSpan DefaultParseTimeout = ChunkOptions.DefaultParseTimeout;
+
+    /// <summary>The default options: no failure callback, a 2 s parse cap.</summary>
     public static SymbolExtractionOptions Default { get; } = new();
+
+    /// <summary>
+    /// The longest a tree-sitter parse of one file may take; past it the parse is cancelled and the extraction fails (empty,
+    /// marked incomplete) through <see cref="OnFailure"/>. Zero, negative or <see cref="Timeout.InfiniteTimeSpan"/> for no cap.
+    /// </summary>
+    public TimeSpan ParseTimeout { get; init; } = DefaultParseTimeout;
 
     /// <summary>
     /// Called when an extractor gives up on a file (a parse that fails badly, a grammar that cannot be loaded, an

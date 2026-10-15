@@ -20,7 +20,7 @@ public sealed class CssSymbolExtractor : SyntaxSymbolExtractor
     private protected override bool Collect(SymbolSink sink, out string? failure)
     {
         var text = sink.Document.Text;
-        using var tree = TreeSitterChunker.Parse(Loader, text, TreeSitterGrammars.Css.MaxErrorFraction, out failure);
+        using var tree = TreeSitterChunker.Parse(Loader, text, TreeSitterGrammars.Css.MaxErrorFraction, sink.ParseTimeout, out failure);
         if (tree is null)
         {
             return false;
@@ -90,7 +90,7 @@ public sealed class HtmlSymbolExtractor : SyntaxSymbolExtractor
     private protected override bool Collect(SymbolSink sink, out string? failure)
     {
         var text = sink.Document.Text;
-        using var tree = TreeSitterChunker.Parse(HtmlChunker.Loader, text, TreeSitterGrammars.Html.MaxErrorFraction, out failure);
+        using var tree = TreeSitterChunker.Parse(HtmlChunker.Loader, text, TreeSitterGrammars.Html.MaxErrorFraction, sink.ParseTimeout, out failure);
         if (tree is null)
         {
             return false;
