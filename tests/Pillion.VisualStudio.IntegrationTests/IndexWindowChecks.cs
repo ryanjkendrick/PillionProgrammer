@@ -100,8 +100,13 @@ public static class IndexWindowChecks
 
     private static void Click(Button button)
     {
-        // A click raises Click on the button, which runs its command (when it can execute), as the mouse or Space would.
+        // What the mouse or Space does: Click for the button's handlers, then its command. (Raising Click alone runs no command:
+        // ButtonBase executes the command in OnClick, not in a Click handler, so the Pause click never reached the host.)
         button.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        if (button.Command is { } command && command.CanExecute(button.CommandParameter))
+        {
+            command.Execute(button.CommandParameter);
+        }
     }
 
     private static IEnumerable<T> Descendants<T>(DependencyObject root)

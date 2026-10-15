@@ -187,6 +187,39 @@ internal sealed partial class ChatToolWindowControl : UserControl, IDisposable
         return target?.DataContext as ChatConversation ?? item?.DataContext as ChatConversation;
     }
 
+    /// <summary>
+    /// Before an entry's context menu opens: wires its Rename and Delete items (by their Tag). They cannot carry Click
+    /// attributes in XAML, because the menu sits in a setter value of the item style, where the markup compiler gives the
+    /// handlers the wrong connection id and the window failed to build ("Set connectionId threw an exception").
+    /// </summary>
+    private void OnConversationItemContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        if (sender is not FrameworkElement { ContextMenu: { } menu })
+        {
+            return;
+        }
+
+        foreach (var entry in menu.Items)
+        {
+            if (entry is not MenuItem item)
+            {
+                continue;
+            }
+
+            switch (item.Tag as string)
+            {
+                case "rename":
+                    item.Click -= OnConversationRenameClick;
+                    item.Click += OnConversationRenameClick;
+                    break;
+                case "delete":
+                    item.Click -= OnConversationDeleteClick;
+                    item.Click += OnConversationDeleteClick;
+                    break;
+            }
+        }
+    }
+
     /// <summary>Rename in an entry's context menu: opens that conversation and starts editing its name.</summary>
     private void OnConversationRenameClick(object sender, RoutedEventArgs e)
     {
