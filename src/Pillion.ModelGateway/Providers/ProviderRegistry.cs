@@ -9,6 +9,7 @@ using Pillion.Common.Hardware;
 using Pillion.Common.Secrets;
 using Pillion.Common.Settings;
 using Pillion.Contracts;
+using Pillion.ModelGateway.Providers.Bundled;
 
 namespace Pillion.ModelGateway;
 
@@ -20,11 +21,12 @@ public sealed record HiddenProvider(ProviderSettings Settings, string Reason);
 /// <summary>The providers built from one version of the settings.</summary>
 public sealed class ProviderRegistrySnapshot
 {
-    internal ProviderRegistrySnapshot(EffectiveSettings settings, IReadOnlyList<IModelProvider> providers, IReadOnlyList<HiddenProvider> hidden)
+    internal ProviderRegistrySnapshot(EffectiveSettings settings, IReadOnlyList<IModelProvider> providers, IReadOnlyList<HiddenProvider> hidden, IReadOnlyList<ProviderSettings>? implicitProviders = null)
     {
         Settings = settings;
         Providers = providers;
         Hidden = hidden;
+        AllProviderSettings = [.. settings.Settings.Providers, .. implicitProviders ?? []];
     }
 
     /// <summary>Gets the effective settings the snapshot was built from.</summary>
@@ -36,6 +38,15 @@ public sealed class ProviderRegistrySnapshot
     /// <summary>Gets the configured providers that are hidden from routing.</summary>
     public IReadOnlyList<HiddenProvider> Hidden { get; }
 
+    /// <summary>
+    /// Gets the settings of every provider: the <c>providers</c> entries and the entries the registry adds on its own (the
+    /// bundled embedding provider, unless settings name a provider of that kind).
+    /// </summary>
+    public IReadOnlyList<ProviderSettings> AllProviderSettings { get; }
+
+    /// <summary>Gets the ids of every provider, configured or added by the registry (for parsing <c>providerId/modelId</c>).</summary>
+    public IEnumerable<string> ProviderIds => AllProviderSettings.Select(p => p.Id);
+
     /// <summary>Finds a routable provider by id.</summary>
     /// <param name="providerId">The provider id.</param>
     /// <returns>The provider, or <see langword="null"/>.</returns>
@@ -46,7 +57,7 @@ public sealed class ProviderRegistrySnapshot
     /// <param name="providerId">The provider id.</param>
     /// <returns>The settings, or <see langword="null"/>.</returns>
     public ProviderSettings? FindSettings(string providerId) =>
-        Settings.Settings.Providers.FirstOrDefault(p => string.Equals(p.Id, providerId, StringComparison.OrdinalIgnoreCase));
+        AllProviderSettings.FirstOrDefault(p => string.Equals(p.Id, providerId, StringComparison.OrdinalIgnoreCase));
 }
 
 /// <summary>Holds the providers built from the <c>providers</c> setting.</summary>
@@ -170,8 +181,21 @@ public sealed partial class ProviderRegistry : IProviderRegistry, IDisposable
         var providers = new List<IModelProvider>();
         var hidden = new List<HiddenProvider>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var implicitProviders = new List<ProviderSettings>();
 
-        foreach (var settings in effective.Settings.Providers)
+        // The bundled embedding models need no settings entry: the provider is added after the configured ones unless an
+        // entry of its kind exists (to set a proxy or CA bundle for downloads, or to disable it).
+        var candidates = effective.Settings.Providers.ToList();
+        if (_factories.ContainsKey(ProviderKind.Bundled) &&
+            !candidates.Any(p => p.Kind == ProviderKind.Bundled) &&
+            !candidates.Any(p => string.Equals(p.Id, BundledEmbeddingProvider.DefaultId, StringComparison.OrdinalIgnoreCase)))
+        {
+            var bundled = new ProviderSettings { Id = BundledEmbeddingProvider.DefaultId, Kind = ProviderKind.Bundled, DisplayName = "Bundled models" };
+            implicitProviders.Add(bundled);
+            candidates.Add(bundled);
+        }
+
+        foreach (var settings in candidates)
         {
             if (string.IsNullOrWhiteSpace(settings.Id) || !seen.Add(settings.Id))
             {
@@ -242,7 +266,7 @@ public sealed partial class ProviderRegistry : IProviderRegistry, IDisposable
             _runtime.Residency?.Unregister(id);
         }
 
-        return new ProviderRegistrySnapshot(effective, providers, hidden);
+        return new ProviderRegistrySnapshot(effective, providers, hidden, implicitProviders);
     }
 
     private string? ReadKey(string providerId)

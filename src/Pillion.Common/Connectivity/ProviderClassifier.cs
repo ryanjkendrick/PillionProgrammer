@@ -7,7 +7,7 @@ namespace Pillion.Common.Connectivity;
 public static class ProviderClassifier
 {
     /// <summary>
-    /// Determines whether a provider is a local one, which is never probed: Ollama, and an OpenAI-compatible server
+    /// Determines whether a provider is a local one, which is never probed: Ollama, the bundled models, and an OpenAI-compatible server
     /// whose endpoint host is <c>localhost</c>, a loopback address (<c>127.0.0.0/8</c>, <c>::1</c>) or a name ending
     /// in <c>.local</c> or <c>.localhost</c>.
     /// </summary>
@@ -20,6 +20,7 @@ public static class ProviderClassifier
         return provider.Kind switch
         {
             ProviderKind.Ollama => true,
+            ProviderKind.Bundled => true,
             ProviderKind.OpenAiCompatible => TryGetEndpoint(provider, out var uri) && IsLocalHost(uri.Host),
             _ => false,
         };

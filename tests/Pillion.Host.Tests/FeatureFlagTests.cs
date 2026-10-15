@@ -23,7 +23,7 @@ public sealed class FeatureFlagTests : IDisposable
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
     private static readonly string[] AllFlags =
-        ["chat", "modelGateway", "connectivityProbes", "cloudProviders", "ollamaProvider", "openAICompatibleProvider", "anthropicProvider", "geminiProvider", "mistralProvider", "azureOpenAIProvider", "autocomplete", "inlineChat", "mentions", "outboundLogView", "embeddings"];
+        ["chat", "modelGateway", "connectivityProbes", "cloudProviders", "ollamaProvider", "openAICompatibleProvider", "anthropicProvider", "geminiProvider", "mistralProvider", "azureOpenAIProvider", "autocomplete", "inlineChat", "mentions", "outboundLogView", "embeddings", "bundledEmbeddings"];
 
     private readonly TempDirectory _data = new();
     private readonly FakeSettings _settings = new();
