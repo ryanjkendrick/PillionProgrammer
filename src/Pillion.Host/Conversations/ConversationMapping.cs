@@ -6,8 +6,7 @@ using Pillion.LocalStore.Conversations;
 namespace Pillion.Host.Conversations;
 
 /// <summary>
-/// Maps between the contract's conversation types and the Local Store's records, and derives titles. Conventions the wire
-/// format cannot express (contract 1.3 has no flag for a stopped reply) are kept here: see <see cref="StoppedMarker"/>.
+/// Maps between the contract's conversation types and the Local Store's records, and derives titles.
 /// </summary>
 internal static class ConversationMapping
 {
@@ -16,12 +15,6 @@ internal static class ConversationMapping
 
     /// <summary>The longest title a rename may set, in characters.</summary>
     public const int MaxRenamedTitleLength = 200;
-
-    /// <summary>
-    /// The text <see cref="ConversationMessage.Content"/> ends with when the reply was stopped before it finished (the store keeps
-    /// a flag; contract 1.3 has no member for it). The Chat window removes it and shows its own "Stopped." note.
-    /// </summary>
-    public const string StoppedMarker = "\n\n[Reply stopped before it finished.]";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -83,13 +76,14 @@ internal static class ConversationMapping
     {
         Id = record.Id,
         Role = ToRole(record.Role),
-        Content = record.Cancelled ? record.Content + StoppedMarker : record.Content,
+        Content = record.Content,
         ModelId = record.Model,
         ProviderId = record.Provider,
         PromptTokens = record.TokensIn ?? 0,
         CompletionTokens = record.TokensOut ?? 0,
         CreatedUtc = record.Created.UtcDateTime,
         Citations = ReadCitations(record.Citations),
+        Cancelled = record.Cancelled,
     };
 
     /// <summary>Maps a stored pin to the contract.</summary>

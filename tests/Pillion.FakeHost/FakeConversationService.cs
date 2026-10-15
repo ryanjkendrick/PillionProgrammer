@@ -182,7 +182,8 @@ internal sealed class FakeConversationService : IConversationService
     /// <param name="request">The chat request; nothing happens when it has no conversation id.</param>
     /// <param name="final">The reply's final chunk (model, provider, tokens, citations).</param>
     /// <param name="replyText">The reply text.</param>
-    public void Append(ChatRequest request, ChatChunk final, string replyText)
+    /// <param name="cancelled">Whether the reply was stopped before it finished (<paramref name="replyText"/> is what had been sent).</param>
+    public void Append(ChatRequest request, ChatChunk final, string replyText, bool cancelled = false)
     {
         if (string.IsNullOrEmpty(request.ConversationId))
         {
@@ -202,6 +203,7 @@ internal sealed class FakeConversationService : IConversationService
             AddMessage(entry, ChatRole.User, user, now, null, null, 0, 0);
             var reply = AddMessage(entry, ChatRole.Assistant, replyText, now, final.ModelId, final.ProviderId, final.PromptTokens, final.CompletionTokens);
             reply.Citations = final.Citations;
+            reply.Cancelled = cancelled;
             entry.Summary.LastModelId = final.ProviderId + "/" + final.ModelId;
             Console.Error.WriteLine("fakehost: conversation " + entry.Summary.Id + " now " + entry.Messages.Count + " messages");
         }

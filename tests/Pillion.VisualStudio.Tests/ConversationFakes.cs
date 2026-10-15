@@ -51,7 +51,7 @@ internal sealed class ScriptedConversationService : IConversationService
         }
     }
 
-    public ConversationMessage Message(ChatRole role, string content, string? modelId = null, string? providerId = null, params Citation[] citations)
+    public ConversationMessage Message(ChatRole role, string content, string? modelId = null, string? providerId = null, Citation[]? citations = null, bool cancelled = false)
     {
         lock (_gate)
         {
@@ -63,7 +63,8 @@ internal sealed class ScriptedConversationService : IConversationService
                 ModelId = modelId,
                 ProviderId = providerId,
                 CreatedUtc = DateTime.UtcNow,
-                Citations = citations,
+                Citations = citations ?? [],
+                Cancelled = cancelled,
             };
         }
     }

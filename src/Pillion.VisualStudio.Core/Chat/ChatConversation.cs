@@ -142,6 +142,9 @@ public sealed class ChatConversation : ObservableObject
         }
     }
 
+    /// <summary>Gets a value indicating whether the developer renamed this conversation in this window (the host's title is then theirs, not the host's own).</summary>
+    internal bool RenamedByUser => _renamedByUser;
+
     /// <summary>Gets a value indicating whether the developer renamed the conversation (its title no longer follows the first message).</summary>
     public bool HasCustomTitle
     {

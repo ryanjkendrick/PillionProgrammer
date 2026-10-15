@@ -137,7 +137,7 @@ public sealed class ConversationPersistenceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task AReplyStoppedPartWay_IsSavedWithWhatArrived_AndAStoppedMarker()
+    public async Task AReplyStoppedPartWay_IsSavedWithWhatArrived_AndMarkedCancelled()
     {
         using var cancel = new CancellationTokenSource();
         var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -153,7 +153,8 @@ public sealed class ConversationPersistenceTests : IAsyncLifetime
         Assert.True(stored.Cancelled);
         Assert.Equal("partial answer ", stored.Content);
         var message = (await _conversations.GetConversationAsync("c1", CancellationToken.None))!.Messages[^1];
-        Assert.Equal("partial answer " + ConversationMapping.StoppedMarker, message.Content);
+        Assert.Equal("partial answer ", message.Content);
+        Assert.True(message.Cancelled);
     }
 
     [Fact]
@@ -375,6 +376,26 @@ public sealed class ConversationPersistenceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ACacheHit_IsNotStored_ButTheViewShowsThisSessionsInMemoryOnes()
+    {
+        _outbound.Record(Record("r1"));
+        await Task.Delay(20);
+        _outbound.Record(Record("hit", cacheHit: true));
+        await Task.Delay(20);
+        _outbound.Record(Record("r2"));
+
+        var live = await Diagnostics().GetOutboundRecordsAsync(10, CancellationToken.None);
+        var stored = await (await _store.GetRepositoryAsync()).GetRecentOutboundAsync();
+        await _store.DisposeAsync();
+        Open();
+        var afterRestart = await Diagnostics().GetOutboundRecordsAsync(10, CancellationToken.None);
+
+        Assert.Equal(["r1", "r2"], stored.Select(e => e.RequestId));
+        Assert.Equal(["r2", "hit", "r1"], live.Select(r => r.RequestId));
+        Assert.Equal(["r2", "r1"], afterRestart.Select(r => r.RequestId));
+    }
+
+    [Fact]
     public async Task TheOutboundLogView_FallsBackToTheInMemoryLog_WhenTheStoreIsOff()
     {
         _outbound.Record(Record("r1"));
@@ -479,8 +500,9 @@ public sealed class ConversationPersistenceTests : IAsyncLifetime
         string modelId = "m",
         int prompt = 10,
         OutboundOutcome outcome = OutboundOutcome.Succeeded,
-        PillionErrorCode? error = null) =>
-        new(DateTimeOffset.UtcNow, requestId, "p", modelId, TaskClass.Chat, isLocal, prompt, 5, 0, TimeSpan.FromMilliseconds(40), outcome, error);
+        PillionErrorCode? error = null,
+        bool cacheHit = false) =>
+        new(DateTimeOffset.UtcNow, requestId, "p", modelId, TaskClass.Chat, isLocal, prompt, 5, 0, TimeSpan.FromMilliseconds(40), outcome, error, CacheHit: cacheHit);
 
     private static async IAsyncEnumerable<ChatChunk> Hang(string[] texts, TaskCompletionSource reached, [EnumeratorCancellation] CancellationToken token)
     {

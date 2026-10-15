@@ -62,7 +62,9 @@ internal sealed partial class StoreOutboundSink : IOutboundSink, IHostedService,
     public void Write(OutboundRecord record)
     {
         ArgumentNullException.ThrowIfNull(record);
-        if (_features is not null && !_features.IsEnabled(FeatureNames.LocalStore))
+
+        // A cache hit never reached a model: it stays in the in-memory log, which the Outbound log view merges in for this session.
+        if (record.CacheHit || (_features is not null && !_features.IsEnabled(FeatureNames.LocalStore)))
         {
             return;
         }

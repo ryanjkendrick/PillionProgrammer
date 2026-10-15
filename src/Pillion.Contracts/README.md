@@ -47,9 +47,7 @@ pipe `ContractV13RpcTests` and `HandshakeCompatibilityTests` in the host tests).
 - **Conversations (work item 2.2).** A new VSIX-to-host service over `conversations.db`, behind the `localStore` flag. There
   is no append method: the host appends the user's message and the reply as `ChatAsync` runs a request whose
   `ConversationId` names a conversation. Pillion Host implements it in work item 2.2 (see the host README, Saved
-  conversations). Contract 1.3 has no member for a reply that was stopped before it finished, so the host returns such a
-  reply with `[Reply stopped before it finished.]` (after a blank line) appended to its `Content` and the Chat window strips
-  it; a later minor revision can add a member and retire the convention.
+  conversations).
 
   | Type | Member | Order | Meaning |
   | --- | --- | --- | --- |
@@ -64,7 +62,7 @@ pipe `ContractV13RpcTests` and `HandshakeCompatibilityTests` in the host tests).
   | `ConversationPage` (new) | `Items`, `HasMore` | 0-1 | `ConversationSummary[]` |
   | `ConversationSummary` (new) | `Id`, `Title`, `CreatedUtc`, `UpdatedUtc`, `LastModelId`, `MessageCount` | 0-5 | `LastModelId` is `providerId/modelId` or `null` |
   | `ConversationDetail` (new) | `Conversation`, `Messages`, `Pins` | 0-2 | |
-  | `ConversationMessage` (new) | `Id`, `Role`, `Content`, `ModelId`, `ProviderId`, `PromptTokens`, `CompletionTokens`, `CreatedUtc`, `Citations` | 0-8 | `Role` is `ChatRole`; `Citations` keep a restored reply's spans clickable |
+  | `ConversationMessage` (new) | `Id`, `Role`, `Content`, `ModelId`, `ProviderId`, `PromptTokens`, `CompletionTokens`, `CreatedUtc`, `Citations`, `Cancelled` | 0-9 | `Role` is `ChatRole`; `Citations` keep a restored reply's spans clickable; `Cancelled` marks a reply stopped before it finished (`Content` is what had arrived) |
   | `ConversationPin` (new) | `Kind`, `Target`, `DisplayName`, `TokenCount` | 0-3 | What to resolve again on restore (`@Kind:Target`), never the content |
   | `ConversationCreateRequest` (new) | `Id`, `Title`, `ModelId` | 0-2 | Empty `Id`: the host chooses one; empty `Title`: named from the first user message |
   | `DeleteAllConversationsResult` (new) | `Conversations`, `Messages`, `Pins`, `OutboundEntries` | 0-3 | What was deleted |

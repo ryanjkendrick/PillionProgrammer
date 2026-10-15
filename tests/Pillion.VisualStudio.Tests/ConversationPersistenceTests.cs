@@ -104,9 +104,9 @@ public sealed class ConversationPersistenceTests : IDisposable
             T0,
             [
                 _service.Message(ChatRole.User, "Why does the build fail?"),
-                _service.Message(ChatRole.Assistant, "Program.cs calls a removed method.", "qwen2.5-coder:7b", "ollama", citation),
+                _service.Message(ChatRole.Assistant, "Program.cs calls a removed method.", "qwen2.5-coder:7b", "ollama", [citation]),
                 _service.Message(ChatRole.User, "And now?"),
-                _service.Message(ChatRole.Assistant, "It was cut off" + ChatViewModel.StoppedMarker, "qwen2.5-coder:7b", "ollama"),
+                _service.Message(ChatRole.Assistant, "It was cut off", "qwen2.5-coder:7b", "ollama", cancelled: true),
             ],
             [
                 new ConversationPin { Kind = MentionKinds.File, Target = ProgramPath, DisplayName = "Program.cs", TokenCount = 120 },
@@ -124,7 +124,7 @@ public sealed class ConversationPersistenceTests : IDisposable
         var reply = vm.Turns[1];
         Assert.Equal(ModelOption.ReplyHeaderFor(vm.ModelPicker.Models, "ollama", "qwen2.5-coder:7b"), reply.Header);
         Assert.Equal(ChatTurnState.Complete, reply.State);
-        Assert.Equal(ChatTurnState.Stopped, vm.Turns[3].State); // The stopped marker is removed and shown as the window's own note.
+        Assert.Equal(ChatTurnState.Stopped, vm.Turns[3].State); // Stopped replies are marked by the host's Cancelled flag.
 
         var cited = Assert.Single(reply.Citations);
         Assert.Equal("Program.cs:12-15", cited.Text);
@@ -398,6 +398,46 @@ public sealed class ConversationPersistenceTests : IDisposable
     }
 
     [Fact]
+    public async Task AfterTheFirstReply_TheWindowAdoptsTheTitleTheHostGaveTheConversation()
+    {
+        using var vm = await StartAsync();
+        var fresh = vm.CurrentConversation;
+        var message = "Explain how the incremental Markdown renderer decides which blocks to keep and which to rebuild";
+        _service.Seed(fresh.Id, message, T0);
+
+        var script = _models.Next();
+        vm.InputText = message;
+        var send = vm.SendAsync();
+        await script.Started.Task.WithTimeout(Timeout);
+        Assert.EndsWith("…", fresh.Title, StringComparison.Ordinal); // The window's own 48-character title until the host's arrives.
+        script.Send("It compares blocks.", isFinal: true);
+        await send.WithTimeout(Timeout);
+        await Wait.UntilAsync(() => fresh.Title == message, "the host's title is adopted");
+
+        Assert.True(fresh.IsPersisted);
+    }
+
+    [Fact]
+    public async Task ATitleTheDeveloperChose_IsNotReplacedByTheHostsAfterTheFirstReply()
+    {
+        using var vm = await StartAsync();
+        var fresh = vm.CurrentConversation;
+        vm.BeginRename();
+        vm.RenameText = "My plan";
+        vm.CommitRename();
+        var script = _models.Next();
+        vm.InputText = "Plan";
+        var send = vm.SendAsync();
+        await script.Started.Task.WithTimeout(Timeout);
+        _service.Seed(fresh.Id, "Something else", T0);
+        script.Send("ok", isFinal: true);
+        await send.WithTimeout(Timeout);
+        await Task.Delay(100);
+
+        Assert.Equal("My plan", fresh.Title);
+    }
+
+    [Fact]
     public async Task ACitationOnALiveReply_IsShownAsALink_AndOpensTheLine()
     {
         using var vm = await StartAsync();
@@ -608,10 +648,6 @@ public sealed class ConversationPersistenceTests : IDisposable
         vm.ConfirmDeleteAll = _ => true;
         Assert.True(vm.DeleteAllConversationsCommand.CanExecute(null));
     }
-
-    [Fact]
-    public void TheStoppedMarker_IsTheOneTheHostAdds() =>
-        Assert.Equal("\n\n[Reply stopped before it finished.]", ChatViewModel.StoppedMarker);
 
     private async Task<ChatViewModel> StartAsync(bool confirm = true)
     {

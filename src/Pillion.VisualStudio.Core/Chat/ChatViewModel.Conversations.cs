@@ -43,12 +43,6 @@ public sealed partial class ChatViewModel
     /// <summary>How many conversations one page of the list holds.</summary>
     public const int ConversationPageSize = 50;
 
-    /// <summary>
-    /// What a saved reply's text ends with when it was stopped before it finished. The host adds it when it returns such a reply
-    /// (contract 1.3 has no flag for it); the window removes it and shows its own "Stopped." note.
-    /// </summary>
-    public const string StoppedMarker = "\n\n[Reply stopped before it finished.]";
-
     private static readonly TimeSpan ConversationCallTimeout = TimeSpan.FromSeconds(30);
 
     private readonly SemaphoreSlim _storeGate = new(1, 1);
@@ -416,11 +410,7 @@ public sealed partial class ChatViewModel
             else if (message.Role == ChatRole.Assistant)
             {
                 var text = message.Content ?? string.Empty;
-                var stopped = text.EndsWith(StoppedMarker, StringComparison.Ordinal);
-                if (stopped)
-                {
-                    text = text.Substring(0, text.Length - StoppedMarker.Length);
-                }
+                var stopped = message.Cancelled; // The turn shows its own "Stopped." note.
 
                 var hasModel = !string.IsNullOrEmpty(message.ModelId);
                 var header = hasModel ? ModelOption.ReplyHeaderFor(listed, message.ProviderId, message.ModelId!) : ChatStrings.SavedReplyHeader;
@@ -716,6 +706,7 @@ public sealed partial class ChatViewModel
             if (state is ChatTurnState.Complete or ChatTurnState.Stopped)
             {
                 conversation.IsPersisted = true;
+                Run(() => AdoptHostTitleAsync(conversation));
             }
             else
             {
@@ -733,16 +724,51 @@ public sealed partial class ChatViewModel
         }
     }
 
+    /// <summary>
+    /// After the first reply: takes the title the host named the conversation (60 characters of the first line) in place of the
+    /// window's own shorter one. A conversation the developer named is left alone: the host has their name.
+    /// </summary>
+    private async Task AdoptHostTitleAsync(ChatConversation conversation)
+    {
+        await TaskScheduler.Default;
+        ConversationDetail? detail;
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_disposal.Token);
+            timeout.CancelAfter(ConversationCallTimeout);
+            detail = await _connection.GetProxy<IConversationService>().GetConversationAsync(conversation.Id, timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_disposal.IsCancellationRequested)
+        {
+            return;
+        }
+#pragma warning disable CA1031 // The window's own title stays.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            _log?.Debug("chat.conversation.title.failed", "Reading the host's title for the conversation failed.", ("error", ex.GetType().Name));
+            return;
+        }
+
+        await _joinableTaskFactory.SwitchToMainThreadAsync(_disposal.Token);
+        if (!_disposed && !conversation.RenamedByUser && detail?.Conversation is { } summary)
+        {
+            conversation.SetTitleFromHost(summary.Title);
+        }
+    }
+
     /// <summary>Asks the host whether it has a conversation whose reply did not complete (the message may or may not have been saved).</summary>
     private async Task ConfirmStoredAsync(ChatConversation conversation)
     {
         await TaskScheduler.Default;
         bool? has = null;
+        ConversationDetail? found = null;
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_disposal.Token);
             timeout.CancelAfter(ConversationCallTimeout);
-            has = await _connection.GetProxy<IConversationService>().GetConversationAsync(conversation.Id, timeout.Token).ConfigureAwait(false) is not null;
+            found = await _connection.GetProxy<IConversationService>().GetConversationAsync(conversation.Id, timeout.Token).ConfigureAwait(false);
+            has = found is not null;
         }
         catch (OperationCanceledException) when (_disposal.IsCancellationRequested)
         {
@@ -759,6 +785,11 @@ public sealed partial class ChatViewModel
         if (has == true && !_disposed)
         {
             conversation.IsPersisted = true;
+            if (!conversation.RenamedByUser && found?.Conversation is { } summary)
+            {
+                conversation.SetTitleFromHost(summary.Title);
+            }
+
             if (conversation.Pins.Count > 0)
             {
                 OnPinsChanged(conversation);

@@ -114,6 +114,13 @@ public sealed class ConversationMessage
     /// <summary>Gets or sets the citations of an assistant reply that used retrieved code (as its final <see cref="ChatChunk.Citations"/>), so a restored reply keeps its clickable spans.</summary>
     [DataMember(Order = 8)]
     public Citation[] Citations { get; set; } = [];
+
+    /// <summary>
+    /// Gets or sets a value indicating whether an assistant reply was stopped before it finished (the developer pressed Stop, or the
+    /// connection was lost): <see cref="Content"/> is what had arrived. The Chat window shows its own "stopped" note for it.
+    /// </summary>
+    [DataMember(Order = 9)]
+    public bool Cancelled { get; set; }
 }
 
 /// <summary>

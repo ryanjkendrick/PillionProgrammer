@@ -75,7 +75,11 @@ internal sealed class DiagnosticsRpcService : IDiagnosticsService
             var count = maxCount > 0 ? maxCount : DefaultOutboundCount;
             if (await _store.GetRecentAsync(count, cancellationToken).ConfigureAwait(false) is { } entries)
             {
-                return ToDtos(entries, count);
+                // Autocomplete cache hits never reached a model and are not stored: this session's come from the in-memory log.
+                var stored = ToDtos(entries, count);
+                var oldestStored = entries.Count >= count && entries.Count > 0 ? entries[0].Timestamp.UtcDateTime : DateTime.MinValue;
+                var hits = ToDtos(_outbound.GetRecent().Where(r => r.CacheHit).ToList(), count).Where(d => d.TimestampUtc >= oldestStored);
+                return [.. stored.Concat(hits).OrderByDescending(d => d.TimestampUtc).Take(count)];
             }
         }
 

@@ -142,12 +142,9 @@ type name in `Details`).
   written once, when the stream ends: model, provider, prompt and completion tokens (0 is stored as unknown), the cost (0 for a
   local provider, the catalog's prices times the tokens for a cloud one, unknown when the catalog has no price) and the final
   chunk's citations. A reply stopped by Stop, a lost connection or a cancelled call is written with what had arrived and a
-  `cancelled` flag, and is not written at all when nothing had arrived. A reply that failed (an exception, or a final chunk with
+  `cancelled` flag (`ConversationMessage.Cancelled` on the wire), and is not written at all when nothing had arrived. A reply that failed (an exception, or a final chunk with
   an `Error`) is not saved: the user's message stays, so the Retry that follows does not repeat it. A storage failure never
   fails the chat; it is logged and the turn goes unsaved. Inline edits do not go through `ChatAsync` and are not saved.
-- **The stopped marker.** Contract 1.3's `ConversationMessage` has no flag for a stopped reply, so a stopped reply comes back
-  with `ConversationMapping.StoppedMarker` (a blank line and `[Reply stopped before it finished.]`) appended to its `Content`;
-  the Chat window removes it and shows its own note. A later contract revision can replace this with a member.
 - **Lists and edits.** `ListConversationsAsync` pages newest first (`Limit` 0 is 50, at most 500; `HasMore` from one extra
   row). `RenameConversationAsync` changes the title only (the conversation keeps its place in the list; an empty title leaves it as
   it was). `CreateConversationAsync` returns an existing id unchanged. `SetPinsAsync` replaces the pins in the order given.
@@ -155,10 +152,11 @@ type name in `Details`).
   the file and deletes the migration backups, then clears the in-memory Outbound log.
 - **The Outbound log.** `StoreOutboundSink` is an `IOutboundSink` that `InMemoryOutboundLog` hands every record to as it is
   produced. It only queues the record (5,000 at most, the oldest dropped); one background task writes them, so a request never
-  waits for the disk, and it drains its queue when the host stops (up to 1.5 s). Cache hits are stored too, as the in-memory log
-  shows them. `GetOutboundRecordsAsync` reads from the store (after waiting up to 2 s for the queue to catch up) while
-  `localStore` is on, so the Outbound log view survives a restart; if the store is off or cannot be read it answers from the
-  in-memory ring buffer of this session.
+  waits for the disk, and it drains its queue when the host stops (up to 1.5 s). Autocomplete cache hits are not stored: they
+  never reached a model, so they stay in the in-memory log only. `GetOutboundRecordsAsync` reads from the store (after waiting
+  up to 2 s for the queue to catch up) while `localStore` is on, so the Outbound log view survives a restart, and adds this
+  session's cache hits from the in-memory log (after a restart the view has no cache hits); if the store is off or cannot be
+  read it answers from the in-memory ring buffer of this session.
 - **Retention.** Conversations and the Outbound log are kept until the user deletes them (design section 10), so
   `ConversationRetentionService` opens nothing and removes nothing with the default `ConversationRetentionPolicy`; when a policy
   with an age limit is registered it applies it once, 30 s after start-up, in the background.
@@ -195,7 +193,9 @@ latest status of the window is the one sent. It goes over the same path as `conn
   less means 200; the ring buffer keeps `ModelGatewayOptions.OutboundLogCapacity`). Each is time, request id, provider,
   model, task class, locality, prompt and completion tokens, redactions, context items and how many were trimmed,
   duration, outcome with its error code, and whether autocomplete served it from the cache. The Chat window's Outbound log
-  view reads it.
+  view reads it. With `localStore` on the records come from the Local Store (they survive a restart; work item 2.2), except
+  that autocomplete cache hits, which never reached a model, are kept in memory only: the view shows this session's and
+  none from before a restart (see Saved conversations).
 - `PreviewContextAsync(ChatRequest)` (work item 1.13): the Context Inspector. `ContextPreview` routes the request as the
   gateway would (the router sees only the size of the user's message), builds the same assembly target (the inventory's
   window, capped at the routed profile's `num_ctx` for Ollama, the chat system prompt, the effective exclusions) and runs a
