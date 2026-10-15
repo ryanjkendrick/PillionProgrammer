@@ -3,7 +3,7 @@ using Microsoft.Data.Sqlite;
 
 namespace Pillion.LocalStore.Index;
 
-/// <summary>The writes both backends share (they store vectors the same way).</summary>
+/// <summary>The writes every backend shares (they all store vectors the same way); backends differ only in how they search.</summary>
 public abstract class VectorIndexBase : IVectorIndex
 {
     private protected VectorIndexBase(VectorStorage storage)
@@ -77,7 +77,7 @@ public abstract class VectorIndexBase : IVectorIndex
 /// The sqlite-vec backend: a KNN query on the <c>vec0</c> table <c>chunk_vectors</c> (<c>embedding MATCH ... AND k = ...</c>)
 /// with the filters as <c>IN</c> conditions on its <c>language</c> and <c>partition</c> metadata columns. Needs the
 /// extension on every connection; while the table is missing or stale (a host without the extension changed vectors)
-/// it answers with the brute-force scan instead.
+/// it answers like the brute-force backend instead.
 /// </summary>
 public sealed class SqliteVecIndex : VectorIndexBase
 {

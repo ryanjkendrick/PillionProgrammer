@@ -47,6 +47,8 @@ Retention (`ConversationRetention`): conversations and the Outbound log are kept
 - The key is applied with `PRAGMA hexkey = '<64 hex digits>'` immediately after `Open`, before any other statement, on
   every connection. SQLite3 Multiple Ciphers answers `ok`; anything else (a plain SQLite would ignore the pragma) stops
   the open, so a database is never created unencrypted. `SELECT count(*) FROM sqlite_schema` then proves the key fits.
+  `EncryptedDatabaseOptions.ConnectionOpened` runs next, on every connection, before the other pragmas and any migration
+  (the index database loads sqlite-vec there).
 - A missing key for an existing database, a key file DPAPI refuses (another user or machine, or damage), and a key that
   does not open the file each fail with a `LocalStoreException` whose `Kind` says which. A new key is never made for an
   existing database.
