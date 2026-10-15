@@ -183,4 +183,104 @@ this repository's `src` (one copy for 100,000 lines, eleven for 1,000,000, each 
   (generated) were stored and searchable.
 - The DirectML runs were on the same RTX 2080 SUPER Ollama uses; Ollama models were unloaded before each run.
 
-PLACEHOLDER-DECISIONS
+## IDE scenarios: what else was seen
+
+- **The generated solution in the IDE**: 607 files (102,600 lines of C# plus the project files) indexed by the real host in
+  79 s from the solution opening, 9,605 chunks, with the default execution provider; the Index window showed the root as
+  "Writer (this host owns the index); files 607 of 607; chunks 9,615; 15.9 MB; bundled/bge-small-en-v1.5".
+- **The 1,000,000-line folder** opened with its prebuilt index and was idle 19.4 s later (a hash sweep of 1,001 files and the
+  vector cache load).
+- **Gate 1 rows that are not Gate 2 criteria**, re-run in the same IDE session with retrieval on (information): inline chat
+  first line p50 468 ms, p95 1,163 ms (Gate 1: 333 to 366 / 818 to 895 ms); local chat first text p50 95 ms, p95 654 ms
+  (Gate 1: 87 to 99 / 176 to 185 ms); mentions pinned `Program.cs` (45 tokens), `Errors` (50) and `Selection` (49), as in Gate 1;
+  host kill: longest UI gap 278 ms, Ready again after 1,788 ms; Pillion's own UI-thread time from the folder open to Ready
+  **8.6 ms** (18.11). The p95 of inline chat and chat first token are higher than in Gate 1 but within their budgets (5 s, 3 s);
+  with retrieval on, both now assemble context and search.
+
+## Decisions the figures force (pending the product owner)
+
+| Decision | Figures | Options |
+| --- | --- | --- |
+| **Indexing throughput and index size on the CPU tier (issue #90)** | Real code: 3.86 min per 100,000 lines (budget 3), 35.3 min per 1,000,000 (budget 30), 2.2 KB a chunk (budget about 1.5); generated code: 1.48 min, 15.7 min, 1.2 to 1.3 KB. Embedding is 95% of the time; real chunks average 172 bge tokens | As in issue #90: restate the budgets per tier and for real code (about 4 and 36 minutes, 2.2 KB), embed a truncated view of long chunks (2.16's harness can measure the recall cost), or fund more ONNX tuning |
+| **DirectML (issue #78)** | In the pipeline DirectML int8 is slower than the CPU on real code (33.6 against 45.2 chunks a second) and 8% faster on generated code; the isolated full-batch benchmark gives 3.9 times the CPU. So DirectML as shipped does not rescue the CPU budgets | Decide #78's licence question on its own; whatever the answer, the pipeline's attention-cell cap (2.9) should be measured per execution provider before DirectML is claimed as a speed-up (and the FP16 graph measured) |
+| **Branch-switch definition** | Realistic diff (two members in each of 500 files): 26.5 s in the IDE, 17.0 s host-side. Whole-file rewrite of 500 files: 92.1 s in the IDE, 73.4 s host-side; open documents searchable within about 5 s either way | The lead's working definition (realistic diff judged, rewrite reported) or a budget for the rewrite case |
+| **Partial vectors within 500 ms** | One-member edits searchable in 224 ms p50 and 272 ms max through the IDE; a file whose chunks are all new is searchable lexically within 408 ms, its vectors in part, the rest right after | Confirm the 2.10 rule (lexical in full within the budget) |
+| **Default embedding model (issue #95)** | From 2.16: bge-small 0.967 recall, qwen3-embedding 1.000, jina 0.967, e5 0.950; bge-small is the cheapest to index and query | As in issue #95 |
+
+## Open issues
+
+1. **The TSX chunker takes minutes on some inputs** (product, found by this item). An 8 KB file of random code-like tokens
+   (`tests/Pillion.ContextEngine.Tests/Regressions/tsx-slow-parse.txt`) takes about six minutes to chunk as `.tsx`, at any
+   cap; 40 ms as `.ts`. One such file in a repository would hold the indexing pipeline (there is no per-file time limit). The
+   chunker property test hits it about one run in five (4 min 8 s once). A skipped regression test is in place.
+2. **`ConversationRealHostTests` cause found on CI** (the window could not send yet); fixed in the test. The same race would
+   make a fast user's first Send a no-op while the model list loads; whether the window should queue or disable Send visibly
+   is a product question (the Send button is disabled while it cannot send, so a user sees it).
+3. **Retrieval reads indexes outside the open workspace** (product). A chat in the generated solution cited
+   `pillion-ide-tests\queries-...\Checkout.cs` (an IDE test's deleted scratch folder) and, in a quick run,
+   `repo-synthetic-50000\...` (another folder indexed on this machine). Retrieval asks the catalog for every index on disk when
+   it is given no roots (2.12 noted that an empty root list means "every index"). Another repository's code can then reach
+   a prompt. Chat retrieval should be scoped to the workspace's roots.
+4. **Indexes of deleted folders accumulate** in `%LOCALAPPDATA%\PillionProgrammer\index` (every IDE test creates one), and a
+   root that disappears leaves its index in `Failed` ("the repository root does not exist") until the workspace changes. The
+   gate script deletes them at the end; the Index window's Delete exists for users. Retention of stale indexes is a 2.18 or
+   phase 3 item.
+5. **Keystroke p95 with autocomplete on**: on 8.2 ms against off 4.0 ms (+4.2 ms; budget +2). The on-pass is like Gate 1's
+   (11.1 to 11.4 ms); Gate 1's off-pass was noisier (11.7 to 11.9 ms), which hid the difference. Not caused by retrieval as
+   far as these runs show; to look into with the UI-thread timings (the slowest keystrokes are the ones that accept a
+   suggestion, 213 ms max).
+6. **Prompt-prefix reuse is 59 to 61%** with retrieval on (issue #47 option 1's counter), under the 70% the cache row asked
+   for; the host's own cache had 0 hits in the typing passes, as in Gate 1. Issue #47 stays open.
+7. **`ContentInspector.cs` is excluded from indexing as generated code** (issue #96, found by 2.16): it contains the marker
+   text it looks for. Not fixed here.
+8. **CI on the phase 2 branch**: PR 82 (`feature/phase2-wave1`) is red. This branch fixes every failure the CI logs show
+   (Part A); its own CI result is in the pull request. `HostWorkspaceQueries` judged a find-references answer partial by
+   `took >= budget`; on CI one answer was not marked partial (`WorkspaceQueriesTests.FindReferences_ThatTookTheWholeBudget_...`,
+   seen once in the wave branch's CI, not since); not reproduced, so not changed.
+9. **`IndexingWatcherModelTests` and the other Model tests no longer run in CI** (this item's change to `ci.yml`), only in the
+   gate's step c.
+10. **The context assembly component benchmark with the bundled model** is at its p50 limit (150.9 ms against 150; the
+    query embedding takes 132 ms of it on the CPU). The IDE figure (53 ms p50) is well inside; issue #64 tracks the margin.
+11. **Not measured**: the FP16 DirectML graph; the reranker (off, licence review); the host's idle working set (150 MB budget);
+    the offline run (the product owner's); the TypeScript and Python ghost text by hand (Gate 1's item 6).
+12. Issue #56 (`InlineChatSessionTests.Escape_WhileStreaming...` order-dependent) is fixed by this item and can be closed when
+    it merges.
+
+## What the product owner must do
+
+1. **Decide issue #90** (throughput and index size on the CPU tier) with the indexing table above, and **issue #78** (DirectML),
+   now knowing that DirectML as shipped is not faster on real code.
+2. **Confirm the branch-switch definition** (realistic diff judged, whole-file rewrite reported) and **the partial-vectors rule**
+   for large saves.
+3. **Run the offline gate**, elevated, after a normal run: `pwsh tools/gate0/Invoke-OfflineRun.ps1 -IAmReady -Phase 2` (about 60
+   minutes: 20 to build the big index before the network goes off, then the Gate 0 checks and the IDE scenarios offline). If the
+   window is closed mid-run: `Get-NetAdapter | Where-Object Status -eq Disabled | Enable-NetAdapter`. Dry run:
+
+```
+Network adapters this run disables (and re-enables at the end):
+  Ethernet                       Up           00-D8-61-9C-FE-C0  Realtek PCIe GbE Family Controller
+  vEthernet (Default Switch)     Up           00-15-5D-44-7A-00  Hyper-V Virtual Ethernet Adapter
+
+Dry run (-WhatIf): nothing is changed, Visual Studio is not started.
+What if: Disable-NetAdapter 'Ethernet'
+What if: Disable-NetAdapter 'vEthernet (Default Switch)'
+Then: launch the Experimental Instance, wait up to 70 s for 'Offline', run the local chat, host-kill and Local-only checks, re-enable the adapters, close the instance and restore settings.json.
+Phase 1: settings route autocomplete to ollama/qwen2.5-coder:1.5b (Local-fast) and chat and inline edits to ollama/qwen2.5-coder:7b (Local-strong).
+         After the Local-only check, close the instance and, with the adapters still disabled, run tools/vs-tests/Invoke-IdeTests.ps1
+         with PILLION_GATE_SCENARIOS=1: the integration tests plus typing with ghost text (strong, fast, off), inline chat
+         (extract a method, /doc), chat first token, @file/@errors/@selection with the Context Inspector and the Outbound
+         records of every task class. Results in tools/gate1/out/<timestamp>-offline/.
+Phase 2: before the adapters go down, create the Gate 2 generated solution and index 1,000,000 generated lines into the data
+         folder with the bundled model on the CPU (about 20 minutes). With the adapters down, the IDE run also has
+         PILLION_GATE2_SCENARIOS=1 (indexing, keystrokes while indexing, save to searchable, branch switches, search and
+         context assembly on the big index, a cited chat on Ollama, the Index window, workspace queries, persistence),
+         then the encryption-at-rest checks. The gate indexes are deleted at the end. Results in tools/gate2/out/<timestamp>-offline/.
+```
+
+4. **Say where the private golden-set repository lives (issue #50)**, so the retrieval row can be measured on the three
+   external fixture repositories, and choose the default embedding model (issue #95).
+5. **Gate decision**: record pass or fail in the decision log.
+
+To reproduce the runs: `pwsh tools/gate2/Invoke-Gate2.ps1 -KeepIndexes` on Visual Studio 2026, then
+`pwsh tools/gate2/Invoke-Gate2.ps1 -DevEnvPath "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe" -SkipBenchmarks -SkipIndexing -SkipTwoInstances`
+(about 3 hours and 45 minutes in all, from an idle machine with no Visual Studio open).
