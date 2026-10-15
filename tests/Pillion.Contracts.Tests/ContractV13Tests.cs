@@ -29,6 +29,9 @@ public class ContractV13Tests
     /// <summary>The notifications the host sends to the VSIX (method names on the VSIX's JsonRpc).</summary>
     private static readonly string[] Notifications = ["hostStateChanged", "connectivityChanged", "settingsChanged", "indexStatusChanged"];
 
+    /// <summary>The notifications the VSIX sends to the host (method names on the host's JsonRpc).</summary>
+    private static readonly string[] ClientNotifications = ["ideActivityChanged"];
+
     /// <summary>Every method contract 1.3 added, with its interface.</summary>
     public static TheoryData<Type, string> MethodsAddedIn13 => new()
     {
@@ -44,6 +47,7 @@ public class ContractV13Tests
         { typeof(IContextService), nameof(IContextService.RebuildIndexAsync) },
         { typeof(IContextService), nameof(IContextService.DeleteIndexAsync) },
         { typeof(IContextService), nameof(IContextService.ListIndexesAsync) },
+        { typeof(IContextService), nameof(IContextService.SetWorkspaceAsync) },
         { typeof(IWorkspaceQueryService), nameof(IWorkspaceQueryService.CallersOfAsync) },
     };
 
@@ -131,6 +135,22 @@ public class ContractV13Tests
 
         Assert.Equal([contract.Name], users);
         Assert.DoesNotContain(name, Notifications);
+        Assert.DoesNotContain(name, ClientNotifications);
+    }
+
+    [Fact]
+    public void VsixToHostMethodNames_DoNotClashWithTheClientNotifications()
+    {
+        Assert.Empty(VsixToHost.SelectMany(t => t.GetMethods()).Select(m => m.Name).Intersect(ClientNotifications, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void AnIdeActivitySet_TravelsAsOneInteger()
+    {
+        var bytes = MessagePackSerializer.Serialize(IdeActivity.Build | IdeActivity.Test, Options);
+
+        Assert.Equal("5", MessagePackSerializer.ConvertToJson(bytes, Options));
+        Assert.Equal(IdeActivity.Build | IdeActivity.Test, MessagePackSerializer.Deserialize<IdeActivity>(bytes, Options));
     }
 
     [Fact]

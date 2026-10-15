@@ -62,7 +62,7 @@ public sealed class RepositoryScanner
                 {
                     await Parallel.ForEachAsync(
                         Walk(rootFull, token),
-                        new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = token },
+                        new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = token, TaskScheduler = _options.TaskScheduler ?? TaskScheduler.Default },
                         async (candidate, inner) =>
                         {
                             await channel.Writer.WriteAsync(candidate.Resolve(), inner).ConfigureAwait(false);

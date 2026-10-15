@@ -62,29 +62,7 @@ public sealed class ChunkRepository : IChunkRepository
                 foreach (var file in files)
                 {
                     token.ThrowIfCancellationRequested();
-                    var (language, partition) = writer.ReadFile(file.FileId)
-                        ?? throw new KeyNotFoundException($"There is no file with id {file.FileId} in the index.");
-
-                    // The delete trigger removes the FTS5 rows; the cascade removes the vectors.
-                    writer.DeleteChunks(file.FileId);
-                    var ids = new long[file.Chunks.Count];
-                    for (var i = 0; i < file.Chunks.Count; i++)
-                    {
-                        var chunk = file.Chunks[i];
-                        var id = writer.InsertChunk(file.FileId, chunk);
-                        ids[i] = id;
-                        if (!chunk.Embedding.IsEmpty)
-                        {
-                            vectors.Upsert(id, chunk.Embedding.Span, language, partition);
-                        }
-
-                        if (!chunk.EmbeddingFloat32.IsEmpty)
-                        {
-                            vectors.UpsertFloat32(id, chunk.EmbeddingFloat32.Span);
-                        }
-                    }
-
-                    results.Add(ids);
+                    results.Add(ReplaceChunks(writer, vectors, file.FileId, file.Chunks));
                 }
 
                 return Task.FromResult<IReadOnlyList<IReadOnlyList<long>>>(results);
@@ -274,6 +252,46 @@ public sealed class ChunkRepository : IChunkRepository
             cancellationToken);
     }
 
+    /// <summary>Replaces one file's chunks (and their FTS5 rows and vectors) inside the caller's write transaction.</summary>
+    internal static long[] ReplaceChunks(ChunkWriter writer, VectorWriteSession vectors, long fileId, IReadOnlyList<NewChunk> chunks)
+    {
+        var (language, partition) = writer.ReadFile(fileId)
+            ?? throw new KeyNotFoundException($"There is no file with id {fileId} in the index.");
+
+        // The delete trigger removes the FTS5 rows; the cascade removes the vectors.
+        writer.DeleteChunks(fileId);
+        var ids = new long[chunks.Count];
+        for (var i = 0; i < chunks.Count; i++)
+        {
+            var chunk = chunks[i];
+            var id = writer.InsertChunk(fileId, chunk);
+            ids[i] = id;
+            if (!chunk.Embedding.IsEmpty)
+            {
+                vectors.Upsert(id, chunk.Embedding.Span, language, partition);
+            }
+
+            if (!chunk.EmbeddingFloat32.IsEmpty)
+            {
+                vectors.UpsertFloat32(id, chunk.EmbeddingFloat32.Span);
+            }
+        }
+
+        return ids;
+    }
+
+    /// <summary>Checks a batch of chunks before anything is written.</summary>
+    internal static void Validate(IReadOnlyList<NewChunk> chunks)
+    {
+        ArgumentNullException.ThrowIfNull(chunks);
+        foreach (var chunk in chunks)
+        {
+            ArgumentNullException.ThrowIfNull(chunk);
+            ArgumentNullException.ThrowIfNull(chunk.Text);
+            ArgumentException.ThrowIfNullOrEmpty(chunk.Kind);
+        }
+    }
+
     private static ChunkRecord ReadChunk(SqliteDataReader reader) => new(
         reader.GetInt64(0),
         reader.GetInt64(1),
@@ -302,7 +320,7 @@ public sealed class ChunkRepository : IChunkRepository
             cancellationToken);
 
     /// <summary>Prepared statements for writing chunks within one transaction.</summary>
-    private sealed class ChunkWriter : IDisposable
+    internal sealed class ChunkWriter : IDisposable
     {
         private readonly SqliteCommand _readFile;
         private readonly SqliteCommand _deleteChunks;

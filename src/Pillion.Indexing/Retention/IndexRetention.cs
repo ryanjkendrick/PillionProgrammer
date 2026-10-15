@@ -45,6 +45,22 @@ public enum RetentionDecision
     DeleteUnused,
 }
 
+/// <summary>What <see cref="IndexRetention.Delete"/> did.</summary>
+public enum IndexDeleteOutcome
+{
+    /// <summary>The folder was deleted.</summary>
+    Deleted,
+
+    /// <summary>There is no index with that id.</summary>
+    NotFound,
+
+    /// <summary>A live host holds the index's <c>writer.lock</c>; nothing was deleted.</summary>
+    InUse,
+
+    /// <summary>The folder could not be deleted (a file is open elsewhere); part of it may remain.</summary>
+    Failed,
+}
+
 /// <summary>The decision about one index and what became of it.</summary>
 /// <param name="Usage">The index.</param>
 /// <param name="Decision">What retention decided.</param>
@@ -135,6 +151,41 @@ public sealed class IndexRetention
         }
 
         return Task.Run(() => Sweep(dryRun, retentionDays ?? _policy.RetentionDays, cancellationToken), cancellationToken);
+    }
+
+    /// <summary>
+    /// Deletes one index folder on request (the Index window's Delete). Refused while a live host holds its
+    /// <c>writer.lock</c>: the caller closes its own copy first, and another host's index is never deleted from here.
+    /// </summary>
+    /// <param name="indexId">The index id (the folder name).</param>
+    /// <returns>What happened.</returns>
+    public IndexDeleteOutcome Delete(string indexId)
+    {
+        if (string.IsNullOrEmpty(indexId) || !IsIndexId(indexId))
+        {
+            return IndexDeleteOutcome.NotFound;
+        }
+
+        var folder = new IndexFolder(Path.Combine(_paths.IndexDirectory, indexId));
+        if (!Directory.Exists(folder.Directory))
+        {
+            return IndexDeleteOutcome.NotFound;
+        }
+
+        if (WriterLock.Read(folder.LockFile) is { } owner && _probe.IsAlive(owner.ProcessId, owner.ProcessStartUtc))
+        {
+            return IndexDeleteOutcome.InUse;
+        }
+
+        try
+        {
+            Directory.Delete(folder.Directory, recursive: true);
+            return IndexDeleteOutcome.Deleted;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return IndexDeleteOutcome.Failed;
+        }
     }
 
     private static bool IsIndexId(string name) =>

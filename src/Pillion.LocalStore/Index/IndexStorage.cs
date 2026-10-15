@@ -141,6 +141,27 @@ public sealed partial class IndexStorage : IAsyncDisposable
             },
             cancellationToken);
 
+    /// <summary>
+    /// Runs several writes in one write transaction (committed when <paramref name="work"/> returns, rolled back when it
+    /// throws): the indexing pipeline stores a file's row, chunks, vectors and symbols together.
+    /// </summary>
+    /// <typeparam name="T">The result type.</typeparam>
+    /// <param name="work">The writes; it runs synchronously on the writer connection.</param>
+    /// <param name="cancellationToken">Cancels waiting for the writer, and is passed to <paramref name="work"/>.</param>
+    /// <returns>The result of <paramref name="work"/>.</returns>
+    /// <exception cref="InvalidOperationException">The database is read-only.</exception>
+    public Task<T> WriteAsync<T>(Func<IndexWriteSession, CancellationToken, T> work, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        return Database.WriteAsync(
+            (connection, transaction, token) =>
+            {
+                using var session = new IndexWriteSession(connection, transaction);
+                return Task.FromResult(work(session, token));
+            },
+            cancellationToken);
+    }
+
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
     {
