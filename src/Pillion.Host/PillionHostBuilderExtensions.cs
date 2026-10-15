@@ -116,7 +116,7 @@ internal static class PillionHostBuilderExtensions
         // workspace with the index's approximate edges as the fallback. The index's graphs come from the pipeline (2.9) and
         // the retrieval catalog (2.11), which replace the empty provider.
         builder.Services.TryAddSingleton<ISymbolGraphProvider, EmptySymbolGraphProvider>();
-        builder.Services.TryAddSingleton<IWorkspaceQueries, WorkspaceQueries.WorkspaceQueries>();
+        builder.Services.TryAddSingleton<IWorkspaceQueries, HostWorkspaceQueries>();
 
         // Local Store (work item 2.1): the encrypted conversations.db, opened lazily behind the localStore flag. Work item
         // 2.2 persists conversations and the Outbound log through it, behind IConversationService (contract 1.3, a stub

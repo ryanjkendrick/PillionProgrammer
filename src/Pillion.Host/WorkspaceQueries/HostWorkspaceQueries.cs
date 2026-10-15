@@ -26,7 +26,7 @@ namespace Pillion.Host.WorkspaceQueries;
 /// file, the declaration the index knows.</item>
 /// </list>
 /// </remarks>
-internal sealed partial class WorkspaceQueries : IWorkspaceQueries
+internal sealed partial class HostWorkspaceQueries : IWorkspaceQueries
 {
     /// <summary>Visual Studio's budget for one query (the contract's 2 s).</summary>
     public static readonly TimeSpan VsixBudget = TimeSpan.FromSeconds(2);
@@ -46,28 +46,28 @@ internal sealed partial class WorkspaceQueries : IWorkspaceQueries
     private readonly IVsixConnection _vsix;
     private readonly IFeatureFlags _flags;
     private readonly ISymbolGraphProvider _graphs;
-    private readonly ILogger<WorkspaceQueries> _logger;
+    private readonly ILogger<HostWorkspaceQueries> _logger;
     private readonly TimeSpan _callTimeout;
     private readonly TimeSpan _budget;
 
-    /// <summary>Initializes a new instance of the <see cref="WorkspaceQueries"/> class.</summary>
+    /// <summary>Initializes a new instance of the <see cref="HostWorkspaceQueries"/> class.</summary>
     /// <param name="vsix">The connection to Visual Studio.</param>
     /// <param name="flags">The feature flags.</param>
     /// <param name="graphs">The index's symbol graphs.</param>
     /// <param name="logger">The logger.</param>
-    public WorkspaceQueries(IVsixConnection vsix, IFeatureFlags flags, ISymbolGraphProvider graphs, ILogger<WorkspaceQueries> logger)
+    public HostWorkspaceQueries(IVsixConnection vsix, IFeatureFlags flags, ISymbolGraphProvider graphs, ILogger<HostWorkspaceQueries> logger)
         : this(vsix, flags, graphs, logger, CallTimeout, VsixBudget)
     {
     }
 
-    /// <summary>Initializes a new instance of the <see cref="WorkspaceQueries"/> class with other timings (tests).</summary>
+    /// <summary>Initializes a new instance of the <see cref="HostWorkspaceQueries"/> class with other timings (tests).</summary>
     /// <param name="vsix">The connection to Visual Studio.</param>
     /// <param name="flags">The feature flags.</param>
     /// <param name="graphs">The index's symbol graphs.</param>
     /// <param name="logger">The logger.</param>
     /// <param name="callTimeout">How long to wait for Visual Studio.</param>
     /// <param name="budget">Visual Studio's budget, for the find-references truncation rule.</param>
-    internal WorkspaceQueries(IVsixConnection vsix, IFeatureFlags flags, ISymbolGraphProvider graphs, ILogger<WorkspaceQueries> logger, TimeSpan callTimeout, TimeSpan budget)
+    internal HostWorkspaceQueries(IVsixConnection vsix, IFeatureFlags flags, ISymbolGraphProvider graphs, ILogger<HostWorkspaceQueries> logger, TimeSpan callTimeout, TimeSpan budget)
     {
         ArgumentNullException.ThrowIfNull(vsix);
         ArgumentNullException.ThrowIfNull(flags);
