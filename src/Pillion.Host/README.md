@@ -253,6 +253,16 @@ Work item 2.9, design sections 7, 10 and 13, behind `features.indexing` (an inde
    `IndexRetention.GetUsage()`; `ListExcludedFilesAsync` pages the last sweep's list, secret-bearing first. With the flag
    off the status is `Idle` with no roots, nothing is opened, and these controls are refused with `PolicyDenied`.
 
+### Serving search and the workspace queries
+
+`LiveIndexCatalog` is the `IIndexCatalog` of retrieval (work item 2.11) and the `ISymbolGraphProvider` of the workspace
+queries (2.14), registered before `AddPillionRetrieval` and the empty provider. Searches use the very `IndexStorage` the
+pipeline writes through (or reads, on a reader host), with the symbol graph of the last refresh, so a root this host has
+open is never opened a second time and new chunks are searchable as soon as a batch is stored. Indexes on the machine the
+pipeline does not have open (another repository, or before the extension reports the workspace) still come from 2.11's
+read-only catalog. When an index opens, two reader connections are opened and the in-memory vector copy loaded in the
+background, so the first search pays for neither.
+
 ### Resource rules (design section 13)
 
 - **Threads.** `PipelineScheduler`: `Environment.ProcessorCount / 2` dedicated threads at `ThreadPriority.BelowNormal`.
@@ -263,6 +273,12 @@ Work item 2.9, design sections 7, 10 and 13, behind `features.indexing` (an inde
   default): a forced, compacting garbage collection first (once per episode), then the batch is halved (32, 16, 8, 4),
   then indexing pauses with reason `Memory`, sampling every second and resuming below 90% of the cap; below 75% the batch
   doubles back to 32.
+- **The bundled model's memory.** Measured with the pipeline on this repository's own source: with ONNX Runtime's memory
+  pattern on and 32 x 512 x 512 attention cells per run the host passed 2 GB and the memory pause never lifted (the CPU
+  arena does not shrink). The bundled runtime now runs with the memory pattern off on the CPU and 512 x 512 cells per run
+  (`BundledModelOptions.CpuMemoryPattern`, `MaxAttentionCells`): about 315 MB at peak and about 50% faster. The governor's
+  first step also releases the loaded model (`BundledModelRuntime.ReleaseUnused`, its arena with it), and it releases it
+  again when it pauses, so a pause can end.
 - **IDE activity.** The notification `ideActivityChanged` (client to host, contract 1.3, an `IdeActivity` set) feeds
   `IdeActivityMonitor`: pause reasons `Build`, `Test`, `Debug` while the flags are set; the set is forgotten when the
   extension disconnects, so a crashed Visual Studio cannot leave indexing paused.
