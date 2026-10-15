@@ -38,9 +38,10 @@ public enum LocalStoreErrorKind
 /// message is written for the user. The precise reason is <see cref="Kind"/>.
 /// </summary>
 /// <remarks>
-/// The contract has no storage error code yet, so every kind uses <see cref="PillionErrorCode.PolicyDenied"/> (the store
-/// refuses to open). A dedicated code is a candidate for the next contract version. The message and
-/// <see cref="PillionError.Details"/> never contain key material.
+/// Every kind uses <see cref="PillionErrorCode.StorageUnavailable"/> (contract 1.3), except
+/// <see cref="LocalStoreErrorKind.FeatureDisabled"/>, which uses <see cref="PillionErrorCode.PolicyDenied"/> as every other
+/// feature flag that is off does. Before contract 1.3 every kind used <see cref="PillionErrorCode.PolicyDenied"/>. The
+/// message and <see cref="PillionError.Details"/> never contain key material.
 /// </remarks>
 public sealed class LocalStoreException : PillionRpcException
 {
@@ -54,7 +55,7 @@ public sealed class LocalStoreException : PillionRpcException
         : base(
             new PillionError
             {
-                Code = PillionErrorCode.PolicyDenied,
+                Code = CodeFor(kind),
                 Message = message,
                 RetryHint = retryHint,
                 Details = details,
@@ -66,4 +67,10 @@ public sealed class LocalStoreException : PillionRpcException
 
     /// <summary>Gets why the store failed.</summary>
     public LocalStoreErrorKind Kind { get; }
+
+    /// <summary>Gets the contract error code a failure of a kind is reported with.</summary>
+    /// <param name="kind">Why the store failed.</param>
+    /// <returns><see cref="PillionErrorCode.PolicyDenied"/> for <see cref="LocalStoreErrorKind.FeatureDisabled"/>; otherwise <see cref="PillionErrorCode.StorageUnavailable"/>.</returns>
+    public static PillionErrorCode CodeFor(LocalStoreErrorKind kind) =>
+        kind == LocalStoreErrorKind.FeatureDisabled ? PillionErrorCode.PolicyDenied : PillionErrorCode.StorageUnavailable;
 }
