@@ -39,6 +39,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Pillion.LocalStore", "src\P
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Pillion.LocalStore.Tests", "tests\Pillion.LocalStore.Tests\Pillion.LocalStore.Tests.csproj", "{76232E9D-1405-4B16-A8B8-EF9DE4F24AF5}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Pillion.Indexing", "src\Pillion.Indexing\Pillion.Indexing.csproj", "{0BBB0B32-37DD-490C-8947-B34A3964B3F8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Pillion.Indexing.Tests", "tests\Pillion.Indexing.Tests\Pillion.Indexing.Tests.csproj", "{58D2193A-2655-42ED-A07C-BD006829D57A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -109,6 +113,14 @@ Global
 		{76232E9D-1405-4B16-A8B8-EF9DE4F24AF5}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{76232E9D-1405-4B16-A8B8-EF9DE4F24AF5}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{76232E9D-1405-4B16-A8B8-EF9DE4F24AF5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0BBB0B32-37DD-490C-8947-B34A3964B3F8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0BBB0B32-37DD-490C-8947-B34A3964B3F8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0BBB0B32-37DD-490C-8947-B34A3964B3F8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0BBB0B32-37DD-490C-8947-B34A3964B3F8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{58D2193A-2655-42ED-A07C-BD006829D57A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{58D2193A-2655-42ED-A07C-BD006829D57A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{58D2193A-2655-42ED-A07C-BD006829D57A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{58D2193A-2655-42ED-A07C-BD006829D57A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -130,5 +142,7 @@ Global
 		{0E8E6C2B-3C1A-4F4B-9B0D-6B7E3E2A9C51} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{D8DA2BBF-773A-4567-92E1-DF250A380F7C} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{76232E9D-1405-4B16-A8B8-EF9DE4F24AF5} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{0BBB0B32-37DD-490C-8947-B34A3964B3F8} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{58D2193A-2655-42ED-A07C-BD006829D57A} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal
