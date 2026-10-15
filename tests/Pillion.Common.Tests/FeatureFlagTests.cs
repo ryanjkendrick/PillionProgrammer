@@ -9,23 +9,35 @@ namespace Pillion.Common.Tests;
 public sealed class FeatureFlagTests
 {
     private static readonly string[] AllNames =
-        ["chat", "modelGateway", "connectivityProbes", "cloudProviders", "ollamaProvider", "openAICompatibleProvider", "anthropicProvider", "geminiProvider", "mistralProvider", "azureOpenAIProvider", "autocomplete", "inlineChat", "mentions", "outboundLogView", "localStore", "indexing", "embeddings", "bundledEmbeddings", "workspaceQueries", "indexWindow"];
+        ["chat", "modelGateway", "connectivityProbes", "cloudProviders", "ollamaProvider", "openAICompatibleProvider", "anthropicProvider", "geminiProvider", "mistralProvider", "azureOpenAIProvider", "autocomplete", "inlineChat", "mentions", "outboundLogView", "localStore", "indexing", "embeddings", "bundledEmbeddings", "workspaceQueries", "indexWindow", "retrieval", "reranker"];
 
     [Fact]
-    public void Defaults_AreAllOn_AndTheNamesMatchTheJsonKeys()
+    public void Defaults_AreAllOnExceptTheReranker_AndTheNamesMatchTheJsonKeys()
     {
         var features = new FeatureSettings();
 
         Assert.Equal(AllNames, FeatureNames.All);
         foreach (var name in FeatureNames.All)
         {
-            Assert.True(features.IsEnabled(name), name);
+            Assert.Equal(name != FeatureNames.Reranker, features.IsEnabled(name));
         }
 
         var json = (JsonObject)JsonSerializer.SerializeToNode(new PillionSettings(), SettingsJsonForTests())!;
         var section = (JsonObject)json["features"]!;
         Assert.Equal(AllNames, section.Select(p => p.Key));
-        Assert.All(section, p => Assert.True(p.Value!.GetValue<bool>()));
+        Assert.All(section, p => Assert.Equal(p.Key != FeatureNames.Reranker, p.Value!.GetValue<bool>()));
+    }
+
+    [Fact]
+    public void TheReranker_IsOffByDefault_AndCanBeSwitchedOnByTheUserButNotByAPolicy()
+    {
+        var user = new PillionSettings();
+        Assert.False(user.Features.Reranker);
+
+        user.Features.Reranker = true;
+        Assert.True(EffectiveSettings.Resolve(user, policies: null).Settings.Features.Reranker);
+        Assert.False(EffectiveSettings.Resolve(user, [RepositoryPolicy.Parse("""{ "disabledFeatures": ["reranker"] }""")]).Settings.Features.Reranker);
+        Assert.False(EffectiveSettings.Resolve(user, [RepositoryPolicy.Parse("""{ "disabledFeatures": ["retrieval"] }""")]).IsFeatureEnabled(FeatureNames.Retrieval));
     }
 
     [Fact]
@@ -47,7 +59,7 @@ public sealed class FeatureFlagTests
         var settings = store.GetSettings();
 
         Assert.Equal(PillionSettings.CurrentVersion, settings.Version);
-        Assert.All(FeatureNames.All, name => Assert.True(settings.Features.IsEnabled(name)));
+        Assert.All(FeatureNames.All, name => Assert.Equal(name != FeatureNames.Reranker, settings.Features.IsEnabled(name)));
         Assert.Contains("\"features\"", File.ReadAllText(store.Paths.SettingsFile), StringComparison.Ordinal);
     }
 
@@ -64,7 +76,7 @@ public sealed class FeatureFlagTests
 
         Assert.Equal(1, settings.Version);
         Assert.True(settings.Privacy.LocalOnly);
-        Assert.All(FeatureNames.All, name => Assert.True(settings.Features.IsEnabled(name)));
+        Assert.All(FeatureNames.All, name => Assert.Equal(name != FeatureNames.Reranker, settings.Features.IsEnabled(name)));
         Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(paths.SettingsFile)!, "*.bak*"));
     }
 

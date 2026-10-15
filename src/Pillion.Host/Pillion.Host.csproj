@@ -27,6 +27,7 @@
     <ProjectReference Include="..\Pillion.Common\Pillion.Common.csproj" />
     <ProjectReference Include="..\Pillion.ModelGateway\Pillion.ModelGateway.csproj" />
     <ProjectReference Include="..\Pillion.LocalStore\Pillion.LocalStore.csproj" />
+    <ProjectReference Include="..\Pillion.Indexing\Pillion.Indexing.csproj" />
     <!-- The symbol graph's approximate reference edges, the fallback of the workspace queries (work item 2.14). -->
     <ProjectReference Include="..\Pillion.ContextEngine\Pillion.ContextEngine.csproj" />
   </ItemGroup>

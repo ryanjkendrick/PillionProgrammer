@@ -7,6 +7,7 @@ using Pillion.Common.Settings;
 using Pillion.Contracts;
 using Pillion.Host.Connectivity;
 using Pillion.Host.Context;
+using Pillion.Host.Context.Retrieval;
 using Pillion.Host.Conversations;
 using Pillion.Host.Lifecycle;
 using Pillion.Host.Logging;
@@ -108,6 +109,7 @@ internal static class PillionHostBuilderExtensions
 
         // Mentions and context (work item 1.10): IContextService resolves @-mentions; search and indexing arrive in phase 2.
         // The indexStatusChanged notification (contract 1.3), throttled to twice a second; the pipeline (2.9) publishes to it.
+        builder.Services.AddPillionRetrieval(); // Work item 2.11: hybrid retrieval behind SearchAsync and SearchDetailedAsync.
         builder.Services.AddRpcTarget<IContextService, ContextRpcService>();
         builder.Services.TryAddSingleton<INotificationSender, VsixNotificationSender>();
         builder.Services.TryAddSingleton<IndexStatusNotifier>();

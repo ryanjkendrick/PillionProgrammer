@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Context Engine (design section 7): chunkers, symbols and the repo map today; storage and retrieval in later phase 2 items.
+    Context Engine (design section 7): chunkers, symbols, the repo map and hybrid retrieval (work item 2.11).
     No Visual Studio dependency. Referenced by its tests only until the host wires it in (work item 2.9), where it ships
     under features.indexing. See README.md.
   -->
@@ -51,6 +51,11 @@
       <None Include="@(_PillionTreeSitterFile)" />
     </ItemGroup>
   </Target>
+
+  <ItemGroup>
+    <!-- Retrieval (work item 2.11) searches the index storage of Pillion.LocalStore (chunks, FTS5, vectors, symbols). -->
+    <ProjectReference Include="..\Pillion.LocalStore\Pillion.LocalStore.csproj" />
+  </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="Pillion.ContextEngine.Tests" />

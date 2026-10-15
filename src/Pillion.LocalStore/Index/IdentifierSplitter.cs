@@ -88,6 +88,19 @@ public static class IdentifierSplitter
     /// <returns>The match expression, or <see langword="null"/> when the query has no tokens.</returns>
     public static string? BuildMatchQuery(string query, bool prefixLastToken = true)
     {
+        var expressions = BuildTermExpressions(query, prefixLastToken);
+        return expressions.Count == 0 ? null : string.Join(" OR ", expressions);
+    }
+
+    /// <summary>
+    /// The per-token expressions <see cref="BuildMatchQuery"/> combines with <c>OR</c>, in query order and without
+    /// duplicates: each matches its token whole or as the phrase of its parts.
+    /// </summary>
+    /// <param name="query">The query text.</param>
+    /// <param name="prefixLastToken">Whether the last token matches as a prefix.</param>
+    /// <returns>The expressions; empty when the query has no tokens.</returns>
+    public static IReadOnlyList<string> BuildTermExpressions(string query, bool prefixLastToken = true)
+    {
         ArgumentNullException.ThrowIfNull(query);
         var tokens = new List<string>();
         var span = query.AsSpan();
@@ -111,7 +124,7 @@ public static class IdentifierSplitter
 
         if (tokens.Count == 0)
         {
-            return null;
+            return [];
         }
 
         var expressions = new List<string>(tokens.Count);
@@ -136,7 +149,7 @@ public static class IdentifierSplitter
             }
         }
 
-        return string.Join(" OR ", expressions);
+        return expressions;
     }
 
     /// <summary>Whether FTS5's <c>unicode61</c> tokenizer with <c>tokenchars '_'</c> keeps the character inside a token (approximately: letters, digits and underscore).</summary>

@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Pillion.Contracts;
+using Pillion.Host.Context.Retrieval;
 using Pillion.Host.Rpc;
 using Pillion.ModelGateway;
 
@@ -48,13 +49,15 @@ internal sealed partial class ContextRpcService : IContextService
     private readonly IGatewaySettingsSource _settings;
     private readonly IModelRouter? _router;
     private readonly ILogger _logger;
+    private readonly IRetrievalService? _retrieval;
 
     /// <summary>Initializes a new instance of the <see cref="ContextRpcService"/> class.</summary>
     /// <param name="tokens">Counts tokens.</param>
     /// <param name="settings">Supplies the effective <c>indexing.exclude</c> globs.</param>
     /// <param name="router">Names the default chat model whose tokenizer counts the content; without one the estimating counter is used.</param>
     /// <param name="logger">The logger.</param>
-    public ContextRpcService(ITokenCounter tokens, IGatewaySettingsSource settings, IModelRouter? router = null, ILogger<ContextRpcService>? logger = null)
+    /// <param name="retrieval">Answers searches (work item 2.11); without it searches return no hits.</param>
+    public ContextRpcService(ITokenCounter tokens, IGatewaySettingsSource settings, IModelRouter? router = null, ILogger<ContextRpcService>? logger = null, IRetrievalService? retrieval = null)
     {
         ArgumentNullException.ThrowIfNull(tokens);
         ArgumentNullException.ThrowIfNull(settings);
@@ -62,11 +65,12 @@ internal sealed partial class ContextRpcService : IContextService
         _settings = settings;
         _router = router;
         _logger = logger ?? NullLogger<ContextRpcService>.Instance;
+        _retrieval = retrieval;
     }
 
     /// <inheritdoc/>
     public Task<SearchResult[]> SearchAsync(SearchRequest request, CancellationToken cancellationToken) =>
-        Task.FromResult<SearchResult[]>([]);
+        _retrieval?.SearchAsync(request, cancellationToken) ?? Task.FromResult<SearchResult[]>([]);
 
     /// <inheritdoc/>
     public Task<IndexStatus> GetIndexStatusAsync(CancellationToken cancellationToken) =>
@@ -75,11 +79,9 @@ internal sealed partial class ContextRpcService : IContextService
     /// <inheritdoc/>
     public Task PauseIndexingAsync(bool pause, CancellationToken cancellationToken) => Task.CompletedTask;
 
-    // TODO(2.11): hybrid retrieval with timings; until then there is no index, so there are no hits.
-
     /// <inheritdoc/>
     public Task<SearchResponse> SearchDetailedAsync(SearchRequest request, CancellationToken cancellationToken) =>
-        Task.FromResult(new SearchResponse());
+        _retrieval?.SearchDetailedAsync(request, cancellationToken) ?? Task.FromResult(new SearchResponse());
 
     // TODO(2.9, 2.15): the excluded files of the root's last sweep (RepositorySweeper's Excluded and SecretFiles).
 

@@ -191,7 +191,7 @@ Logs for both processes are in `%LOCALAPPDATA%\PillionProgrammer\logs` (**Tools 
 ## Feature flags
 
 Every capability sits behind a feature flag, so a user or a repository policy can switch it off. All flags default to
-on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgrammer\settings.json`:
+on except `reranker`, which waits on a licence review. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgrammer\settings.json`:
 
 ```json
 {
@@ -215,7 +215,9 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
     "embeddings": true,
     "bundledEmbeddings": true,
     "workspaceQueries": true,
-    "indexWindow": true
+    "indexWindow": true,
+    "retrieval": true,
+    "reranker": false
   }
 }
 ```
@@ -242,6 +244,8 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
 | `bundledEmbeddings` | The bundled embedding provider (`bundled`, work item 2.7) is not built or routed to: the ONNX model shipped with the extension (`bge-small-en-v1.5`) and the models downloaded on request stop being offered, and the Embedding task class uses Ollama or another configured local embedding model instead (or fails with `ModelNotInstalled` when there is none). Nothing else changes. |
 | `workspaceQueries` | Visual Studio refuses Pillion Host's `FindReferencesAsync` and `CallersOfAsync` calls with `PolicyDenied` and a message that names the flag, and Pillion Host stops asking: `find_references` and `callers_of` (for `@symbol` and chat) are answered from the index's approximate reference edges only, marked approximate (work item 2.14). Nothing else changes. |
 | `indexWindow` | **View > Other Windows > Pillion Index** and **Tools > Pillion: Open Index** are hidden, the status bar shows no indexing indicator, and the **Indexing** Options page (`indexing.exclude`, `maxMemoryMb`, `pauseOnBattery`, `retentionDays`) says it is disabled by settings or policy. Pillion Host indexes either way (that is the `indexing` flag); the setting values stay in `settings.json`. The extension reads the flag when Pillion Host becomes ready and when the Tools menu opens (an absent flag means on). |
+| `retrieval` | `IContextService.SearchAsync` and `SearchDetailedAsync` (hybrid retrieval, work item 2.11: lexical, vector and symbol candidates fused with Reciprocal Rank Fusion, see `src/Pillion.ContextEngine/README.md`) fail with `PolicyDenied` and a message that names the flag. Searching also needs `indexing` and `localStore` to open an index, and the vector candidates need `embeddings`; without them the search answers from what it can open (no index: no hits; no embeddings: lexical and symbol hits only, marked `Degraded`). |
+| `reranker` | **Off by default.** The cross-encoder reranker of hybrid retrieval waits on the licence review in design section 18, so no reranker ships yet: this version keeps the fused order whether the flag is on or off. A policy can keep it off; nothing turns it on but the user. |
 
 A repository can switch flags off for everyone who opens it with `disabledFeatures` in `.pillion/policy.json`, next to
 `localOnly`, `disabledTools`, `exclude` and `denyCommands`:
