@@ -25,6 +25,12 @@ public enum LocalStoreErrorKind
 
     /// <summary>A migration failed; the database was left at its previous version.</summary>
     MigrationFailed,
+
+    /// <summary>A read-only open found no database file (its owner has not created it yet, or it was deleted).</summary>
+    DatabaseMissing,
+
+    /// <summary>A read-only open found a database with an older schema than this build reads; only its owner migrates it.</summary>
+    NeedsMigration,
 }
 
 /// <summary>
