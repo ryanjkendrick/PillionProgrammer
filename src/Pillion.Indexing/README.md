@@ -117,9 +117,13 @@ the extension), else the top-level folder, else `(root)`.
 
 `meta` also holds `embedding_model`, `chunker_version` and `root_path` (`IndexMetaKeys`), written by the owner.
 
-**Item 2.8 appends migration 2 to `IndexSchema.Schema`** (chunks, `chunks_fts`, `chunk_vectors`, and with 2.5 the symbol
-tables): add a `StoreMigration` with the next version, keep `MinReaderVersion` at 1 for additive tables (see "Adding a
-migration" in the Local Store README) and leave version 1's SQL alone.
+**Version 2 is the index storage of item 2.8**: `IndexSchema.Schema` is `IndexStorageSchema.After(version 1)`, so one
+`index.db` carries `files` and then `chunks`, `chunks_fts`, `chunk_embeddings`, `vec_float32` (development only),
+`vec_generation`, `symbols` and `symbol_refs` (see the Index storage section of the Local Store README). Version 2
+raises `min_reader_version` to 2. Open the chunk, vector and symbol APIs over an open index with
+`IndexStorage.Create(indexStore.Database, ownsDatabase: false)`; on a reader the database is read-only, so they only
+search. Deleting a `files` row removes the file's chunks, FTS5 rows, vectors and symbols by cascade and trigger. Later
+migrations append after version 2; leave the earlier SQL alone.
 
 ## Ownership
 

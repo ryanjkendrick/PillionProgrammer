@@ -40,7 +40,7 @@ public sealed class IndexStoreTests : IDisposable
         await using var store = await Host(100, time).OpenAsync(Request(100));
 
         Assert.Equal(IndexRole.Writer, store.Role);
-        Assert.Equal(1, store.Database.SchemaVersion);
+        Assert.Equal(IndexSchema.Schema.CurrentVersion, store.Database.SchemaVersion);
         Assert.False(store.Database.IsReadOnly);
         Assert.True(store.Writer.IsSelf);
         Assert.Equal("pillion-host-100", store.Writer.PipeName);
@@ -59,7 +59,7 @@ public sealed class IndexStoreTests : IDisposable
         Assert.Equal(Repo, state.RootPath);
         Assert.Equal("bge-small-en-v1.5-int8", state.EmbeddingModel);
         Assert.Equal("1", state.ChunkerVersion);
-        Assert.Equal(1, state.SchemaVersion);
+        Assert.Equal(IndexSchema.Schema.CurrentVersion, state.SchemaVersion);
         Assert.Equal(time.Now, state.CreatedUtc);
         Assert.Equal(time.Now, state.LastOpenedUtc);
         Assert.Null(state.LastFullSweepUtc);

@@ -15,16 +15,18 @@ internal static class IndexDatabases
 public sealed class FilesRepositoryTests
 {
     [Fact]
-    public async Task TheSchema_IsVersion1_AndRecordsTheStoreKind()
+    public async Task TheSchema_IsVersion2_FilesFromVersion1AndTheIndexStorageFrom2_AndRecordsTheStoreKind()
     {
         using var temp = new TempDirectory();
         await using var database = await IndexDatabases.OpenAsync(temp);
 
-        Assert.Equal(1, database.SchemaVersion);
-        Assert.Equal(1, IndexSchema.Schema.CurrentVersion);
+        // Version 1 is files (2.3); version 2 is the index storage (2.8, IndexStorageSchema), which raises the reader version.
+        Assert.Equal(2, database.SchemaVersion);
+        Assert.Equal(2, IndexSchema.Schema.CurrentVersion);
+        Assert.Same(Pillion.LocalStore.Index.IndexStorageSchema.Migration, IndexSchema.Schema.Migrations[1]);
         Assert.Equal("index", await ScalarAsync(database, "SELECT value FROM meta WHERE key = 'store'"));
-        Assert.Equal("1", await ScalarAsync(database, "SELECT value FROM meta WHERE key = 'schema_version'"));
-        Assert.Equal("1", await ScalarAsync(database, "SELECT value FROM meta WHERE key = 'min_reader_version'"));
+        Assert.Equal("2", await ScalarAsync(database, "SELECT value FROM meta WHERE key = 'schema_version'"));
+        Assert.Equal("2", await ScalarAsync(database, "SELECT value FROM meta WHERE key = 'min_reader_version'"));
         var columns = await database.ReadAsync(async (connection, token) =>
         {
             using var command = connection.CreateCommand();
