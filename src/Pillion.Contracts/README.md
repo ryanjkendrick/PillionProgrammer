@@ -42,7 +42,23 @@ methods with StreamJsonRpc's method-not-found error, a 1.2 client never calls th
 `indexStatusChanged` (nor sends `ideActivityChanged`, `documentSaved` or `openDocumentsChanged`), and each side reads the new fields' defaults from the other (`ContractV13Tests`, and over the real
 pipe `ContractV13RpcTests` and `HandshakeCompatibilityTests` in the host tests). Every new DTO is round-tripped by
 `DtoRoundTripTests`. Until the consuming work items land, Pillion Host answers most new methods with
-`PillionErrorCode.NotImplemented` (see the host README, Contract 1.3 stubs); the fake host serves them all with canned data.
+`PillionErrorCode.NotImplemented` while a work item was still outstanding; by the end of phase 2 every 1.3 method is
+implemented (see the host README, Contract 1.3 stubs: none are left); the fake host serves them all with canned data.
+
+Every addition, by the work item that made it and the item that consumes it (the sections below give the members and their
+`Order` values):
+
+| Work item | Added to the contract | Consumed by |
+| --- | --- | --- |
+| 2.2 | `IConversationService` and its DTOs, including `ConversationMessage.Citations` and `ConversationMessage.Cancelled`; `PillionErrorCode.StorageUnavailable` | Host: `ConversationRpcService`, `ConversationRecorder` (2.2). Chat window: the conversation list, restore, Delete all on the Privacy page (2.2) |
+| 2.9 | `IndexStatus.Phase`, `PauseReason`, `Roots`, `ExcludedSecretFileCount`, `LastError`, `Progress`; `IndexRootStatus`, `IndexProgress`; `IContextService.SetWorkspaceAsync` and `WorkspaceDescription`; `IdeActivity` and the client-to-host notification `ideActivityChanged`; the host-to-client notification `indexStatusChanged` | Host: `IndexingService` (2.9). VSIX: `IndexingRelay` sends the workspace and the activity (2.9); the Index window and the status bar read the status (2.15) |
+| 2.15 | `ListExcludedFilesAsync`, `RebuildIndexAsync`, `DeleteIndexAsync`, `ListIndexesAsync` with `ExcludedFilesRequest`, `ExcludedFilesPage`, `ExcludedFile`, `IndexInfo` | The Index window (2.15); served by `IndexingService` (2.9) |
+| 2.10 | The client-to-host notifications `documentSaved` and `openDocumentsChanged` | Host: `IndexingService.NotifySaved` and the open-documents-first rule of a full run (2.10). VSIX: `IndexingRelay` |
+| 2.11 | `SearchDetailedAsync`, `SearchResponse`, `SearchMode`; `SearchRequest.Roots`, `Partitions`, `Languages`, `Mode`, `MaxPerFile`, `IncludeText`, `FocusFiles`; `SearchResult.ChunkId`, `Breadcrumb`, `Kind`, `Partition`, `Language`, `LexicalRank`, `VectorRank`, `FusedScore`, `Text` | Host: `RetrievalService` (2.11), then the prompt builders (2.12); the evaluation harness (2.16) and the Gate 2 scenarios (2.17) call it over the contract |
+| 2.12 | `Citation`; `ChatChunk.Citations`; `ChatRequest.RetrievalMode`, `MaxRetrievedChunks`, `ExcludedContextKeys`; `ContextReportItemDto.ContextKey`; `AutocompleteHostCounters.PromptPrefixChecks`, `PromptPrefixReuses`, `PromptPrefixReuseRate` | Gateway `ContextAssembler` and the host's retrieval sources (2.12). Chat window: citation links, the Sources line, Remove in the Context Inspector (2.12). Gate 2 reads the prompt-prefix counters (2.17, issue #47) |
+| 2.13 | `MentionKinds`; `MentionRequest.Qualifier`, `Arguments`; `MentionResolution.Citations` | Host: `ContextRpcService` mentions v2 (2.13). Chat window: the picker and the IDE payloads for `@output`, `@build`, `@tests` (2.13) |
+| 2.14 | `IWorkspaceQueryService.CallersOfAsync` with `CallersOfRequest`, `CallersOfResponse`, `CallSite` | VSIX: `WorkspaceQueryService` (2.14). Host: `IWorkspaceQueries` for `@symbol` and chat (2.14, 2.13) |
+| batch | `ContractVersion` 1.3; `PillionErrorCode.NotImplemented` | All of the above |
 
 - **Conversations (work item 2.2).** A new VSIX-to-host service over `conversations.db`, behind the `localStore` flag. There
   is no append method: the host appends the user's message and the reply as `ChatAsync` runs a request whose
@@ -62,7 +78,7 @@ pipe `ContractV13RpcTests` and `HandshakeCompatibilityTests` in the host tests).
   | `ConversationPage` (new) | `Items`, `HasMore` | 0-1 | `ConversationSummary[]` |
   | `ConversationSummary` (new) | `Id`, `Title`, `CreatedUtc`, `UpdatedUtc`, `LastModelId`, `MessageCount` | 0-5 | `LastModelId` is `providerId/modelId` or `null` |
   | `ConversationDetail` (new) | `Conversation`, `Messages`, `Pins` | 0-2 | |
-  | `ConversationMessage` (new) | `Id`, `Role`, `Content`, `ModelId`, `ProviderId`, `PromptTokens`, `CompletionTokens`, `CreatedUtc`, `Citations`, `Cancelled` | 0-9 | `Role` is `ChatRole`; `Citations` keep a restored reply's spans clickable; `Cancelled` marks a reply stopped before it finished (`Content` is what had arrived) |
+  | `ConversationMessage` (new) | `Id`, `Role`, `Content`, `ModelId`, `ProviderId`, `PromptTokens`, `CompletionTokens`, `CreatedUtc`, `Citations`, `Cancelled` | 0-9 | `Role` is `ChatRole`; `Citations` keep a restored reply's spans clickable; `Cancelled` marks a reply stopped before it finished (`Content` is what had arrived); both added with work item 2.2 |
   | `ConversationPin` (new) | `Kind`, `Target`, `DisplayName`, `TokenCount` | 0-3 | What to resolve again on restore (`@Kind:Target`), never the content |
   | `ConversationCreateRequest` (new) | `Id`, `Title`, `ModelId` | 0-2 | Empty `Id`: the host chooses one; empty `Title`: named from the first user message |
   | `DeleteAllConversationsResult` (new) | `Conversations`, `Messages`, `Pins`, `OutboundEntries` | 0-3 | What was deleted |
