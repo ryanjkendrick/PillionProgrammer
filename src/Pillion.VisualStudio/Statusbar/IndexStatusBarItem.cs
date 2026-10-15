@@ -116,10 +116,15 @@ internal sealed class IndexStatusBarItem
         _button.Visibility = text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
     }
 
+    /// <remarks>
+    /// Children are visited last first: the status bar is docked at the bottom of the main window, the last child at each level
+    /// on the way down, so the walk reaches it before the menus, tool bars and document wells. Visiting them first cost 50 to
+    /// 80 ms on the UI thread on a CI runner, inside the package's start-up budget (work item 2.17).
+    /// </remarks>
     private static DependencyObject? Find(DependencyObject parent, string name)
     {
         var count = VisualTreeHelper.GetChildrenCount(parent);
-        for (var i = 0; i < count; i++)
+        for (var i = count - 1; i >= 0; i--)
         {
             var child = VisualTreeHelper.GetChild(parent, i);
             if (child is FrameworkElement element && string.Equals(element.Name, name, StringComparison.Ordinal))
