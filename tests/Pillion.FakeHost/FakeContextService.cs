@@ -238,6 +238,29 @@ internal sealed class FakeContextService : IContextService, IDisposable
         }
     }
 
+    /// <summary>Gets the last workspace the client set (for VSIX tests: proves the relay reached the host).</summary>
+    public WorkspaceDescription? Workspace { get; private set; }
+
+    /// <summary>Gets the last IDE activity the client reported through <c>ideActivityChanged</c>.</summary>
+    public IdeActivity Activity { get; private set; }
+
+    public Task SetWorkspaceAsync(WorkspaceDescription workspace, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        Workspace = workspace;
+        var kind = workspace.SolutionPath is not null ? "solution" : workspace.FolderPath is not null ? "folder" : "none";
+        Console.Error.WriteLine("fakehost: workspace " + kind + " with " + workspace.ProjectPaths.Length + " projects");
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Records an <c>ideActivityChanged</c> notification (registered by Program.cs).</summary>
+    /// <param name="activity">The activities in progress.</param>
+    public void OnIdeActivityChanged(IdeActivity activity)
+    {
+        Activity = activity;
+        Console.Error.WriteLine("fakehost: ide activity " + activity);
+    }
+
     public Task<MentionResolution> ResolveMentionAsync(MentionRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);

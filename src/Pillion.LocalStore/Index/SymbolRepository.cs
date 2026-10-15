@@ -102,62 +102,67 @@ public sealed class SymbolRepository : ISymbolRepository
     {
         ArgumentNullException.ThrowIfNull(symbols);
         return _database.WriteAsync<IReadOnlyList<long>>(
-            (connection, transaction, token) =>
-            {
-                // Keep the rows whose stable ids come back (their references from other files stay valid); drop the rest.
-                var keep = new HashSet<long>();
-                foreach (var symbol in symbols)
-                {
-                    ArgumentNullException.ThrowIfNull(symbol);
-                    ArgumentException.ThrowIfNullOrEmpty(symbol.Name);
-                    if (symbol.Id is { } id)
-                    {
-                        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(id, nameof(symbols));
-                        if (!keep.Add(id))
-                        {
-                            throw new ArgumentException($"The symbol id {id} appears twice.", nameof(symbols));
-                        }
-                    }
-                }
-
-                DeleteOtherSymbols(connection, transaction, fileId, keep);
-                using var insert = Sql.Command(
-                    connection,
-                    transaction,
-                    """
-                    INSERT INTO symbols (id, file_id, name, kind, container, start_line, end_line, signature)
-                    VALUES ($id, $file, $name, $kind, $container, $start, $end, $signature)
-                    ON CONFLICT (id) DO UPDATE SET
-                        file_id = excluded.file_id, name = excluded.name, kind = excluded.kind, container = excluded.container,
-                        start_line = excluded.start_line, end_line = excluded.end_line, signature = excluded.signature
-                    RETURNING id
-                    """,
-                    ("$id", null),
-                    ("$file", fileId),
-                    ("$name", string.Empty),
-                    ("$kind", string.Empty),
-                    ("$container", null),
-                    ("$start", 0),
-                    ("$end", 0),
-                    ("$signature", null));
-                var ids = new long[symbols.Count];
-                for (var i = 0; i < symbols.Count; i++)
-                {
-                    token.ThrowIfCancellationRequested();
-                    var symbol = symbols[i];
-                    insert.Parameters[0].Value = (object?)symbol.Id ?? DBNull.Value;
-                    insert.Parameters[2].Value = symbol.Name;
-                    insert.Parameters[3].Value = symbol.Kind ?? string.Empty;
-                    insert.Parameters[4].Value = (object?)symbol.Container ?? DBNull.Value;
-                    insert.Parameters[5].Value = symbol.StartLine;
-                    insert.Parameters[6].Value = symbol.EndLine;
-                    insert.Parameters[7].Value = (object?)symbol.Signature ?? DBNull.Value;
-                    ids[i] = Convert.ToInt64(insert.ExecuteScalar(), CultureInfo.InvariantCulture);
-                }
-
-                return Task.FromResult<IReadOnlyList<long>>(ids);
-            },
+            (connection, transaction, token) => Task.FromResult<IReadOnlyList<long>>(ReplaceSymbols(connection, transaction, fileId, symbols, token)),
             cancellationToken);
+    }
+
+    /// <summary>Replaces a file's symbols inside the caller's write transaction; see <see cref="ReplaceFileSymbolsAsync"/>.</summary>
+    internal static long[] ReplaceSymbols(SqliteConnection connection, SqliteTransaction transaction, long fileId, IReadOnlyList<NewSymbol> symbols, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(symbols);
+
+        // Keep the rows whose stable ids come back (their references from other files stay valid); drop the rest.
+        var keep = new HashSet<long>();
+        foreach (var symbol in symbols)
+        {
+            ArgumentNullException.ThrowIfNull(symbol);
+            ArgumentException.ThrowIfNullOrEmpty(symbol.Name);
+            if (symbol.Id is { } id)
+            {
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(id, nameof(symbols));
+                if (!keep.Add(id))
+                {
+                    throw new ArgumentException($"The symbol id {id} appears twice.", nameof(symbols));
+                }
+            }
+        }
+
+        DeleteOtherSymbols(connection, transaction, fileId, keep);
+        using var insert = Sql.Command(
+            connection,
+            transaction,
+            """
+            INSERT INTO symbols (id, file_id, name, kind, container, start_line, end_line, signature)
+            VALUES ($id, $file, $name, $kind, $container, $start, $end, $signature)
+            ON CONFLICT (id) DO UPDATE SET
+                file_id = excluded.file_id, name = excluded.name, kind = excluded.kind, container = excluded.container,
+                start_line = excluded.start_line, end_line = excluded.end_line, signature = excluded.signature
+            RETURNING id
+            """,
+            ("$id", null),
+            ("$file", fileId),
+            ("$name", string.Empty),
+            ("$kind", string.Empty),
+            ("$container", null),
+            ("$start", 0),
+            ("$end", 0),
+            ("$signature", null));
+        var ids = new long[symbols.Count];
+        for (var i = 0; i < symbols.Count; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            var symbol = symbols[i];
+            insert.Parameters[0].Value = (object?)symbol.Id ?? DBNull.Value;
+            insert.Parameters[2].Value = symbol.Name;
+            insert.Parameters[3].Value = symbol.Kind ?? string.Empty;
+            insert.Parameters[4].Value = (object?)symbol.Container ?? DBNull.Value;
+            insert.Parameters[5].Value = symbol.StartLine;
+            insert.Parameters[6].Value = symbol.EndLine;
+            insert.Parameters[7].Value = (object?)symbol.Signature ?? DBNull.Value;
+            ids[i] = Convert.ToInt64(insert.ExecuteScalar(), CultureInfo.InvariantCulture);
+        }
+
+        return ids;
     }
 
     /// <inheritdoc/>
@@ -167,37 +172,43 @@ public sealed class SymbolRepository : ISymbolRepository
         return _database.WriteAsync(
             (connection, transaction, token) =>
             {
-                Sql.Execute(connection, transaction, "DELETE FROM symbol_refs WHERE file_id = $file", ("$file", fileId));
-                using var insert = Sql.Command(
-                    connection,
-                    transaction,
-                    """
-                    INSERT INTO symbol_refs (from_symbol_id, to_symbol_id, file_id, line, kind, ambiguous, candidates)
-                    VALUES ($from, $to, $file, $line, $kind, $ambiguous, $candidates)
-                    """,
-                    ("$from", null),
-                    ("$to", 0L),
-                    ("$file", fileId),
-                    ("$line", 0),
-                    ("$kind", string.Empty),
-                    ("$ambiguous", 0),
-                    ("$candidates", 1));
-                foreach (var reference in references)
-                {
-                    token.ThrowIfCancellationRequested();
-                    ArgumentNullException.ThrowIfNull(reference);
-                    insert.Parameters[0].Value = (object?)reference.FromSymbolId ?? DBNull.Value;
-                    insert.Parameters[1].Value = reference.ToSymbolId;
-                    insert.Parameters[3].Value = reference.Line;
-                    insert.Parameters[4].Value = reference.Kind ?? string.Empty;
-                    insert.Parameters[5].Value = reference.Ambiguous ? 1 : 0;
-                    insert.Parameters[6].Value = Math.Max(1, reference.Candidates);
-                    insert.ExecuteNonQuery();
-                }
-
+                ReplaceReferences(connection, transaction, fileId, references, token);
                 return Task.CompletedTask;
             },
             cancellationToken);
+    }
+
+    /// <summary>Replaces the references found in a file inside the caller's write transaction; see <see cref="ReplaceFileReferencesAsync"/>.</summary>
+    internal static void ReplaceReferences(SqliteConnection connection, SqliteTransaction transaction, long fileId, IReadOnlyList<SymbolReference> references, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(references);
+        Sql.Execute(connection, transaction, "DELETE FROM symbol_refs WHERE file_id = $file", ("$file", fileId));
+        using var insert = Sql.Command(
+            connection,
+            transaction,
+            """
+            INSERT INTO symbol_refs (from_symbol_id, to_symbol_id, file_id, line, kind, ambiguous, candidates)
+            VALUES ($from, $to, $file, $line, $kind, $ambiguous, $candidates)
+            """,
+            ("$from", null),
+            ("$to", 0L),
+            ("$file", fileId),
+            ("$line", 0),
+            ("$kind", string.Empty),
+            ("$ambiguous", 0),
+            ("$candidates", 1));
+        foreach (var reference in references)
+        {
+            token.ThrowIfCancellationRequested();
+            ArgumentNullException.ThrowIfNull(reference);
+            insert.Parameters[0].Value = (object?)reference.FromSymbolId ?? DBNull.Value;
+            insert.Parameters[1].Value = reference.ToSymbolId;
+            insert.Parameters[3].Value = reference.Line;
+            insert.Parameters[4].Value = reference.Kind ?? string.Empty;
+            insert.Parameters[5].Value = reference.Ambiguous ? 1 : 0;
+            insert.Parameters[6].Value = Math.Max(1, reference.Candidates);
+            insert.ExecuteNonQuery();
+        }
     }
 
     /// <inheritdoc/>

@@ -677,6 +677,8 @@ public sealed class IndexWindowTests : IDisposable
 
         public Task<IndexInfo[]> ListIndexesAsync(System.Threading.CancellationToken cancellationToken) => inner.ListIndexesAsync(cancellationToken);
 
+        public Task SetWorkspaceAsync(WorkspaceDescription workspace, System.Threading.CancellationToken cancellationToken) => inner.SetWorkspaceAsync(workspace, cancellationToken);
+
         public Task<SearchResult[]> SearchAsync(SearchRequest request, System.Threading.CancellationToken cancellationToken) => inner.SearchAsync(request, cancellationToken);
 
         public Task<SearchResponse> SearchDetailedAsync(SearchRequest request, System.Threading.CancellationToken cancellationToken) => inner.SearchDetailedAsync(request, cancellationToken);

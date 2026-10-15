@@ -225,6 +225,30 @@ public sealed class HostSupervisor : IHostConnection, IDisposable
     }
 
     /// <inheritdoc/>
+    public async Task<bool> NotifyAsync(string method, object? argument)
+    {
+        IHostSession? session;
+        lock (_gate)
+        {
+            session = _disposed || !IsUsableLocked() ? null : _session;
+        }
+
+        if (session is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return await session.NotifyAsync(method, argument).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            return false; // The session ended between the read above and the send.
+        }
+    }
+
+    /// <inheritdoc/>
     public async Task WhenReadyAsync(CancellationToken cancellationToken)
     {
         var waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);

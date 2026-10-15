@@ -29,6 +29,13 @@ public sealed class ScanOptions
     /// </summary>
     public Func<string, long, long, bool>? SkipContentChecks { get; init; }
 
+    /// <summary>
+    /// Gets the scheduler the content checks (and, in a sweep, the hashing) run on, or <see langword="null"/> for the thread
+    /// pool. The indexing pipeline passes its below-normal-priority scheduler (design section 13: indexing never disturbs the
+    /// IDE). Optional.
+    /// </summary>
+    public TaskScheduler? TaskScheduler { get; init; }
+
     /// <summary>Gets half the logical processors, at least one.</summary>
     public static int DefaultParallelism => Math.Max(1, Environment.ProcessorCount / 2);
 }

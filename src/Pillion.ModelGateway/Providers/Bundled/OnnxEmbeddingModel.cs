@@ -88,6 +88,8 @@ internal sealed class OnnxEmbeddingModel : IDisposable
 
         // Idle intra-op threads sleep instead of spinning, so a finished batch leaves no core busy.
         sessionOptions.AddSessionConfigEntry("session.intra_op.allow_spinning", "0");
+        sessionOptions.EnableMemoryPattern = options.CpuMemoryPattern;
+        sessionOptions.EnableCpuMemArena = options.CpuMemoryArena;
         if (useDirectML)
         {
             // DirectML needs memory patterns off and sequential execution.

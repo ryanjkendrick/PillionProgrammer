@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Pillion.Contracts;
 using Pillion.Host.Context.Retrieval;
+using Pillion.Host.Indexing;
 using Pillion.Host.Rpc;
 using Pillion.ModelGateway;
 
@@ -48,6 +49,7 @@ internal sealed partial class ContextRpcService : IContextService
     private readonly ITokenCounter _tokens;
     private readonly IGatewaySettingsSource _settings;
     private readonly IModelRouter? _router;
+    private readonly IndexingService? _indexing;
     private readonly ILogger _logger;
     private readonly IRetrievalService? _retrieval;
 
@@ -57,13 +59,15 @@ internal sealed partial class ContextRpcService : IContextService
     /// <param name="router">Names the default chat model whose tokenizer counts the content; without one the estimating counter is used.</param>
     /// <param name="logger">The logger.</param>
     /// <param name="retrieval">Answers searches (work item 2.11); without it searches return no hits.</param>
-    public ContextRpcService(ITokenCounter tokens, IGatewaySettingsSource settings, IModelRouter? router = null, ILogger<ContextRpcService>? logger = null, IRetrievalService? retrieval = null)
+    /// <param name="indexing">The indexing pipeline (work item 2.9); without one the index methods answer as if nothing were indexed.</param>
+    public ContextRpcService(ITokenCounter tokens, IGatewaySettingsSource settings, IModelRouter? router = null, ILogger<ContextRpcService>? logger = null, IRetrievalService? retrieval = null, IndexingService? indexing = null)
     {
         ArgumentNullException.ThrowIfNull(tokens);
         ArgumentNullException.ThrowIfNull(settings);
         _tokens = tokens;
         _settings = settings;
         _router = router;
+        _indexing = indexing;
         _logger = logger ?? NullLogger<ContextRpcService>.Instance;
         _retrieval = retrieval;
     }
@@ -74,38 +78,56 @@ internal sealed partial class ContextRpcService : IContextService
 
     /// <inheritdoc/>
     public Task<IndexStatus> GetIndexStatusAsync(CancellationToken cancellationToken) =>
-        Task.FromResult(new IndexStatus());
+        Task.FromResult(_indexing?.GetStatus() ?? new IndexStatus());
 
     /// <inheritdoc/>
-    public Task PauseIndexingAsync(bool pause, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task PauseIndexingAsync(bool pause, CancellationToken cancellationToken)
+    {
+        _indexing?.SetUserPause(pause);
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    public Task SetWorkspaceAsync(WorkspaceDescription workspace, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        _indexing?.SetWorkspace(workspace);
+        return Task.CompletedTask;
+    }
 
     /// <inheritdoc/>
     public Task<SearchResponse> SearchDetailedAsync(SearchRequest request, CancellationToken cancellationToken) =>
         _retrieval?.SearchDetailedAsync(request, cancellationToken) ?? Task.FromResult(new SearchResponse());
 
-    // TODO(2.9, 2.15): the excluded files of the root's last sweep (RepositorySweeper's Excluded and SecretFiles).
-
     /// <inheritdoc/>
     public Task<ExcludedFilesPage> ListExcludedFilesAsync(ExcludedFilesRequest request, CancellationToken cancellationToken) =>
-        Task.FromException<ExcludedFilesPage>(RpcErrors.NotImplemented("Listing the files the index excluded", "2.15"));
-
-    // TODO(2.9, 2.15): drop and rebuild the root's index in the background (forwarded to the writer on a reader).
+        _indexing is null
+            ? Task.FromException<ExcludedFilesPage>(RpcErrors.NotImplemented("Listing the files the index excluded", "2.9"))
+            : Task.FromResult(_indexing.ListExcludedFiles(request));
 
     /// <inheritdoc/>
-    public Task RebuildIndexAsync(string rootPath, CancellationToken cancellationToken) =>
-        Task.FromException(RpcErrors.NotImplemented("Rebuilding an index", "2.15"));
+    public Task RebuildIndexAsync(string rootPath, CancellationToken cancellationToken)
+    {
+        if (_indexing is null)
+        {
+            return Task.FromException(RpcErrors.NotImplemented("Rebuilding an index", "2.9"));
+        }
 
-    // TODO(2.15): delete the index folder (refused while another live host owns it).
+        _indexing.Rebuild(rootPath);
+        return Task.CompletedTask;
+    }
 
     /// <inheritdoc/>
     public Task<bool> DeleteIndexAsync(string indexId, CancellationToken cancellationToken) =>
-        Task.FromException<bool>(RpcErrors.NotImplemented("Deleting an index", "2.15"));
-
-    // TODO(2.15): IndexRetention.GetUsage() mapped to IndexInfo, ordered by root path.
+        _indexing is null
+            ? Task.FromException<bool>(RpcErrors.NotImplemented("Deleting an index", "2.9"))
+            : _indexing.DeleteIndexAsync(indexId, cancellationToken);
 
     /// <inheritdoc/>
     public Task<IndexInfo[]> ListIndexesAsync(CancellationToken cancellationToken) =>
-        Task.FromException<IndexInfo[]>(RpcErrors.NotImplemented("Listing the indexes on this machine", "2.15"));
+        _indexing is null
+            ? Task.FromException<IndexInfo[]>(RpcErrors.NotImplemented("Listing the indexes on this machine", "2.9"))
+            : Task.FromResult(_indexing.ListIndexes());
 
     /// <inheritdoc/>
     public async Task<MentionResolution> ResolveMentionAsync(MentionRequest request, CancellationToken cancellationToken)

@@ -15,7 +15,8 @@ using StreamJsonRpc;
 // Contract 1.3: IConversationService (FakeConversationService: two canned conversations in memory; every chat request
 // with a conversation id is appended to it), the index methods of IContextService (PILLION_FAKEHOST_INDEX=ready starts
 // with an indexed root; pause, rebuild and delete change the status), and the indexStatusChanged notification, sent after
-// every such change and never more than twice a second. A chat message containing /cite ends with canned citations.
+// every such change and never more than twice a second; SetWorkspaceAsync and the ideActivityChanged notification are
+// recorded and logged. A chat message containing /cite ends with canned citations.
 // PILLION_FAKEHOST_MODE selects the behaviour:
 //   normal (default)  accept the handshake, report Ready, call the VSIX's services and print the results to stderr
 //   quiet             like normal, but without calling the VSIX's services
@@ -95,6 +96,9 @@ rpc.AddLocalRpcTarget<IConversationService>(conversations, null);
 
 // Like Pillion Host, push the index status to the client (indexStatusChanged, one IndexStatus argument).
 context.StatusChanged += status => _ = rpc.NotifyAsync("indexStatusChanged", status);
+
+// Like Pillion Host, take the IDE activity the client reports (ideActivityChanged, one IdeActivity argument, contract 1.3).
+rpc.AddLocalRpcMethod("ideActivityChanged", new Action<IdeActivity>(context.OnIdeActivityChanged));
 rpc.AddLocalRpcTarget<IDiagnosticsService>(new FakeDiagnosticsService(recorder), null);
 var settings = new FakeSettingsService();
 rpc.AddLocalRpcTarget<ISettingsService>(settings, null);

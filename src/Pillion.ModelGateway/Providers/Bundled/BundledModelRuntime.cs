@@ -380,7 +380,16 @@ public sealed partial class BundledModelRuntime : IDisposable
         _idleTimer?.Change(Options.IdleUnloadAfter, Timeout.InfiniteTimeSpan);
     }
 
-    private void ReleaseIdle()
+    /// <summary>
+    /// Releases every loaded model that is not running now, with its ONNX Runtime session and memory arena (the indexing
+    /// pipeline's first step under memory pressure); the next request loads it again.
+    /// </summary>
+    /// <returns>The number of models released.</returns>
+    public int ReleaseUnused() => Release(force: true);
+
+    private void ReleaseIdle() => Release(force: false);
+
+    private int Release(bool force)
     {
         var released = new List<OnnxEmbeddingModel>();
         lock (_gate)
@@ -388,7 +397,7 @@ public sealed partial class BundledModelRuntime : IDisposable
             foreach (var (id, model) in _loaded.ToList())
             {
                 if (_inFlight.GetValueOrDefault(id) == 0 &&
-                    (!_lastUsed.TryGetValue(id, out var last) || _time.GetElapsedTime(last) >= Options.IdleUnloadAfter))
+                    (force || !_lastUsed.TryGetValue(id, out var last) || _time.GetElapsedTime(last) >= Options.IdleUnloadAfter))
                 {
                     _loaded.Remove(id);
                     released.Add(model);
@@ -402,6 +411,8 @@ public sealed partial class BundledModelRuntime : IDisposable
             model.Dispose();
             LogReleased(_logger, model.Model.Id, Options.IdleUnloadAfter.TotalMinutes);
         }
+
+        return released.Count;
     }
 
     [LoggerMessage(EventId = 473, Level = LogLevel.Information, Message = "Bundled embedding model {Model} loaded from {Graph} on {ExecutionProvider} ({Directory}) in {Milliseconds:F0} ms.")]

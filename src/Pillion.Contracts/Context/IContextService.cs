@@ -7,7 +7,7 @@ namespace Pillion.Contracts;
 /// <remarks>
 /// <para>
 /// Contract 1.3 added <see cref="SearchDetailedAsync"/>, <see cref="ListExcludedFilesAsync"/>, <see cref="RebuildIndexAsync"/>,
-/// <see cref="DeleteIndexAsync"/> and <see cref="ListIndexesAsync"/>; a 1.2 host answers them with StreamJsonRpc's
+/// <see cref="DeleteIndexAsync"/>, <see cref="ListIndexesAsync"/> and <see cref="SetWorkspaceAsync"/>; a 1.2 host answers them with StreamJsonRpc's
 /// method-not-found error.
 /// </para>
 /// <para>
@@ -16,6 +16,12 @@ namespace Pillion.Contracts;
 /// in between are coalesced and the latest status is sent at the end of the window). It is a notification, not a method on
 /// this interface; a 1.2 client registers no handler and ignores it. A client that connects later calls
 /// <see cref="GetIndexStatusAsync"/> for the current status.
+/// </para>
+/// <para>
+/// The VSIX tells the host what the IDE is busy with in the notification <c>ideActivityChanged</c> (client to host, one
+/// positional argument, an <see cref="IdeActivity"/> holding every activity in progress): sent after every handshake and
+/// whenever the set changes, so the host can pause indexing during builds, test runs and debugging. A 1.2 host has no
+/// handler and ignores it.
 /// </para>
 /// </remarks>
 public interface IContextService
@@ -89,4 +95,15 @@ public interface IContextService
     /// <param name="cancellationToken">A token that cancels this call.</param>
     /// <returns>One entry per index folder, ordered by root path.</returns>
     Task<IndexInfo[]> ListIndexesAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Tells the host what is open in Visual Studio: the solution and its projects, or an opened folder. The host resolves
+    /// the repository roots and indexes them in the background (behind <c>features.indexing</c>); progress arrives as
+    /// <c>indexStatusChanged</c> notifications. Call it after every handshake and whenever the solution, its projects or
+    /// the opened folder change; an empty description closes the indexes. Added in contract 1.3 (work item 2.9).
+    /// </summary>
+    /// <param name="workspace">What is open.</param>
+    /// <param name="cancellationToken">A token that cancels this call (not the indexing it starts).</param>
+    /// <returns>A task that completes when the host has taken the workspace (indexing continues in the background).</returns>
+    Task SetWorkspaceAsync(WorkspaceDescription workspace, CancellationToken cancellationToken);
 }

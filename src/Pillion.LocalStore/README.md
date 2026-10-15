@@ -180,6 +180,13 @@ at commit `6a487f9` (branch `feature/index-storage`, work item 2.8). It was drop
 decrypted on every read, its KNN query took about 205 ms at 100,000 chunks, and its copy of the vectors cost about 450
 bytes per chunk. `EncryptedDatabaseOptions.ConnectionOpened` is where such an extension would be loaded.
 
+Writing a file at once. `IndexStorage.WriteAsync((session, token) => ...)` runs several writes in one write transaction:
+`IndexWriteSession` exposes `ReplaceFileChunks`, `ReplaceFileSymbols`, `ReplaceFileReferences`, `WriteMeta`/`ReadMeta`, and
+the connection and transaction for other tables of the same database (the `files` row of `Pillion.Indexing`'s
+`FilesRepository.Upsert(connection, transaction, ...)`). The indexing pipeline (work item 2.9) stores each file's row, chunks,
+vectors and symbols this way, so a file is either fully stored or not at all; the same rules as the repositories' own
+methods apply, which now share that code.
+
 Symbols. `ISymbolRepository` stores and reads `symbols` and `symbol_refs`; extraction, resolution and the repo map are
 work item 2.5 (Pillion.ContextEngine). Symbols written with their stable `NewSymbol.Id` (a hash of path, container, name,
 kind and overload ordinal, with no line in it) are upserted when their file is replaced, so references from other files
