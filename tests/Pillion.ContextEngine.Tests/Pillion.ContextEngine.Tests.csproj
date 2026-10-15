@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CsCheck" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Pillion.ContextEngine\Pillion.ContextEngine.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Chunker fixtures: source files in many languages, read from disk at run time, never compiled. -->
+    <Compile Remove="Fixtures\**" />
+    <None Remove="Fixtures\**" />
+    <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
