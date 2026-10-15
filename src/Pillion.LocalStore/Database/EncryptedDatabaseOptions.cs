@@ -29,6 +29,14 @@ public sealed class EncryptedDatabaseOptions
     /// </summary>
     public bool ReadOnly { get; init; }
 
+    /// <summary>
+    /// Gets a callback that runs on every connection (the writer and each reader) right after the key is applied and
+    /// verified, before the connection pragmas and before any migration, or <see langword="null"/> for none, for example
+    /// to load a SQLite extension or set a per-connection pragma. An exception it throws closes the connection and fails the
+    /// open, or the read that needed the connection.
+    /// </summary>
+    public Action<Microsoft.Data.Sqlite.SqliteConnection>? ConnectionOpened { get; init; }
+
     /// <summary>Gets the key file path, resolving the default.</summary>
     internal string ResolvedKeyFilePath =>
         Path.GetFullPath(KeyFilePath ?? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(DatabasePath))!, DefaultKeyFileName));

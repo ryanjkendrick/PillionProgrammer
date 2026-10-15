@@ -34,6 +34,7 @@ public sealed partial class EncryptedDatabase : IAsyncDisposable
     private readonly int _maxReaders;
     private readonly int _busyTimeoutMs;
     private readonly ILogger _logger;
+    private readonly Action<SqliteConnection>? _connectionOpened;
     private int _disposed;
 
     private EncryptedDatabase(
@@ -55,6 +56,7 @@ public sealed partial class EncryptedDatabase : IAsyncDisposable
         _readerSlots = new SemaphoreSlim(_maxReaders, _maxReaders);
         _busyTimeoutMs = BusyTimeoutMilliseconds(options.BusyTimeout);
         _logger = logger;
+        _connectionOpened = options.ConnectionOpened;
         SchemaVersion = migration.Version;
         MinReaderVersion = migration.MinReaderVersion;
         OpenedAtVersion = migration.FromVersion;
@@ -129,7 +131,7 @@ public sealed partial class EncryptedDatabase : IAsyncDisposable
             var busyTimeoutMs = BusyTimeoutMilliseconds(options.BusyTimeout);
             var connectionString = BuildConnectionString(path, SqliteOpenMode.ReadWriteCreate);
             var readerConnectionString = BuildConnectionString(path, SqliteOpenMode.ReadWrite);
-            writer = OpenConnection(connectionString, path, key, busyTimeoutMs, reader: false);
+            writer = OpenConnection(connectionString, path, key, busyTimeoutMs, reader: false, options.ConnectionOpened);
             EnableWal(writer);
 
             var migration = await MigrateAsync(writer, schema, path, databaseExists, logger, cancellationToken).ConfigureAwait(false);
@@ -175,7 +177,7 @@ public sealed partial class EncryptedDatabase : IAsyncDisposable
             var readerConnectionString = BuildConnectionString(path, SqliteOpenMode.ReadOnly);
 
             // The first connection also reads the schema versions; it joins the pool afterwards.
-            probe = OpenConnection(readerConnectionString, path, key, busyTimeoutMs, reader: true);
+            probe = OpenConnection(readerConnectionString, path, key, busyTimeoutMs, reader: true, options.ConnectionOpened);
             int version;
             int minReader;
             try
@@ -284,7 +286,7 @@ public sealed partial class EncryptedDatabase : IAsyncDisposable
             ThrowIfDisposed();
             if (!_idleReaders.TryTake(out connection))
             {
-                connection = OpenConnection(_readerConnectionString, DatabasePath, _key, _busyTimeoutMs, reader: true);
+                connection = OpenConnection(_readerConnectionString, DatabasePath, _key, _busyTimeoutMs, reader: true, _connectionOpened);
             }
 
             return await work(connection, cancellationToken).ConfigureAwait(false);
@@ -392,9 +394,9 @@ public sealed partial class EncryptedDatabase : IAsyncDisposable
 
     /// <summary>
     /// Opens a connection and applies the key before any other statement, then checks the key and sets the per-connection
-    /// pragmas. Closes the connection on failure.
+    /// pragmas (after <paramref name="connectionOpened"/>, which loads extensions). Closes the connection on failure.
     /// </summary>
-    private static SqliteConnection OpenConnection(string connectionString, string path, DatabaseKey key, int busyTimeoutMs, bool reader)
+    private static SqliteConnection OpenConnection(string connectionString, string path, DatabaseKey key, int busyTimeoutMs, bool reader, Action<SqliteConnection>? connectionOpened)
     {
         var connection = new SqliteConnection(connectionString);
         try
@@ -402,6 +404,7 @@ public sealed partial class EncryptedDatabase : IAsyncDisposable
             connection.Open();
             ApplyKey(connection, key);
             VerifyKey(connection, path);
+            connectionOpened?.Invoke(connection);
 
             Execute(connection, string.Create(CultureInfo.InvariantCulture, $"PRAGMA busy_timeout = {busyTimeoutMs}"));
             Execute(connection, "PRAGMA foreign_keys = ON");

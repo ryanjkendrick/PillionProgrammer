@@ -1,7 +1,8 @@
 # Pillion.LocalStore
 
 Pillion Host's encrypted SQLite databases (design document section 10, work item 2.1). A separate library so the phase 2
-index can share it. Behind the `localStore` feature flag (see the repository README, Feature flags).
+index can share it. Behind the `localStore` feature flag (see the repository README, Feature flags). The index storage
+(`Index\`, work item 2.8) is library code used by the indexing pipeline under `features.indexing`; see Index storage below.
 
 ## Layout
 
@@ -46,6 +47,8 @@ Retention (`ConversationRetention`): conversations and the Outbound log are kept
 - The key is applied with `PRAGMA hexkey = '<64 hex digits>'` immediately after `Open`, before any other statement, on
   every connection. SQLite3 Multiple Ciphers answers `ok`; anything else (a plain SQLite would ignore the pragma) stops
   the open, so a database is never created unencrypted. `SELECT count(*) FROM sqlite_schema` then proves the key fits.
+  `EncryptedDatabaseOptions.ConnectionOpened` runs next, on every connection, before the other pragmas and any migration
+  (for example to load a SQLite extension).
 - A missing key for an existing database, a key file DPAPI refuses (another user or machine, or damage), and a key that
   does not open the file each fail with a `LocalStoreException` whose `Kind` says which. A new key is never made for an
   existing database.
@@ -104,3 +107,62 @@ written for the user and never contain key material; `Details` holds the file pa
 runtime; the self-contained win-x64 host publish copies the win-x64 one beside `Pillion.Host.exe`.
 `Microsoft.Data.Sqlite.Core` (not `Microsoft.Data.Sqlite`) is used so that no plain `e_sqlite3` is ever loaded. Do not
 add another SQLitePCLRaw bundle to the host: the provider is process-wide.
+
+## Index storage
+
+`Index\` (work item 2.8, design sections 7 and 10) stores the chunks, the lexical index, the vectors and the symbols of
+`index\<index-id>\index.db`. The chunk text lives only in this encrypted database. No SQLite extension is needed.
+
+Schema. Index schema version 1 (the `files` table and the index identity) belongs to repository discovery (work item
+2.3). `IndexStorageSchema.Migration` is version 2 and chains after it:
+`new StoreSchema("index", [version1, IndexStorageSchema.Migration])`, or `IndexStorageSchema.After(version1)`. It needs
+only `files (id, language, partition)` and raises `min_reader_version` to 2. The tables are listed in
+`Index/IndexStorageSchema.cs`:
+
+| Table | Columns |
+| --- | --- |
+| `chunks` | id (never reused), file\_id (cascade from `files`), start\_line, end\_line, kind, breadcrumb, text, token\_count |
+| `chunks_fts` (FTS5, contentless, `contentless_delete=1`) | rowid = chunk id; `text` (breadcrumb, line break, text as is) and `identifiers` (split identifiers) |
+| `chunk_embeddings` | chunk\_id (cascade from `chunks`), language, partition, embedding (int8 blob) |
+| `vec_float32` | chunk\_id, embedding (float32 blob). **Development only**, for the int8 recall-loss measurement; drop before release |
+| `vec_generation` | one counter that every change to `chunk_embeddings` bumps (triggers, so cascades count too) |
+| `symbols` | id, file\_id, name, kind, container, start\_line, end\_line, signature |
+| `symbol_refs` | from\_symbol\_id (null at file scope), to\_symbol\_id, file\_id, line, kind; cascades from both symbols |
+| `meta` | adds `vector_dimensions` |
+
+Lexical search. Identifier splitting happens at write time into the second FTS5 column (phase 2 decision of 2026-10-15),
+with the stock `unicode61` tokenizer and `tokenchars '_'`, so `get_order_total` stays one token in `text` while
+`identifiers` holds `get order total`. Splitting breaks on underscores, lower-to-upper case changes, the end of an
+acronym (`HTTPServer`) and letter-digit changes, and lower-cases the parts (`IdentifierSplitter`). A query is split the
+same way: each token matches whole or as the phrase of its parts, tokens are combined with `OR`, the last token is a
+prefix, and FTS5 syntax in the query is dropped. Ranking is `bm25(chunks_fts, 1.0, 0.5)` (weights in
+`IndexStorageOptions`); `LexicalHit.Score` is the negated value, so higher is better. A delete trigger on `chunks` removes
+FTS5 rows, so deletes through any path (including a cascade from `files`) keep them in step.
+
+Vectors. The int8 vectors live in `chunk_embeddings`; the first vector stored fixes `meta.vector_dimensions`.
+`IVectorIndex` (`UpsertAsync`, `DeleteByFileAsync`, `SearchAsync(query, k, filter)` returning chunk id and cosine
+distance) has two implementations over the same rows, chosen with `IndexStorageOptions.VectorBackend`; both compute the
+distance in managed code with AVX2 or 128-bit SIMD and rank alike:
+
+- `AutoVectorIndex` (`VectorBackendPreference.InMemory`, the default): brute force over an in-memory copy of the vectors
+  while they fit `IndexStorageOptions.VectorCacheMaxBytes` (64 MiB, about 170,000 chunks of 384 dimensions), otherwise
+  the table scan. The copy holds vectors only (never text), is never written to disk, and is reloaded when
+  `vec_generation` moves (about 0.8 s per 100,000 chunks); `IndexStorage.WarmVectorCacheAsync` reloads it ahead of the
+  next search, for the indexing pipeline to call after each batch.
+- `TableScanVectorIndex` (`VectorBackendPreference.TableScan`): reads and decrypts `chunk_embeddings` on every search and
+  keeps no copy.
+
+Measured with the benchmark (`IndexPerformanceTests`, `Category=Benchmark`: 100,000 chunks, 384 dimensions, 329-byte
+synthetic texts, k = 50) on the development machine: in-memory p50 3 ms, p95 3.4 ms; table scan p50 about 400 ms;
+FTS5 p50 63 ms, p95 116 ms; about 1,210 bytes per chunk on disk (chunks about 440, FTS5 about 305, vectors about 455).
+
+Beyond the in-memory cap. An HNSW or sqlite-vec backend can be added behind `IVectorIndex` for indexes larger than the
+in-memory cap. A sqlite-vec 0.1.9 implementation (a pinned, hash-verified `vec0.dll` downloaded at build time, a `vec0`
+table with `language` and `partition` metadata filters kept in step with `chunk_embeddings`) is in this branch's history
+at commit `6a487f9` (branch `feature/index-storage`, work item 2.8). It was dropped for this phase because, with the pages
+decrypted on every read, its KNN query took about 205 ms at 100,000 chunks, and its copy of the vectors cost about 450
+bytes per chunk. `EncryptedDatabaseOptions.ConnectionOpened` is where such an extension would be loaded.
+
+Symbols. `ISymbolRepository` stores and reads `symbols` and `symbol_refs`; extraction is work item 2.5. Replacing a
+file's symbols removes the references to them from other files too (cascade), which the extractor restores when it
+next visits those files.
