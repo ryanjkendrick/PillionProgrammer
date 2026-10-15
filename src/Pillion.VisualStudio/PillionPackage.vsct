@@ -56,8 +56,6 @@
         <CommandFlag>DynamicVisibility</CommandFlag>
         <Strings>
           <ButtonText>Pillion: Open Index</ButtonText>
-          <CanonicalName>Pillion.OpenIndex</CanonicalName>
-          <LocCanonicalName>Pillion.OpenIndex</LocCanonicalName>
         </Strings>
       </Button>
 

@@ -33,7 +33,7 @@ public static class MentionChecks
     /// <summary>The variable the package reads at each host launch (HostLauncherSelector.OverrideVariable).</summary>
     public const string HostOverrideVariable = "PILLION_TEST_HOST_PATH";
 
-    private static readonly string[] Variables = [HostOverrideVariable, "PILLION_FAKEHOST_MODE", "PILLION_FAKEHOST_RECORD", "PILLION_FAKEHOST_CHUNK_DELAY_MS"];
+    private static readonly string[] Variables = [HostOverrideVariable, "PILLION_FAKEHOST_MODE", "PILLION_FAKEHOST_RECORD", "PILLION_FAKEHOST_CHUNK_DELAY_MS", IndexWindowChecks.IndexVariable];
 
     /// <summary>Puts the fake host behind the package: sets the variables inside devenv.exe, retries the host and waits for it.</summary>
     /// <param name="fakeHostPath">The fake host executable.</param>
