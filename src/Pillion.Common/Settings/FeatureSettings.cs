@@ -48,6 +48,9 @@ public static class FeatureNames
     /// <summary>The Local Store: Pillion Host's encrypted SQLite databases, starting with <c>conversations.db</c> (work item 2.1).</summary>
     public const string LocalStore = "localStore";
 
+    /// <summary>The repository indexing pipeline: discovery and hashing of repository files and the index folder ownership (work items 2.3, 2.9).</summary>
+    public const string Indexing = "indexing";
+
     /// <summary>Gets every feature flag name, in the order they are written to <c>settings.json</c>.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
@@ -66,6 +69,7 @@ public static class FeatureNames
         Mentions,
         OutboundLogView,
         LocalStore,
+        Indexing,
     ];
 }
 
@@ -132,6 +136,7 @@ public sealed class FeatureSettings : SettingsNode
             "mentions" => Mentions,
             "outboundlogview" => OutboundLogView,
             "localstore" => LocalStore,
+            "indexing" => Indexing,
             _ => true,
         };
     }
@@ -189,6 +194,9 @@ public sealed class FeatureSettings : SettingsNode
             case "localstore":
                 LocalStore = false;
                 break;
+            case "indexing":
+                Indexing = false;
+                break;
         }
     }
 
@@ -203,4 +211,7 @@ public sealed class FeatureSettings : SettingsNode
 
     /// <summary>Gets or sets a value indicating whether Pillion Host may create and open its encrypted Local Store databases (<c>conversations.db</c>). When off, opening the store fails with a policy error.</summary>
     public bool LocalStore { get; set; } = true;
+
+    /// <summary>Gets or sets a value indicating whether Pillion Host may discover, hash and index repository files and open index databases (<c>index\&lt;id&gt;\index.db</c>). When off, opening an index fails with a policy error and nothing is written to disk.</summary>
+    public bool Indexing { get; set; } = true;
 }

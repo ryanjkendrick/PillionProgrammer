@@ -22,6 +22,13 @@ public sealed class EncryptedDatabaseOptions
     /// <summary>Gets the most reader connections kept open at once. Defaults to 4; each costs a key derivation (tens of milliseconds) when first opened and some page cache.</summary>
     public int MaxReaders { get; init; } = 4;
 
+    /// <summary>
+    /// Gets a value indicating whether to open an existing database read-only: the file and its key must already exist,
+    /// nothing is created, switched to WAL or migrated, and writes and <c>VACUUM</c> fail. Used by a host that does not
+    /// own the index (design section 10: the first host takes <c>writer.lock</c>, the others open the database read-only).
+    /// </summary>
+    public bool ReadOnly { get; init; }
+
     /// <summary>Gets the key file path, resolving the default.</summary>
     internal string ResolvedKeyFilePath =>
         Path.GetFullPath(KeyFilePath ?? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(DatabasePath))!, DefaultKeyFileName));

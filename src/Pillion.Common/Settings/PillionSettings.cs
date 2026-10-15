@@ -198,6 +198,12 @@ public sealed class IndexingSettings : SettingsNode
 
     /// <summary>Gets or sets a value indicating whether indexing pauses while on battery power.</summary>
     public bool PauseOnBattery { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets how many days an index may go unopened before it is deleted (design section 10, Retention). Zero or
+    /// less turns the age rule off; an index whose repository folder no longer exists is deleted either way.
+    /// </summary>
+    public int RetentionDays { get; set; } = 30;
 }
 
 /// <summary>Logging settings.</summary>
