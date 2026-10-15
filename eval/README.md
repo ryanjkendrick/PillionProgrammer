@@ -103,6 +103,9 @@ Output goes to `tools/eval/out/<timestamp>/` (git-ignored): `summary.md`, and a 
 ranks and top 10) and `.md` (breakdown, warnings, misses) per set and model. Bundled models other than the build's own
 are downloaded once from the manifest's pinned URLs into `%LOCALAPPDATA%\PillionProgrammer-eval\models\` (`--models-dir`,
 `--no-download`), apart from the product's models folder. An Ollama embedding model is unloaded after the run unless it
-was resident before; other resident models are left alone. `--help` lists every option.
+was resident before; other resident models are left alone. A long run (a code model on the CPU indexes `src` in about
+15 minutes) can be made resumable with `--work-dir <folder>`: each set and model's corpus and index are kept there, and
+running the same command again picks up where a stopped run left off (chunks embedded by the earlier process are embedded
+again for the int8 measurement). `--help` lists every option.
 
 The figures of the first baseline are in [docs/eval-retrieval-baseline.md](../docs/eval-retrieval-baseline.md).
