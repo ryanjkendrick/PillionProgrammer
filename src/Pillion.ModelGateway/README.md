@@ -117,6 +117,47 @@ index (the Embed step of the pipeline, design section 7) and for search queries.
   `/api/generate`) and loaded again at the size needed.
 - **Feature flags and settings.** `features.embeddings` (default on) beside `features.modelGateway`, and
   `cloudSwitches.embedding` (default off). `routing.tasks.embedding` already existed.
+### Bundled models (`Providers/Bundled`)
+
+Work item 2.7. The provider of kind `bundled` (id `bundled`) runs ONNX embedding models inside the host with ONNX Runtime
+1.24.4, so indexing works offline with nothing installed. The registry adds it on its own after the configured providers;
+a `providers` entry of kind `bundled` replaces the implicit one (to set `proxy` or `caBundle` for downloads, or
+`"enabled": false`). `features.bundledEmbeddings` (default on) switches it off.
+
+- **Models.** `Models/models.manifest.json` (compiled into this assembly, so the trusted copy carries its signature) lists
+  `bge-small-en-v1.5` (int8, 384 dimensions, 512 WordPiece tokens, CLS pooling, MIT; bundled), `multilingual-e5-small`
+  (int8, 384, 512 SentencePiece tokens, mean pooling, MIT) and `jina-embeddings-v2-base-code` (int8, 768, 8,192 BPE tokens
+  capped at `MaxSequenceTokens` 2,048, mean pooling, Apache-2.0); the last two download on request. Every file has a pinned
+  `resolve/<commit>/` URL, SHA-256 and size. `build/BundledModels.targets` downloads the bundled model at build time (see
+  CONTRIBUTING.md) and the VSIX carries it under `Host\models\`.
+- **Finding and verifying.** `BundledModelLocator` looks in `Host\models\<id>\` first, then
+  `%LOCALAPPDATA%\PillionProgrammer\models\<id>\`. A folder is used only when every required file matches the manifest's size
+  and SHA-256; verdicts are kept per file (path, size, time stamp) for the life of the process, so each file is hashed
+  once per host start (`BundledModelWarmup` does it in the background at start-up). The graph and tokenizer files are read
+  into memory, hashed again and loaded from those bytes, so a file swapped after the check is still refused.
+- **Routing.** `embeddingDefaults.bundled` names the three models; `embeddingProviderOrder` (`["bundled"]`) makes the
+  Embedding task class try the bundled kind before the others, so the bundled model is the default with or without an
+  Ollama embedding model. A model named by `routing.profiles` or an explicit model id still wins. This order is
+  provisional until the retrieval benchmark (work item 2.16). The bundled families report a context window of 1,048,576
+  because the provider truncates every input to the model's limit itself; `maxInputTokens` is the chunk cap.
+- **Inference.** `OnnxEmbeddingModel` tokenises (truncating the content and keeping the end token, like the Python
+  tokenizer), sorts a batch longest first, splits it into runs within `MaxAttentionCells` (32 x 512 x 512, so a long Jina
+  input does not need gigabytes), pads, runs, pools (CLS or masked mean) and normalises. Threads: `IntraOpThreads`, half
+  the logical processors; idle intra-op threads do not spin. Inference is serialised per model, and calls go through the
+  gateway's Embedding lane. A session unused for `IdleUnloadAfter` (5 minutes) is released.
+- **DirectML.** With `ExecutionProvider` `Auto`, a model loads on DirectML when the GPU tier (`models.gpuTier`, else
+  detected) is not `cpu`: the FP16 graph when its optional file is present and verified, else the int8 graph. If DirectML
+  cannot start or a run fails, the failure is logged once and the models run on the CPU for the rest of the process.
+  `-p:PillionOnnxRuntimeFlavor=cpu` builds against the CPU-only package (no `DirectML.dll`).
+- **Tokenizers.** `EmbeddingTokenizer` (with `IEmbeddingTokenCounter`, which `BundledModelRuntime.GetTokenCounter` and the
+  generator's `GetService` hand to the chunker): WordPiece on Microsoft.ML.Tokenizers' `BertTokenizer` with the Python
+  tokenizer's punctuation splitting (version 2.0.0 drops ASCII symbols such as `<=>` and keeps `_` inside words), XLM-R
+  SentencePiece with fairseq's id offset, and RoBERTa byte-level BPE from `tokenizer.json`. Each is checked against the
+  ids of the Hugging Face tokenizers library.
+- **Downloads.** `ModelDownloadService.DownloadAsync(modelId, progress, includeOptional, ct)` fetches a manifest model into
+  the user's models folder: manifest URLs only (callers name an id), streamed to a temporary file while hashed, checked
+  for size and SHA-256, renamed into place; redirects are followed only to https; the cloud adapters' proxy and CA bundle
+  handling applies; nothing is fetched under Local-only or with the flag off. No UI calls it yet.
 
 ## Autocomplete
 
