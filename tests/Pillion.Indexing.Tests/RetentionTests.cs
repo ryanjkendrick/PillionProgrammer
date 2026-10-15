@@ -194,6 +194,24 @@ public sealed class RetentionTests : IDisposable
     }
 
     [Fact]
+    public async Task AnIndexTheCallerProtects_IsKept_WhateverItsAgeOrRoot()
+    {
+        var unused = await CreateIndexAsync("one");
+        var missing = await CreateIndexAsync("two");
+        var other = await CreateIndexAsync("three");
+        Directory.Delete(Repo("two"), recursive: true);
+
+        var report = await Retention(daysFromNow: 1000).SweepAsync(protect: u => u.Id == unused.Id || u.Id == missing.Id);
+
+        Assert.Equal(RetentionDecision.KeepProtected, report.Items.Single(i => i.Usage.Id == unused.Id).Decision);
+        Assert.Equal(RetentionDecision.KeepProtected, report.Items.Single(i => i.Usage.Id == missing.Id).Decision);
+        Assert.Equal(RetentionDecision.DeleteUnused, report.Items.Single(i => i.Usage.Id == other.Id).Decision);
+        Assert.True(Directory.Exists(unused.Directory));
+        Assert.True(Directory.Exists(missing.Directory));
+        Assert.False(Directory.Exists(other.Directory));
+    }
+
+    [Fact]
     public async Task ADryRun_ReportsWhatWouldGo_AndDeletesNothing()
     {
         var old = await CreateIndexAsync("one");

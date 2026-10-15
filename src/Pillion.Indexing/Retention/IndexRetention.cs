@@ -38,6 +38,9 @@ public enum RetentionDecision
     /// <summary>Kept because a live host owns it, whatever its age.</summary>
     KeepInUse,
 
+    /// <summary>Kept because the caller protects it (the host: it belongs to a root of the open workspace), whatever its age or state.</summary>
+    KeepProtected,
+
     /// <summary>Deleted (or would be): its repository root no longer exists.</summary>
     DeleteRootMissing,
 
@@ -141,16 +144,20 @@ public sealed class IndexRetention
     /// <summary>Decides, and unless <paramref name="dryRun"/> carries out, the deletion of unneeded indexes.</summary>
     /// <param name="dryRun">When <see langword="true"/>, only report what would be deleted.</param>
     /// <param name="retentionDays">Overrides the policy's retention period for this sweep.</param>
+    /// <param name="protect">
+    /// Indexes the caller needs kept whatever their age or state (the host protects the indexes of the open workspace's
+    /// roots); asked for each index just before it is decided. Optional.
+    /// </param>
     /// <param name="cancellationToken">Cancels the sweep between indexes.</param>
     /// <returns>The report, with one item per index.</returns>
-    public Task<IndexRetentionReport> SweepAsync(bool dryRun = false, int? retentionDays = null, CancellationToken cancellationToken = default)
+    public Task<IndexRetentionReport> SweepAsync(bool dryRun = false, int? retentionDays = null, Func<IndexUsage, bool>? protect = null, CancellationToken cancellationToken = default)
     {
         if (_features is not null && !_features.IsEnabled(FeatureNames.Indexing))
         {
             return Task.FromResult(new IndexRetentionReport(dryRun, Skipped: true, []));
         }
 
-        return Task.Run(() => Sweep(dryRun, retentionDays ?? _policy.RetentionDays, cancellationToken), cancellationToken);
+        return Task.Run(() => Sweep(dryRun, retentionDays ?? _policy.RetentionDays, protect, cancellationToken), cancellationToken);
     }
 
     /// <summary>
@@ -191,7 +198,7 @@ public sealed class IndexRetention
     private static bool IsIndexId(string name) =>
         name.Length == 32 && name.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f'));
 
-    private IndexRetentionReport Sweep(bool dryRun, int retentionDays, CancellationToken cancellationToken)
+    private IndexRetentionReport Sweep(bool dryRun, int retentionDays, Func<IndexUsage, bool>? protect, CancellationToken cancellationToken)
     {
         var now = _time.GetUtcNow();
         var items = new List<IndexRetentionItem>();
@@ -200,6 +207,11 @@ public sealed class IndexRetention
             cancellationToken.ThrowIfCancellationRequested();
 
             var decision = Decide(usage, now, retentionDays);
+            if (decision is RetentionDecision.DeleteRootMissing or RetentionDecision.DeleteUnused && protect?.Invoke(usage) == true)
+            {
+                decision = RetentionDecision.KeepProtected;
+            }
+
             var deleted = false;
             string? error = null;
             if (!dryRun && decision is RetentionDecision.DeleteRootMissing or RetentionDecision.DeleteUnused)

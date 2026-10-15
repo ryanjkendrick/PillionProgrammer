@@ -287,6 +287,12 @@ Work item 2.9, design sections 7, 10 and 13, behind `features.indexing` (an inde
    live host owns it) and does not reopen that root until a rebuild or the next workspace change; `ListIndexesAsync` maps
    `IndexRetention.GetUsage()`; `ListExcludedFilesAsync` pages the last sweep's list, secret-bearing first. With the flag
    off the status is `Idle` with no roots, nothing is opened, and these controls are refused with `PolicyDenied`.
+5. **Retention** (issue #99). The pipeline loop runs `IndexRetention.SweepAsync` once the workspace the extension reported
+   is applied (its indexes open), then every `IndexingOptions.RetentionSweepInterval` (a day, on the host's `TimeProvider`),
+   with the current `indexing.retentionDays`. It deletes the indexes whose root is gone or that were not opened for that
+   many days, never one a live host holds (`writer.lock`) and never one of a root of the open workspace (open here, or of
+   another model or chunker version: `RetentionDecision.KeepProtected`). Each deletion is logged (event ids 2970-2973);
+   the last report is `IndexingService.LastRetentionReport`.
 
 ### Serving search and the workspace queries
 
