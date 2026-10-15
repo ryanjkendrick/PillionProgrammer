@@ -49,7 +49,8 @@ public sealed class SqliteVecExtensionTests : IDisposable
         await using var storage = await IndexTestSupport.OpenAsync(_temp);
 
         Assert.True(storage.SqliteVecLoaded);
-        Assert.Equal(SqliteVecIndex.Name, storage.Vectors.Backend);
+        Assert.Equal(AutoVectorIndex.Name, storage.Vectors.Backend);
+        Assert.NotNull(storage.SqliteVec);
         Assert.Equal("v" + SqliteVecExtension.Manifest.Version, await storage.Database.ScalarAsync("SELECT vec_version()"));
         var fromWriter = await storage.Database.WriteAsync(async (connection, transaction, token) =>
         {
@@ -100,14 +101,27 @@ public sealed class SqliteVecExtensionTests : IDisposable
     }
 
     [Fact]
-    public async Task WithoutTheExtension_TheBruteForceBackendIsChosen()
+    public async Task WithoutTheExtension_OnlyTheBruteForcePathsRemain()
     {
         await using var storage = await IndexTestSupport.OpenWithoutExtensionAsync(_temp);
 
         Assert.False(storage.SqliteVecLoaded);
         Assert.Null(storage.SqliteVec);
-        Assert.Equal(BruteForceVectorIndex.Name, storage.Vectors.Backend);
+        Assert.Equal(AutoVectorIndex.Name, storage.Vectors.Backend);
+        Assert.Equal(BruteForceVectorIndex.Name, storage.BruteForce.Backend);
         await Assert.ThrowsAsync<Microsoft.Data.Sqlite.SqliteException>(() => storage.Database.ScalarAsync("SELECT vec_version()"));
+    }
+
+    [Fact]
+    public async Task ABackendCanBeChosenExplicitly()
+    {
+        await using (var vec = await IndexTestSupport.OpenAsync(_temp, new IndexStorageOptions { VectorBackend = VectorBackendPreference.SqliteVec }))
+        {
+            Assert.Same(vec.SqliteVec, vec.Vectors);
+        }
+
+        await using var brute = await IndexTestSupport.OpenAsync(_temp, new IndexStorageOptions { VectorBackend = VectorBackendPreference.BruteForce });
+        Assert.Same(brute.BruteForce, brute.Vectors);
     }
 
     [Fact]

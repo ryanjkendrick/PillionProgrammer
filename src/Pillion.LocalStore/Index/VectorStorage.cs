@@ -17,12 +17,75 @@ internal sealed class VectorStorage
     /// <summary>The value after a host without sqlite-vec changed vectors.</summary>
     public const string Stale = "stale";
 
-    public VectorStorage(EncryptedDatabase database, bool extensionLoaded)
+    private readonly object _cacheLock = new();
+    private VectorCache? _cache;
+    private long _overLimitGeneration = -1;
+
+    public VectorStorage(EncryptedDatabase database, bool extensionLoaded, long cacheMaxBytes = 0)
     {
         Database = database;
         ExtensionLoaded = extensionLoaded;
+        CacheMaxBytes = cacheMaxBytes;
     }
 
+    /// <summary>Gets the largest in-memory copy of the vectors the brute-force backend keeps; 0 for none.</summary>
+    public long CacheMaxBytes { get; }
+
+    /// <summary>Gets the size of the in-memory copy of the vectors, or 0 when there is none.</summary>
+    public long CacheBytes => Volatile.Read(ref _cache)?.Bytes ?? 0;
+
+    /// <summary>
+    /// Gets the in-memory copy of the vectors, loading it (or reloading it after any change to <c>chunk_embeddings</c>)
+    /// on this reader connection; <see langword="null"/> when the vectors do not fit <see cref="CacheMaxBytes"/>.
+    /// </summary>
+    public VectorCache? GetCache(SqliteConnection connection, int dimensions)
+    {
+        if (CacheMaxBytes <= 0)
+        {
+            return null;
+        }
+
+        var generation = VectorCache.ReadGeneration(connection, null);
+        var cache = Volatile.Read(ref _cache);
+        if (cache is not null && cache.Generation == generation && cache.Dimensions == dimensions)
+        {
+            return cache;
+        }
+
+        if (Interlocked.Read(ref _overLimitGeneration) == generation)
+        {
+            return null;
+        }
+
+        lock (_cacheLock)
+        {
+            cache = _cache;
+            if (cache is not null && cache.Generation == generation && cache.Dimensions == dimensions)
+            {
+                return cache;
+            }
+
+            var count = Sql.ScalarLong(connection, null, "SELECT count(*) FROM chunk_embeddings");
+            if (count * dimensions > CacheMaxBytes)
+            {
+                Volatile.Write(ref _cache, null);
+                Interlocked.Exchange(ref _overLimitGeneration, generation);
+                return null;
+            }
+
+            try
+            {
+                cache = VectorCache.Load(connection, dimensions, (int)count);
+            }
+            catch (InvalidOperationException)
+            {
+                cache = null;
+            }
+
+            Volatile.Write(ref _cache, cache);
+            return cache;
+        }
+    }
     public EncryptedDatabase Database { get; }
 
     /// <summary>Gets a value indicating whether every connection of <see cref="Database"/> has sqlite-vec loaded.</summary>

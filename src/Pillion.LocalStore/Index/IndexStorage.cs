@@ -8,13 +8,17 @@ namespace Pillion.LocalStore.Index;
 /// <summary>Which <see cref="IVectorIndex"/> backend an <see cref="IndexStorage"/> uses.</summary>
 public enum VectorBackendPreference
 {
-    /// <summary>sqlite-vec when the extension loaded, otherwise brute force.</summary>
+    /// <summary>
+    /// <see cref="AutoVectorIndex"/>: the in-memory brute-force search while the vectors fit
+    /// <see cref="IndexStorageOptions.VectorCacheMaxBytes"/>, then sqlite-vec when the extension loaded, then the
+    /// brute-force table scan.
+    /// </summary>
     Auto,
 
-    /// <summary>sqlite-vec; opening fails when the extension did not load.</summary>
+    /// <summary><see cref="SqliteVecIndex"/>; opening fails when the extension did not load.</summary>
     SqliteVec,
 
-    /// <summary>Brute force, even when the extension loaded (writes still keep the sqlite-vec table in step).</summary>
+    /// <summary><see cref="BruteForceVectorIndex"/>, even when the extension loaded (writes still keep the sqlite-vec table in step).</summary>
     BruteForce,
 }
 
@@ -32,6 +36,19 @@ public sealed class IndexStorageOptions
 
     /// <summary>Gets the BM25 weight of the <c>text</c> column (breadcrumb and text, whole identifiers). Defaults to 1.0.</summary>
     public double TextWeight { get; init; } = 1.0;
+
+    /// <summary>
+    /// Gets the largest in-memory copy of the int8 vectors the brute-force backend keeps, in bytes (about the chunk count
+    /// times the dimension). Defaults to 64 MiB, enough for 170,000 chunks of 384 dimensions; 0 turns the copy off, so every
+    /// brute-force search scans the table.
+    /// </summary>
+    public long VectorCacheMaxBytes { get; init; } = 64L * 1024 * 1024;
+
+    /// <summary>
+    /// Gets the page cache of each connection in KiB (SQLite's <c>cache_size</c>), or 0 for SQLite's default (2 MiB). A
+    /// larger cache keeps decrypted pages of the sqlite-vec table in memory between searches, per connection.
+    /// </summary>
+    public int PageCacheKiB { get; init; }
 
     /// <summary>Gets the BM25 weight of the <c>identifiers</c> column (split identifiers). Defaults to 0.5, so a whole-identifier match ranks above a split one.</summary>
     public double IdentifiersWeight { get; init; } = 0.5;
@@ -54,13 +71,18 @@ public sealed partial class IndexStorage : IAsyncDisposable
         _ownsDatabase = ownsDatabase;
         SqliteVecLoaded = sqliteVecLoaded;
         Options = options;
-        var vectors = new VectorStorage(database, sqliteVecLoaded);
+        var vectors = new VectorStorage(database, sqliteVecLoaded, options.VectorCacheMaxBytes);
         Storage = vectors;
         Chunks = new ChunkRepository(vectors, options.TextWeight, options.IdentifiersWeight);
         Symbols = new SymbolRepository(database);
         SqliteVec = sqliteVecLoaded ? new SqliteVecIndex(vectors) : null;
         BruteForce = new BruteForceVectorIndex(vectors);
-        Vectors = options.VectorBackend == VectorBackendPreference.BruteForce || SqliteVec is null ? BruteForce : SqliteVec;
+        Vectors = options.VectorBackend switch
+        {
+            VectorBackendPreference.BruteForce => BruteForce,
+            VectorBackendPreference.SqliteVec when SqliteVec is not null => SqliteVec,
+            _ => new AutoVectorIndex(vectors),
+        };
     }
 
     /// <summary>Gets the database; repository discovery (work item 2.3) shares it for <c>files</c> and <c>meta</c>.</summary>
@@ -114,13 +136,24 @@ public sealed partial class IndexStorage : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(schema);
         options ??= new IndexStorageOptions();
         var inner = databaseOptions.ConnectionOpened;
-        Action<SqliteConnection>? hook = options.LoadSqliteVec
-            ? connection =>
+        var loadSqliteVec = options.LoadSqliteVec;
+        var pageCacheKiB = options.PageCacheKiB;
+        void Hook(SqliteConnection connection)
+        {
+            if (loadSqliteVec)
             {
                 SqliteVecExtension.TryLoad(connection);
-                inner?.Invoke(connection);
             }
-            : inner;
+
+            if (pageCacheKiB > 0)
+            {
+                using var command = connection.CreateCommand();
+                command.CommandText = string.Create(System.Globalization.CultureInfo.InvariantCulture, $"PRAGMA cache_size = -{pageCacheKiB}");
+                command.ExecuteNonQuery();
+            }
+
+            inner?.Invoke(connection);
+        }
 
         var database = await EncryptedDatabase.OpenAsync(
             new EncryptedDatabaseOptions
@@ -129,7 +162,7 @@ public sealed partial class IndexStorage : IAsyncDisposable
                 KeyFilePath = databaseOptions.KeyFilePath,
                 BusyTimeout = databaseOptions.BusyTimeout,
                 MaxReaders = databaseOptions.MaxReaders,
-                ConnectionOpened = hook,
+                ConnectionOpened = Hook,
             },
             schema,
             logger,
@@ -201,6 +234,24 @@ public sealed partial class IndexStorage : IAsyncDisposable
         return storage;
     }
 
+    /// <summary>Gets the memory held by the brute-force backend's in-memory copy of the vectors, in bytes (0 before the first search).</summary>
+    public long VectorCacheBytes => Storage.CacheBytes;
+
+    /// <summary>
+    /// Loads (or reloads, after vectors changed) the in-memory copy of the vectors now, so the next search does not pay
+    /// for it: about 0.8 s for 100,000 chunks of 384 dimensions. The indexing pipeline can call it after each batch.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels waiting for a reader connection.</param>
+    /// <returns>The bytes the copy holds; 0 when there are no vectors or they do not fit <see cref="IndexStorageOptions.VectorCacheMaxBytes"/>.</returns>
+    public Task<long> WarmVectorCacheAsync(CancellationToken cancellationToken = default) =>
+        Database.ReadAsync(
+            (connection, _) =>
+            {
+                var dims = VectorStorage.ReadDimensions(connection, null);
+                return Task.FromResult(dims is null ? 0 : Storage.GetCache(connection, dims.Value)?.Bytes ?? 0);
+            },
+            cancellationToken);
+
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
     {
@@ -213,9 +264,14 @@ public sealed partial class IndexStorage : IAsyncDisposable
     private static void LogChoice(ILogger logger, IndexStorage storage, IndexStorageOptions options)
     {
         var status = SqliteVecExtension.Status;
-        var reason = storage.SqliteVecLoaded
+        var sqliteVec = storage.SqliteVecLoaded
             ? $"sqlite-vec {status.LoadedVersion} loaded from {status.LibraryPath}"
             : options.LoadSqliteVec ? $"sqlite-vec unavailable: {status.Reason}" : "sqlite-vec not requested";
+        var reason = storage.Vectors is AutoVectorIndex
+            ? (storage.SqliteVecLoaded
+                ? $"in-memory brute force while the vectors fit {options.VectorCacheMaxBytes / 1048576.0:0.#} MiB, then sqlite-vec; {sqliteVec}"
+                : $"in-memory brute force while the vectors fit {options.VectorCacheMaxBytes / 1048576.0:0.#} MiB, then a table scan; {sqliteVec}")
+            : sqliteVec;
         if (Interlocked.Exchange(ref _choiceLogged, 1) == 0)
         {
             LogBackend(logger, storage.Vectors.Backend, reason);

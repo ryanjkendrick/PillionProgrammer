@@ -97,11 +97,15 @@ public sealed class SqliteVecIndex : VectorIndexBase
     public override string Backend => Name;
 
     /// <inheritdoc/>
-    private protected override IReadOnlyList<VectorHit> Search(SqliteConnection connection, ReadOnlySpan<sbyte> query, int k, ChunkFilter filter, CancellationToken cancellationToken)
+    private protected override IReadOnlyList<VectorHit> Search(SqliteConnection connection, ReadOnlySpan<sbyte> query, int k, ChunkFilter filter, CancellationToken cancellationToken) =>
+        Knn(connection, query, k, filter, cancellationToken) ?? BruteForceVectorIndex.CachedOrScan(Storage, connection, query, k, filter, cancellationToken);
+
+    /// <summary>Runs the KNN query on <c>chunk_vectors</c>, or returns <see langword="null"/> while the table is missing or stale.</summary>
+    internal static List<VectorHit>? Knn(SqliteConnection connection, ReadOnlySpan<sbyte> query, int k, ChunkFilter filter, CancellationToken cancellationToken)
     {
         if (!Sql.TableExists(connection, null, IndexStorageSchema.VectorTable) || VectorStorage.IsStale(connection, null))
         {
-            return BruteForceVectorIndex.Scan(connection, query, k, filter, cancellationToken);
+            return null;
         }
 
         using var command = connection.CreateCommand();
@@ -127,9 +131,44 @@ public sealed class SqliteVecIndex : VectorIndexBase
 }
 
 /// <summary>
+/// The default backend (<see cref="VectorBackendPreference.Auto"/>): the brute-force search over the in-memory copy of the
+/// vectors while they fit <see cref="IndexStorageOptions.VectorCacheMaxBytes"/> (the fastest path: a few milliseconds for
+/// 100,000 chunks of 384 dimensions), otherwise the sqlite-vec KNN query when the extension is loaded and its table is up
+/// to date, otherwise the brute-force scan of the table. Every path ranks alike.
+/// </summary>
+public sealed class AutoVectorIndex : VectorIndexBase
+{
+    internal AutoVectorIndex(VectorStorage storage)
+        : base(storage)
+    {
+    }
+
+    /// <summary>The backend name.</summary>
+    public const string Name = "auto";
+
+    /// <inheritdoc/>
+    public override string Backend => Name;
+
+    /// <inheritdoc/>
+    private protected override IReadOnlyList<VectorHit> Search(SqliteConnection connection, ReadOnlySpan<sbyte> query, int k, ChunkFilter filter, CancellationToken cancellationToken)
+    {
+        var cache = Storage.GetCache(connection, query.Length);
+        if (cache is not null)
+        {
+            return cache.Search(query, k, filter, cancellationToken);
+        }
+
+        return (Storage.ExtensionLoaded ? SqliteVecIndex.Knn(connection, query, k, filter, cancellationToken) : null)
+            ?? BruteForceVectorIndex.Scan(connection, query, k, filter, cancellationToken);
+    }
+}
+
+/// <summary>
 /// The brute-force backend: reads every int8 vector of <c>chunk_embeddings</c> that passes the filter and computes the
-/// cosine distance in managed code (AVX2 or 128-bit SIMD), keeping the best <c>k</c> in a heap. Used when sqlite-vec
-/// cannot be loaded; it gives the same ranking as sqlite-vec because it computes the distance the same way.
+/// cosine distance in managed code (AVX2 or 128-bit SIMD), keeping the best <c>k</c> in a heap. While the vectors fit
+/// <see cref="IndexStorageOptions.VectorCacheMaxBytes"/> it scans an in-memory copy of them instead of the table, reloaded
+/// when the <c>vec_generation</c> counter moves. Used when sqlite-vec cannot be loaded; it gives the same ranking as
+/// sqlite-vec because it computes the distance the same way.
 /// </summary>
 public sealed class BruteForceVectorIndex : VectorIndexBase
 {
@@ -157,7 +196,7 @@ public sealed class BruteForceVectorIndex : VectorIndexBase
 
         var queryNorm = Int8Vectors.SquaredNorm(query);
         var buffer = new byte[query.Length];
-        var heap = new PriorityQueue<long, (float Distance, long Id)>(k + 1, WorstFirst.Instance);
+        var heap = new TopK(k);
         var rows = 0;
         using var reader = command.ExecuteReader();
         while (reader.Read())
@@ -173,32 +212,61 @@ public sealed class BruteForceVectorIndex : VectorIndexBase
                 continue;
             }
 
-            var id = reader.GetInt64(0);
             Int8Vectors.DotAndNorm(query, System.Runtime.InteropServices.MemoryMarshal.Cast<byte, sbyte>(buffer), out var dot, out var norm);
-            var distance = Int8Vectors.CosineDistance(dot, queryNorm, norm);
-            if (heap.Count < k)
-            {
-                heap.Enqueue(id, (distance, id));
-            }
-            else if (heap.TryPeek(out _, out var worst) && WorstFirst.Instance.Compare((distance, id), worst) > 0)
-            {
-                heap.DequeueEnqueue(id, (distance, id));
-            }
+            heap.Offer(reader.GetInt64(0), Int8Vectors.CosineDistance(dot, queryNorm, norm));
         }
 
-        var hits = new List<VectorHit>(heap.Count);
-        while (heap.TryDequeue(out var id, out var priority))
-        {
-            hits.Add(new VectorHit(id, priority.Distance));
-        }
-
-        hits.Reverse();
-        return hits;
+        return heap.ToHits();
     }
 
+    /// <summary>Searches the in-memory copy of the vectors when it fits the cache limit, otherwise scans the table.</summary>
+    internal static IReadOnlyList<VectorHit> CachedOrScan(VectorStorage storage, SqliteConnection connection, ReadOnlySpan<sbyte> query, int k, ChunkFilter filter, CancellationToken cancellationToken)
+    {
+        var cache = storage.GetCache(connection, query.Length);
+        return cache is not null
+            ? cache.Search(query, k, filter, cancellationToken)
+            : Scan(connection, query, k, filter, cancellationToken);
+    }
     /// <inheritdoc/>
     private protected override IReadOnlyList<VectorHit> Search(SqliteConnection connection, ReadOnlySpan<sbyte> query, int k, ChunkFilter filter, CancellationToken cancellationToken) =>
-        Scan(connection, query, k, filter, cancellationToken);
+        CachedOrScan(Storage, connection, query, k, filter, cancellationToken);
+
+    /// <summary>The best <c>k</c> hits seen so far: a heap with the worst (largest distance, then largest id) on top.</summary>
+    internal sealed class TopK
+    {
+        private readonly int _k;
+        private readonly PriorityQueue<long, (float Distance, long Id)> _heap;
+
+        public TopK(int k)
+        {
+            _k = k;
+            _heap = new PriorityQueue<long, (float Distance, long Id)>(k + 1, WorstFirst.Instance);
+        }
+
+        public void Offer(long id, float distance)
+        {
+            if (_heap.Count < _k)
+            {
+                _heap.Enqueue(id, (distance, id));
+            }
+            else if (_heap.TryPeek(out _, out var worst) && WorstFirst.Instance.Compare((distance, id), worst) > 0)
+            {
+                _heap.DequeueEnqueue(id, (distance, id));
+            }
+        }
+
+        public List<VectorHit> ToHits()
+        {
+            var hits = new List<VectorHit>(_heap.Count);
+            while (_heap.TryDequeue(out var id, out var priority))
+            {
+                hits.Add(new VectorHit(id, priority.Distance));
+            }
+
+            hits.Reverse();
+            return hits;
+        }
+    }
 
     /// <summary>Orders the heap so the worst hit (largest distance, then largest id) is at the top.</summary>
     private sealed class WorstFirst : IComparer<(float Distance, long Id)>

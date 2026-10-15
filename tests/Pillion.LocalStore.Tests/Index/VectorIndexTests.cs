@@ -240,6 +240,60 @@ public sealed class VectorIndexTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task EveryPath_RanksAlike_InMemoryTableScanSqliteVecAndAuto()
+    {
+        await using var storage = await IndexTestSupport.OpenAsync(_temp);
+        var random = new Random(23);
+        await FillAsync(storage, random, files: 20, chunksPerFile: 40);
+        await using var scanOnly = await IndexStorage.CreateAsync(storage.Database, ownsDatabase: false, new IndexStorageOptions { VectorCacheMaxBytes = 0 });
+        await using var overLimit = await IndexStorage.CreateAsync(storage.Database, ownsDatabase: false, new IndexStorageOptions { VectorCacheMaxBytes = 1024 });
+        var filter = new ChunkFilter { Partitions = ["src/Core"], Languages = ["csharp", "typescript"] };
+
+        for (var q = 0; q < 10; q++)
+        {
+            var query = IndexTestSupport.RandomVector(random, Dims);
+            foreach (var f in new ChunkFilter?[] { null, filter })
+            {
+                var expected = (await storage.SqliteVec!.SearchAsync(query, 15, f)).Select(h => h.ChunkId).ToList();
+                Assert.Equal(15, expected.Count);
+                Assert.Equal(expected, (await storage.BruteForce.SearchAsync(query, 15, f)).Select(h => h.ChunkId));
+                Assert.Equal(expected, (await storage.Vectors.SearchAsync(query, 15, f)).Select(h => h.ChunkId));
+                Assert.Equal(expected, (await scanOnly.BruteForce.SearchAsync(query, 15, f)).Select(h => h.ChunkId));
+                Assert.Equal(expected, (await overLimit.Vectors.SearchAsync(query, 15, f)).Select(h => h.ChunkId));
+            }
+        }
+
+        Assert.InRange(await storage.WarmVectorCacheAsync(), 800L * Dims, 800L * (Dims + 32));
+        Assert.Equal(0L, scanOnly.VectorCacheBytes);
+        Assert.Equal(0L, await overLimit.WarmVectorCacheAsync());
+    }
+
+    [Fact]
+    public async Task TheInMemoryCopy_FollowsEveryChange_IncludingCascades()
+    {
+        await using var storage = await IndexTestSupport.OpenAsync(_temp, new IndexStorageOptions { VectorBackend = VectorBackendPreference.BruteForce });
+        var random = new Random(29);
+        var vectors = await FillAsync(storage, random, files: 3, chunksPerFile: 10);
+        var (target, targetVector) = vectors[4];
+        Assert.Equal(target, (await storage.Vectors.SearchAsync(targetVector, 1))[0].ChunkId);
+        Assert.True(storage.VectorCacheBytes > 0);
+
+        // A new, closer vector through the repository.
+        var file = await storage.AddFileAsync("src/New.cs");
+        var newId = (await storage.Chunks.ReplaceFileChunksAsync(file, [IndexTestSupport.Chunk("void New() {}", embedding: targetVector)]))[0];
+        var hits = await storage.Vectors.SearchAsync(targetVector, 2);
+        Assert.Equal(new[] { target, newId }.Order(), hits.Select(h => h.ChunkId).Order());
+
+        // Removed by a cascade from files, outside the repository (what 2.3 does).
+        await storage.ExecuteAsync($"DELETE FROM files WHERE id = {file}");
+        Assert.DoesNotContain(newId, (await storage.Vectors.SearchAsync(targetVector, 5)).Select(h => h.ChunkId));
+
+        // Re-embedded through the vector index.
+        await storage.Vectors.UpsertAsync(target, IndexTestSupport.RandomVector(random, Dims), new VectorMetadata("csharp", "src/Api"));
+        Assert.NotEqual(0.0, (await storage.Vectors.SearchAsync(targetVector, 1))[0].Distance, 3);
+    }
+
     private static async Task<List<(long Id, sbyte[] Vector)>> FillAsync(IndexStorage storage, Random random, int files, int chunksPerFile, int firstFile = 0)
     {
         var all = new List<(long, sbyte[])>();

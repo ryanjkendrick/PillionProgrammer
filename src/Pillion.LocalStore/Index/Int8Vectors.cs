@@ -68,6 +68,53 @@ internal static class Int8Vectors
         candidateNorm = n;
     }
 
+    /// <summary>Computes the dot product of two vectors exactly.</summary>
+    /// <param name="a">The first vector.</param>
+    /// <param name="b">The second vector, the same length.</param>
+    /// <returns>The dot product.</returns>
+    public static int Dot(ReadOnlySpan<sbyte> a, ReadOnlySpan<sbyte> b)
+    {
+        var length = Math.Min(a.Length, b.Length);
+        var i = 0;
+        var d = 0;
+        ref var x = ref MemoryMarshal.GetReference(a);
+        ref var y = ref MemoryMarshal.GetReference(b);
+
+        if (Avx2.IsSupported && length >= 32)
+        {
+            var accumulated = Vector256<int>.Zero;
+            for (; i <= length - 32; i += 32)
+            {
+                var x0 = Avx2.ConvertToVector256Int16(Vector128.LoadUnsafe(ref x, (nuint)i));
+                var x1 = Avx2.ConvertToVector256Int16(Vector128.LoadUnsafe(ref x, (nuint)(i + 16)));
+                var y0 = Avx2.ConvertToVector256Int16(Vector128.LoadUnsafe(ref y, (nuint)i));
+                var y1 = Avx2.ConvertToVector256Int16(Vector128.LoadUnsafe(ref y, (nuint)(i + 16)));
+                accumulated = Avx2.Add(accumulated, Avx2.Add(Avx2.MultiplyAddAdjacent(x0, y0), Avx2.MultiplyAddAdjacent(x1, y1)));
+            }
+
+            d = Vector256.Sum(accumulated);
+        }
+        else if (Vector128.IsHardwareAccelerated && length >= 16)
+        {
+            var accumulated = Vector128<int>.Zero;
+            for (; i <= length - 16; i += 16)
+            {
+                var (x0, x1) = Vector128.Widen(Vector128.LoadUnsafe(ref x, (nuint)i));
+                var (y0, y1) = Vector128.Widen(Vector128.LoadUnsafe(ref y, (nuint)i));
+                accumulated += WidenSum(x0 * y0) + WidenSum(x1 * y1);
+            }
+
+            d = Vector128.Sum(accumulated);
+        }
+
+        for (; i < length; i++)
+        {
+            d += Unsafe.Add(ref x, i) * Unsafe.Add(ref y, i);
+        }
+
+        return d;
+    }
+
     /// <summary>The sum of the squares of a vector.</summary>
     /// <param name="vector">The vector.</param>
     /// <returns>The squared norm.</returns>

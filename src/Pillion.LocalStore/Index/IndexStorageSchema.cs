@@ -31,6 +31,8 @@ namespace Pillion.LocalStore.Index;
 /// float32 vector, kept for the int8 recall-loss measurement (work item 2.16).</item>
 /// <item><c>vec_deleted</c>: chunk ids deleted since the <c>vec0</c> table was last updated (filled by the delete trigger, drained by
 /// the writer that has the extension), so a delete through any path, including a cascade from <c>files</c>, reaches it.</item>
+/// <item><c>vec_generation</c>: one counter that triggers on <c>chunk_embeddings</c> bump on every change, so the brute-force
+/// backend's in-memory copy of the vectors knows when to reload.</item>
 /// <item><c>symbols</c>: id, file_id, name, kind, container, start_line, end_line, signature (approximate, work item 2.5).</item>
 /// <item><c>symbol_refs</c>: from_symbol_id (null at file scope), to_symbol_id, file_id, line, kind (approximate, name-based).</item>
 /// <item><c>chunk_vectors</c> (created at run time): <c>vec0</c> with <c>embedding int8[dims] distance_metric=cosine</c> and the
@@ -92,6 +94,23 @@ public static class IndexStorageSchema
         CREATE TABLE vec_deleted (
             chunk_id INTEGER NOT NULL PRIMARY KEY
         ) STRICT;
+
+        -- Bumped by every change to chunk_embeddings, through any path (cascades included), so an in-memory copy of the
+        -- vectors knows when it is out of date.
+        CREATE TABLE vec_generation (
+            id    INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+            value INTEGER NOT NULL
+        ) STRICT;
+        INSERT INTO vec_generation (id, value) VALUES (1, 0);
+        CREATE TRIGGER chunk_embeddings_after_insert AFTER INSERT ON chunk_embeddings BEGIN
+            UPDATE vec_generation SET value = value + 1 WHERE id = 1;
+        END;
+        CREATE TRIGGER chunk_embeddings_after_update AFTER UPDATE ON chunk_embeddings BEGIN
+            UPDATE vec_generation SET value = value + 1 WHERE id = 1;
+        END;
+        CREATE TRIGGER chunk_embeddings_after_delete AFTER DELETE ON chunk_embeddings BEGIN
+            UPDATE vec_generation SET value = value + 1 WHERE id = 1;
+        END;
 
         CREATE TRIGGER chunks_after_delete AFTER DELETE ON chunks BEGIN
             DELETE FROM chunks_fts WHERE rowid = old.id;
