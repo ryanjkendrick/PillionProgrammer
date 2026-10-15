@@ -140,6 +140,20 @@ public sealed class MistralProvider : IModelProvider
     }
 
     /// <inheritdoc/>
+    public IEmbeddingGenerator<string, Embedding<float>>? GetEmbeddingGenerator(string modelId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+
+        // POST /v1/embeddings has the OpenAI shape.
+        return new OpenAIShapedEmbeddingGenerator(
+            modelId,
+            DisplayName,
+            Endpoint,
+            sendModel: true,
+            (model, body, cancellationToken) => Http.PostJsonAsync("embeddings", body, model, cancellationToken));
+    }
+
+    /// <inheritdoc/>
     public async Task<ProviderProbeResult> ProbeAsync(CancellationToken cancellationToken) =>
         (await ProbeDetailedAsync(cancellationToken).ConfigureAwait(false)).ToProbeResult();
 

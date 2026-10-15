@@ -270,5 +270,7 @@ public sealed class InlineEditLiveTests(ITestOutputHelper output)
         public Task<IReadOnlyList<ModelDescriptor>> ListModelsAsync(CancellationToken cancellationToken) => inner.ListModelsAsync(cancellationToken);
 
         public Task<ProviderTestResult> TestProviderAsync(string providerId, CancellationToken cancellationToken) => inner.TestProviderAsync(providerId, cancellationToken);
+
+        public Task<EmbeddingResult> EmbedAsync(EmbeddingRequest request, CancellationToken cancellationToken) => inner.EmbedAsync(request, cancellationToken);
     }
 }

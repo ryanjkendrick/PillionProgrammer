@@ -35,6 +35,7 @@ internal sealed class FakeOllamaHandler : HttpMessageHandler
         });
         handler.Json("POST api/chat", Fixture("chat-gemma4.ndjson"), "application/x-ndjson");
         handler.Json("POST api/generate", Fixture("generate-qwen-coder.ndjson"), "application/x-ndjson");
+        handler.Json("POST api/embed", Fixture("embed-qwen3.json"));
         return handler;
     }
 

@@ -216,6 +216,26 @@ public sealed class AzureOpenAIProvider : IModelProvider
         return null;
     }
 
+    /// <summary>Builds the request path of an embedding request on a deployment (relative to <see cref="Endpoint"/>).</summary>
+    /// <param name="deployment">The deployment name.</param>
+    /// <returns>The path with the <c>api-version</c> query.</returns>
+    public string EmbeddingsPath(string deployment) =>
+        $"openai/deployments/{Uri.EscapeDataString(deployment)}/embeddings?api-version={Uri.EscapeDataString(ApiVersion)}";
+
+    /// <inheritdoc/>
+    public IEmbeddingGenerator<string, Embedding<float>>? GetEmbeddingGenerator(string modelId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+
+        // The deployment is in the path, so the body does not name the model.
+        return new OpenAIShapedEmbeddingGenerator(
+            modelId,
+            DisplayName,
+            Endpoint,
+            sendModel: false,
+            (deployment, body, cancellationToken) => Http.PostJsonAsync(EmbeddingsPath(deployment), body, deployment, cancellationToken));
+    }
+
     /// <inheritdoc/>
     public async Task<ProviderProbeResult> ProbeAsync(CancellationToken cancellationToken) =>
         (await ProbeDetailedAsync(cancellationToken).ConfigureAwait(false)).ToProbeResult();
