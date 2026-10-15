@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
+using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
 using Pillion.VisualStudio.Core;
 
@@ -63,6 +64,7 @@ internal sealed class IndexStatusBarItem
             if (window is not null && Find(window, PanelName) is DockPanel panel)
             {
                 _text = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
+                _text.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.StatusBarDefaultTextBrushKey);
                 _button = new Button
                 {
                     Content = _text,

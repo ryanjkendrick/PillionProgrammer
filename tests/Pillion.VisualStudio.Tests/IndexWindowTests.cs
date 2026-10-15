@@ -12,6 +12,7 @@ namespace Pillion.VisualStudio.Tests;
 #pragma warning disable VSTHRD003
 
 /// <summary>The Index window's view model (work item 2.15) against a scripted host: status updates, pause and resume, rebuild, delete, the excluded files and the index folders.</summary>
+[Collection(UiThreadTimingsTests.GroupName)]
 public sealed class IndexWindowTests : IDisposable
 {
     private readonly JoinableTaskContext _context = Task.Run(() => new JoinableTaskContext()).Result;
@@ -78,6 +79,7 @@ public sealed class IndexWindowTests : IDisposable
         Assert.Contains(IndexData.RootA, row.RebuildName, StringComparison.Ordinal);
         Assert.Contains(IndexData.RootA, row.DeleteName, StringComparison.Ordinal);
         Assert.Contains("1 root(s)", vm.TotalsText, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, vm.NoRootsText);
     }
 
     [Fact]

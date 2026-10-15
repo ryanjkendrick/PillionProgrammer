@@ -56,6 +56,10 @@ public sealed class ExcludedFileRowViewModel
     /// <summary>Gets the name a screen reader announces for the row.</summary>
     public string AutomationName { get; }
 
+    /// <inheritdoc/>
+    /// <remarks>The list item's screen-reader name: Windows takes it from this text.</remarks>
+    public override string ToString() => AutomationName;
+
     private static string CombineRoot(string rootPath, string relative)
     {
         if (string.IsNullOrEmpty(rootPath))

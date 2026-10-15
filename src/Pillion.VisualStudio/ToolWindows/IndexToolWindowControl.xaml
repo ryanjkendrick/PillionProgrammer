@@ -75,6 +75,50 @@
             </Viewbox>
         </DataTemplate>
 
+        <!-- The tab strip and its content, drawn with theme keys only: the default TabControl chrome ignores Visual Studio's themes. -->
+        <Style TargetType="TabItem">
+            <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="Header" Padding="10,4,10,4" Margin="0,0,2,0" BorderThickness="1,1,1,0"
+                                BorderBrush="Transparent" Background="Transparent">
+                            <ContentPresenter x:Name="HeaderText" ContentSource="Header" RecognizesAccessKey="True" TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Header" Property="BorderBrush" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBorderKey}}" />
+                                <Setter TargetName="Header" Property="Background" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}" />
+                                <Setter TargetName="HeaderText" Property="TextElement.FontWeight" Value="SemiBold" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Header" Property="BorderBrush" Value="{DynamicResource {x:Static vsshell:VsBrushes.HighlightKey}}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="TabControl">
+            <Setter Property="Background" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}" />
+            <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabControl">
+                        <DockPanel>
+                            <TabPanel DockPanel.Dock="Top" IsItemsHost="True" />
+                            <Border BorderThickness="0,1,0,0" BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBorderKey}}"
+                                    Background="{TemplateBinding Background}">
+                                <!-- The part name lets the TabControl's automation peer reach the tab's content (screen readers). -->
+                                <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent" />
+                            </Border>
+                        </DockPanel>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <CollectionViewSource x:Key="ExcludedView" Source="{Binding Excluded.Items}">
             <CollectionViewSource.GroupDescriptions>
                 <PropertyGroupDescription PropertyName="GroupName" />
@@ -267,18 +311,11 @@
                             <ListView.InputBindings>
                                 <KeyBinding Key="C" Modifiers="Control" Command="{Binding CopyPathCommand}" />
                             </ListView.InputBindings>
-                            <ListView.ItemContainerStyle>
-                                <Style TargetType="ListViewItem" BasedOn="{StaticResource {x:Type ListViewItem}}">
-                                    <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
-                                    <Setter Property="ContextMenu">
-                                        <Setter.Value>
-                                            <ContextMenu>
-                                                <MenuItem Header="{x:Static core:IndexStrings.CopyPathButton}" Command="{Binding DataContext.CopyPathCommand, RelativeSource={RelativeSource AncestorType=ListView}}" InputGestureText="Ctrl+C" />
-                                            </ContextMenu>
-                                        </Setter.Value>
-                                    </Setter>
-                                </Style>
-                            </ListView.ItemContainerStyle>
+                            <ListView.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="{x:Static core:IndexStrings.CopyPathButton}" Command="{Binding PlacementTarget.DataContext.CopyPathCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" InputGestureText="Ctrl+C" />
+                                </ContextMenu>
+                            </ListView.ContextMenu>
                             <ListView.GroupStyle>
                                 <GroupStyle>
                                     <GroupStyle.HeaderTemplate>

@@ -204,7 +204,7 @@ public sealed class IndexWindowViewModel : ObservableObject, IDisposable
     public bool HasRoots => Roots.Count > 0;
 
     /// <summary>Gets the line shown instead of the root rows while the host reports none.</summary>
-    public string NoRootsText => HasStatus ? IndexStrings.NoRoots : string.Empty;
+    public string NoRootsText => HasStatus && Roots.Count == 0 ? IndexStrings.NoRoots : string.Empty;
 
     /// <summary>Gets a value indicating whether the window is available: <see langword="false"/> while the <c>indexWindow</c> flag is off.</summary>
     public bool IsWindowEnabled
