@@ -36,7 +36,8 @@ internal static class InlineEditServiceCollectionExtensions
             sp.GetRequiredService<ISyntaxValidator>(),
             sp.GetRequiredService<InlineEditConversations>(),
             sp.GetService<ILogger<InlineEditEngine>>(),
-            sp.GetRequiredService<InlineEditOptions>()));
+            sp.GetRequiredService<InlineEditOptions>(),
+            sp.GetService<Context.Retrieval.IInlineEditContext>()));
         services.TryAddSingleton(sp => new InlineEditRpcService(sp.GetRequiredService<InlineEditEngine>(), sp.GetService<IFeatureFlags>()));
         services.AddRpcTarget<IInlineEditService>(sp => sp.GetRequiredService<InlineEditRpcService>());
         return services;

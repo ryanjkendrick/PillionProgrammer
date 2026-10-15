@@ -92,6 +92,7 @@ public sealed partial class ModelGateway : IModelGateway
     private readonly PromptEvaluationRates _rates;
     private readonly ContextAssembler _assembler;
     private readonly LocalResidencyMap _residency;
+    private readonly IAutocompleteSnippetSource? _snippets;
     private int _gpuLogged;
 
     /// <summary>Initializes a new instance of the <see cref="ModelGateway"/> class.</summary>
@@ -116,6 +117,7 @@ public sealed partial class ModelGateway : IModelGateway
     /// <param name="rates">The measured prompt-evaluation rates; a new instance when <see langword="null"/>.</param>
     /// <param name="assembler">Assembles the prompt of chat requests that carry pins, a current file or project rules; a new instance over <paramref name="tokenCounter"/> when <see langword="null"/>.</param>
     /// <param name="residency">The map of resident local models that local providers register with; a new, empty one when <see langword="null"/>.</param>
+    /// <param name="snippets">Supplies the retrieved snippets of autocomplete prompts (work item 2.12); none when <see langword="null"/>.</param>
     public ModelGateway(
         IProviderRegistry registry,
         IModelRouter router,
@@ -137,7 +139,8 @@ public sealed partial class ModelGateway : IModelGateway
         AutocompleteCounters? counters = null,
         PromptEvaluationRates? rates = null,
         ContextAssembler? assembler = null,
-        LocalResidencyMap? residency = null)
+        LocalResidencyMap? residency = null,
+        IAutocompleteSnippetSource? snippets = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _router = router ?? throw new ArgumentNullException(nameof(router));
@@ -162,6 +165,7 @@ public sealed partial class ModelGateway : IModelGateway
         _rates = rates ?? new PromptEvaluationRates();
         _assembler = assembler ?? new ContextAssembler(_tokens);
         _residency = residency ?? new LocalResidencyMap();
+        _snippets = snippets;
     }
 
     /// <inheritdoc/>
@@ -176,7 +180,11 @@ public sealed partial class ModelGateway : IModelGateway
         // A request that carries pins, a current file or project rules is assembled per candidate model (its window decides what
         // fits); any other request is sent as it is. Routing then only checks that the user's message fits: the router would
         // otherwise reject a small-window model because of history that assembly is about to compress.
-        var assemble = taskClass != TaskClass.Summarise && ContextAssembler.ShouldAssemble(request);
+        // Chat requests are also assembled when retrieval would add code to them (work item 2.12); inline edits build their own
+        // prompt and summaries never carry context.
+        var assemble = taskClass != TaskClass.Summarise && (taskClass == TaskClass.Chat
+            ? await _assembler.ShouldAssembleAsync(request, cancellationToken).ConfigureAwait(false)
+            : ContextAssembler.ShouldAssemble(request));
         var route = assemble
             ? _router.Resolve(new RoutingRequest
             {
@@ -204,6 +212,7 @@ public sealed partial class ModelGateway : IModelGateway
         RedactionSession? session = null;
         Exception? lastFailure = null;
         var chosenPromptTokens = promptTokens;
+        IReadOnlyList<ContextChunk> chosenChunks = [];
         var candidates = new List<RoutedModel> { route };
         candidates.AddRange(route.Fallbacks);
 
@@ -225,6 +234,7 @@ public sealed partial class ModelGateway : IModelGateway
                 var attemptMessages = messages;
                 var attemptTokens = promptTokens;
                 var attemptPolicy = policy;
+                IReadOnlyList<ContextChunk> attemptChunks = [];
                 if (assemble)
                 {
                     try
@@ -232,6 +242,7 @@ public sealed partial class ModelGateway : IModelGateway
                         var assembled = await _assembler.AssembleAsync(request, BuildTarget(candidate, provider), new GatewayHistorySummariser(this), cancellationToken).ConfigureAwait(false);
                         attemptMessages = ToAiMessages(assembled.Messages);
                         attemptTokens = assembled.PromptTokens;
+                        attemptChunks = assembled.SentChunks;
                         attemptPolicy = policy with
                         {
                             PromptTokens = attemptTokens,
@@ -284,6 +295,7 @@ public sealed partial class ModelGateway : IModelGateway
                     await attempt.StartAsync().ConfigureAwait(false);
                     model = candidate;
                     chosenPromptTokens = attemptTokens;
+                    chosenChunks = attemptChunks;
                     break;
                 }
                 catch (ProviderException ex) when (ex.Code != PillionErrorCode.ContextOverflow)
@@ -314,6 +326,7 @@ public sealed partial class ModelGateway : IModelGateway
             PillionError? streamError = null;
             var outcome = OutboundOutcome.Succeeded;
             Exception? failure = null;
+            var reply = chosenChunks.Count > 0 ? new StringBuilder() : null; // Only kept to find the citations.
             while (true)
             {
                 ChatResponseUpdate update;
@@ -352,6 +365,7 @@ public sealed partial class ModelGateway : IModelGateway
                 }
 
                 attempt.GeneratedCharacters += text.Length;
+                reply?.Append(text);
                 yield return new ChatChunk
                 {
                     RequestId = request.RequestId,
@@ -363,6 +377,9 @@ public sealed partial class ModelGateway : IModelGateway
 
             attempt.ReportedCompletionTokens = completionReported;
             attempt.Complete(outcome, failure);
+
+            // Citations (work item 2.12): the spans of the retrieved chunks the reply names, else every chunk that was sent.
+            var citations = reply is null ? [] : CitationExtractor.Extract(reply.ToString(), chosenChunks);
             yield return new ChatChunk
             {
                 RequestId = request.RequestId,
@@ -372,6 +389,7 @@ public sealed partial class ModelGateway : IModelGateway
                 PromptTokens = promptReported > 0 ? promptReported : chosenPromptTokens,
                 CompletionTokens = completionReported > 0 ? completionReported : (int)((attempt.GeneratedCharacters + 3) / 4),
                 Error = streamError,
+                Citations = citations,
             };
         }
         finally
@@ -429,8 +447,13 @@ public sealed partial class ModelGateway : IModelGateway
         var route = _router.Resolve(new RoutingRequest { TaskClass = taskClass, EstimatedPromptTokens = AutocompleteBudget.GpuPromptTokens });
         LogRouted(_logger, request.RequestId, route.QualifiedId, route.Profile, route.Reason);
 
+        // Retrieved snippets (work item 2.12): the source keeps them unchanged while the caret stays in one member, so the
+        // prompt prefix does not change from keystroke to keystroke. Completions are cached per snippet set.
+        var snippets = await GetSnippetsAsync(request, cancellationToken).ConfigureAwait(false);
+        var contextKey = AutocompleteSnippets.Fingerprint(snippets);
+
         // Cache: repeated keystrokes, backspaces and typing into a shown suggestion are served without a request.
-        var hit = _cache.Lookup(route.ProviderId, route.ModelId, multiLine, prefix, suffix, out var cached);
+        var hit = _cache.Lookup(route.ProviderId, route.ModelId, multiLine, prefix, suffix, out var cached, contextKey);
         if (hit != CacheHitKind.None)
         {
             var counter = _tokens.ForModel(route.ModelId);
@@ -493,7 +516,7 @@ public sealed partial class ModelGateway : IModelGateway
                     _services.Progress.Report(new ModelProgress(request.RequestId, candidate.ProviderId, candidate.ModelId, ModelProgressKind.FallingBack, TimeSpan.Zero, $"Trying {candidate.QualifiedId} instead: {lastFailure.Message}"));
                 }
 
-                var candidatePlan = PlanFim(request, candidate, snapshot.FindSettings(candidate.ProviderId), gpu.Tier);
+                var candidatePlan = PlanFim(request, candidate, snapshot.FindSettings(candidate.ProviderId), gpu.Tier, snippets);
                 session = provider.IsLocal && !redactForLocal ? null : new RedactionSession();
                 if (session is not null)
                 {
@@ -530,6 +553,12 @@ public sealed partial class ModelGateway : IModelGateway
                     await attempt.StartAsync().ConfigureAwait(false);
                     model = candidate;
                     plan = candidatePlan;
+                    if (isAutocomplete)
+                    {
+                        // Issue #47 option 1: did this prompt extend the last one sent for the document, so the model's cache can reuse it?
+                        _counters.PromptPrefix(request.FilePath ?? string.Empty, candidate.QualifiedId, candidatePlan.Prompt.PromptPrefix);
+                    }
+
                     break;
                 }
                 catch (AutocompleteDroppedException)
@@ -688,7 +717,7 @@ public sealed partial class ModelGateway : IModelGateway
             attempt.Complete(outcome, failure);
             if (outcome == OutboundOutcome.Succeeded && completion.Length > 0)
             {
-                _cache.Set(AutocompleteCache.CreateKey(model.ProviderId, model.ModelId, prefix, suffix, multiLine), completion);
+                _cache.Set(AutocompleteCache.CreateKey(model.ProviderId, model.ModelId, prefix, suffix, multiLine, contextKey), completion);
             }
             else if (outcome == OutboundOutcome.Failed)
             {
@@ -723,8 +752,9 @@ public sealed partial class ModelGateway : IModelGateway
     /// <param name="candidate">The candidate model.</param>
     /// <param name="providerSettings">The candidate provider's settings entry.</param>
     /// <param name="tier">The GPU tier.</param>
+    /// <param name="snippets">The retrieved snippets for an autocomplete prompt; none when <see langword="null"/>.</param>
     /// <returns>The plan.</returns>
-    internal FimPlan PlanFim(CompletionRequest request, RoutedModel candidate, ProviderSettings? providerSettings, GpuTier tier)
+    internal FimPlan PlanFim(CompletionRequest request, RoutedModel candidate, ProviderSettings? providerSettings, GpuTier tier, IReadOnlyList<AutocompleteSnippet>? snippets = null)
     {
         var multiLine = request.AllowMultiLine;
         var maxTokens = request.MaxTokens > 0
@@ -739,7 +769,7 @@ public sealed partial class ModelGateway : IModelGateway
         var format = _templates.FindFimFormat(candidate.ModelId);
         var explicitFormat = UsesExplicitFimTokens(providerSettings) ? format : null;
         var includeHeader = _catalog.GetCapabilities(candidate.ModelId, candidate.IsLocal).FimHeader;
-        var prompt = AutocompletePromptBuilder.Build(request, budget, _tokens.ForModel(candidate.ModelId), explicitFormat, includeHeader);
+        var prompt = AutocompletePromptBuilder.Build(request, budget, _tokens.ForModel(candidate.ModelId), explicitFormat, includeHeader, snippets);
 
         // Stops: a single-line request ends at the first newline; then the request's own, the family's and the defaults.
         var singleLine = !multiLine && request.TaskClass == TaskClass.Autocomplete;
@@ -774,6 +804,28 @@ public sealed partial class ModelGateway : IModelGateway
             RequestId = request.RequestId,
         };
         return new FimPlan(fim, prompt, explicitFormat, shaperStops);
+    }
+
+    /// <summary>
+    /// Gets the retrieved snippets of an autocomplete request from the snippet source; none for other task classes, without a
+    /// source, or when the source fails (a suggestion without snippets is better than none).
+    /// </summary>
+    private async ValueTask<IReadOnlyList<AutocompleteSnippet>> GetSnippetsAsync(CompletionRequest request, CancellationToken cancellationToken)
+    {
+        if (_snippets is null || request.TaskClass != TaskClass.Autocomplete)
+        {
+            return [];
+        }
+
+        try
+        {
+            return await _snippets.GetSnippetsAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            LogSnippetsFailed(_logger, request.RequestId, ex.Message);
+            return [];
+        }
     }
 
     /// <summary>
@@ -938,6 +990,9 @@ public sealed partial class ModelGateway : IModelGateway
 
     [LoggerMessage(EventId = 434, Level = LogLevel.Information, Message = "Autocomplete {RequestId} from {Model}: {What}")]
     private static partial void LogContentFiltered(ILogger logger, string requestId, string model, string what);
+
+    [LoggerMessage(EventId = 438, Level = LogLevel.Debug, Message = "Autocomplete {RequestId}: no retrieved snippets ({Reason})")]
+    private static partial void LogSnippetsFailed(ILogger logger, string requestId, string reason);
 
     [LoggerMessage(EventId = 432, Level = LogLevel.Warning, Message = "Could not list the models of provider '{ProviderId}': {Reason}")]
     private static partial void LogListFailed(ILogger logger, string providerId, string reason);

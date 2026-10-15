@@ -60,6 +60,12 @@ public sealed class ChatViewModelOptions
 
     /// <summary>Gets or sets the action that opens a file at a (zero-based) line in the editor, for the cited spans under a reply. Called on the UI thread.</summary>
     public Action<string, int>? OpenCitation { get; set; }
+
+    /// <summary>
+    /// Gets or sets the action that opens a file with a span selected, its first and last (zero-based, inclusive) lines, for the
+    /// cited spans under a reply (work item 2.12). Used instead of <see cref="OpenCitation"/> when set. Called on the UI thread.
+    /// </summary>
+    public Action<string, int, int>? OpenCitationSpan { get; set; }
 }
 
 /// <summary>
@@ -90,6 +96,8 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
     private readonly ChatAvailability? _availability;
     private readonly IChatEditorContext? _editor;
     private readonly Action<string, int>? _openCitation;
+    private readonly Action<string, int, int>? _openCitationSpan;
+    private readonly HashSet<string> _excludedContextKeys = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _disposal = new();
     private readonly object _gate = new();
 
@@ -131,6 +139,7 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         ConfirmDelete = options?.ConfirmDelete;
         _editor = options?.EditorContext;
         _openCitation = options?.OpenCitation;
+        _openCitationSpan = options?.OpenCitationSpan;
         _conversationEvents = options?.ConversationEvents;
         _isChatEnabled = _availability?.IsEnabled ?? true;
         _isMentionsEnabled = _availability?.IsMentionsEnabled ?? true;
@@ -164,7 +173,7 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
 
         Mentions = new MentionsViewModel(connection, joinableTaskFactory, _currentConversation, options?.WorkspaceFiles, _editor, _log) { IsEnabled = _isMentionsEnabled };
         Mentions.InputEditRequested += OnMentionInputEditEventArgs;
-        Inspector = new ContextInspectorViewModel(UnpinFromInspector, () => Run(SendFromInspectorAsync), CanSend);
+        Inspector = new ContextInspectorViewModel(UnpinFromInspector, () => Run(SendFromInspectorAsync), CanSend, ExcludeFromInspector);
         OutboundLog = new OutboundLogViewModel(connection, joinableTaskFactory, options?.CopyText, _log, _disposal.Token);
         InspectContextCommand = new DelegateCommand(() => Run(InspectAsync), () => CanSend() && IsOutboundLogEnabled);
     }
@@ -441,6 +450,7 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         var model = ModelPicker.SelectedModel!;
         var text = InputText.Trim();
         var context = CaptureContext();
+        _excludedContextKeys.Clear(); // Removals in the inspector apply to the message they were made for.
         Inspector.Close();
         Mentions.Picker.Close();
         Turns.Add(ChatTurnViewModel.ForUser(text));
@@ -563,6 +573,7 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         StopStreamingReply();
         IsSending = false;
         Inspector.Close();
+        _excludedContextKeys.Clear();
         _currentConversation.Turns.CollectionChanged -= OnTurnsChanged;
         _currentConversation = conversation;
         _currentConversation.Turns.CollectionChanged += OnTurnsChanged;
@@ -1068,6 +1079,7 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
             Profile = Profile.Auto,
             Pins = [.. context.Pins.Select(p => p.Resolution)],
             ConversationId = context.ConversationId,
+            ExcludedContextKeys = context.ExcludedContextKeys,
         };
 
         if (context.IncludeCurrentFile && _editor is not null)
@@ -1105,7 +1117,7 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         var includeCurrent = IsMentionsEnabled && IncludeCurrentFile && !pins.Any(p => p.Kind == MentionSyntax.Selection);
         var saved = conversation.Pins.Select(p => p.ToSaved()).ToArray();
         var needsCreate = !conversation.IsPersisted && CanSaveConversations && (conversation.HasCustomTitle || saved.Length > 0);
-        return new RequestContext(pins, conversation, includeCurrent, conversation.HasCustomTitle ? conversation.Title : null, saved, needsCreate);
+        return new RequestContext(pins, conversation, includeCurrent, conversation.HasCustomTitle ? conversation.Title : null, saved, needsCreate, [.. _excludedContextKeys]);
     }
 
     private void OnMentionInputEditEventArgs(object? sender, MentionInputEditEventArgs edit)
@@ -1121,6 +1133,20 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
             await _joinableTaskFactory.SwitchToMainThreadAsync(_disposal.Token);
             ResetAfterDeleteAll();
         });
+
+    /// <summary>Leaves a retrieved chunk or the repository map out of the message being written, and previews again.</summary>
+    private void ExcludeFromInspector(string key)
+    {
+        if (string.IsNullOrEmpty(key) || !_excludedContextKeys.Add(key))
+        {
+            return;
+        }
+
+        if (Inspector.IsOpen)
+        {
+            Run(InspectAsync);
+        }
+    }
 
     private void UnpinFromInspector(MentionPin pin)
     {
@@ -1359,8 +1385,11 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>What a request carries from the window, taken on the UI thread when the message is sent.</summary>
-    private sealed class RequestContext(List<MentionPin> pins, ChatConversation conversation, bool includeCurrentFile, string? customTitle, ConversationPin[] savedPins, bool needsCreate)
+    private sealed class RequestContext(List<MentionPin> pins, ChatConversation conversation, bool includeCurrentFile, string? customTitle, ConversationPin[] savedPins, bool needsCreate, string[] excludedContextKeys)
     {
+        /// <summary>Gets the context items removed in the Context Inspector for this message (retrieved chunks, the repository map).</summary>
+        public string[] ExcludedContextKeys { get; } = excludedContextKeys;
+
         public List<MentionPin> Pins { get; } = pins;
 
         public ChatConversation Conversation { get; } = conversation;

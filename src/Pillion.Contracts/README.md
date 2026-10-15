@@ -142,6 +142,13 @@ pipe `ContractV13RpcTests` and `HandshakeCompatibilityTests` in the host tests).
   | `ChatChunk` | `Citations` | 8 | `Citation[]`, on the final chunk only |
   | `ChatRequest` | `RetrievalMode` | 9 | `RetrievalMode` (new enum): `Auto` 0 (the host decides), `On`, `Off` |
   | `ChatRequest` | `MaxRetrievedChunks` | 10 | 0 means the host default |
+  | `ChatRequest` | `ExcludedContextKeys` | 11 | `string[]`: the items removed in the Context Inspector before sending, by their `ContextKey`; the host leaves them out. Added with work item 2.12, after the wave-1 batch, still additive under 1.3 |
+  | `ContextReportItemDto` | `ContextKey` | 9 | The key that removes the item (a `retrieved` chunk's id, or `repoMap`); empty for pins (removed by `PinIndex`) and items that cannot be removed. Added with work item 2.12 |
+  | `AutocompleteHostCounters` | `PromptPrefixChecks`, `PromptPrefixReuses`, `PromptPrefixReuseRate` | 22-24 | Model requests whose document had an earlier model request to the same model; those whose prompt prefix (snippets, header, code before the caret) starts with the previous one's, which a resident local model's prompt cache can reuse; and the rate (issue #47, option 1). Added with work item 2.12 |
+
+  A host's chat reply cites the retrieved chunks it sent: an explicit `path:line` or `path:start-end` reference in the reply
+  that matches a sent chunk becomes a `Citation` with `ReplyOffset` just after the reference; when the reply names none, every
+  chunk sent is listed with `ReplyOffset` -1 (implicit citations, which the Chat window shows collapsed under "Sources").
 
 - **Mentions v2 (work item 2.13).** The kind stays a string on the wire; the new static class `MentionKinds` names every
   kind, the phase 1 ones (`file`, `folder`, `selection`, `errors`, `clipboard`) and the new `symbol`, `docs`,

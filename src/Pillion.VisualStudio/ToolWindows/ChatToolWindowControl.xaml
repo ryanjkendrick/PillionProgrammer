@@ -64,10 +64,48 @@
                              AutomationProperties.Name="{Binding Text}" />
                     <!-- The reply, rendered as Markdown. -->
                     <local:MarkdownMessageView x:Name="Reply" Turn="{Binding}" />
-                    <!-- The spans the reply cites (work item 2.2 restores them with a saved reply), as plain file:line links. -->
+                    <!--
+                      The spans the reply names (work item 2.2 restores them with a saved reply; 2.12 adds file:start-end spans), as
+                      links that open the file with the span selected. Retrieved code the reply was given but did not name follows,
+                      collapsed under a "Sources (n)" line.
+                    -->
                     <StackPanel x:Name="CitationsPanel" Orientation="Horizontal" Margin="0,4,0,0" Visibility="Collapsed">
                         <TextBlock Text="{x:Static core:ChatStrings.CitationsLabel}" Style="{StaticResource SecondaryText}" Margin="0,0,6,0" />
-                        <ItemsControl ItemsSource="{Binding Citations}" Focusable="False" AutomationProperties.Name="{x:Static core:ChatStrings.CitationsLabel}">
+                        <ItemsControl ItemsSource="{Binding ExplicitCitations}" Focusable="False" AutomationProperties.Name="{x:Static core:ChatStrings.CitationsLabel}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type core:CitationItem}">
+                                    <TextBlock Margin="0,0,10,0">
+                                        <Hyperlink Command="{Binding OpenCommand}"
+                                                   CommandParameter="{Binding}"
+                                                   ToolTip="{Binding ToolTip}"
+                                                   Foreground="{DynamicResource {x:Static platformui:EnvironmentColors.ControlLinkTextBrushKey}}"
+                                                   AutomationProperties.Name="{Binding AutomationName}">
+                                            <Run Text="{Binding Text, Mode=OneWay}" />
+                                        </Hyperlink>
+                                    </TextBlock>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                    <StackPanel x:Name="SourcesPanel" Margin="0,4,0,0" Visibility="Collapsed">
+                        <TextBlock>
+                            <Hyperlink Command="{Binding ToggleSourcesCommand}"
+                                       Foreground="{DynamicResource {x:Static platformui:EnvironmentColors.ControlLinkTextBrushKey}}"
+                                       AutomationProperties.Name="{Binding SourcesAutomationName}">
+                                <Run Text="{Binding SourcesText, Mode=OneWay}" />
+                            </Hyperlink>
+                        </TextBlock>
+                        <ItemsControl x:Name="SourcesList"
+                                      ItemsSource="{Binding ImplicitCitations}"
+                                      Focusable="False"
+                                      Margin="12,2,0,0"
+                                      Visibility="Collapsed"
+                                      AutomationProperties.Name="{Binding SourcesText}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <WrapPanel />
@@ -117,8 +155,14 @@
                     <Setter TargetName="Reply" Property="Visibility" Value="Collapsed" />
                     <Setter TargetName="Reply" Property="Turn" Value="{x:Null}" />
                 </DataTrigger>
-                <DataTrigger Binding="{Binding HasCitations}" Value="True">
+                <DataTrigger Binding="{Binding HasExplicitCitations}" Value="True">
                     <Setter TargetName="CitationsPanel" Property="Visibility" Value="Visible" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding HasImplicitCitations}" Value="True">
+                    <Setter TargetName="SourcesPanel" Property="Visibility" Value="Visible" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding AreSourcesExpanded}" Value="True">
+                    <Setter TargetName="SourcesList" Property="Visibility" Value="Visible" />
                 </DataTrigger>
                 <DataTrigger Binding="{Binding HasStateText}" Value="True">
                     <Setter TargetName="StateNote" Property="Visibility" Value="Visible" />
@@ -656,7 +700,7 @@
                                             Visibility="Hidden"
                                             Command="{Binding DataContext.Inspector.RemoveCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                             CommandParameter="{Binding}"
-                                            ToolTip="{x:Static core:ChatStrings.RemovePinToolTip}"
+                                            ToolTip="{Binding RemoveAutomationName}"
                                             AutomationProperties.Name="{Binding RemoveAutomationName}" />
                                 </Grid>
                                 <DataTemplate.Triggers>

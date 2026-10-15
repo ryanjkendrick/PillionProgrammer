@@ -11,7 +11,7 @@ namespace Pillion.ModelGateway.Tests.TestSupport;
 /// </summary>
 internal sealed class GatewayHarness : IDisposable
 {
-    public GatewayHarness(bool withCloud = true, bool withLocal = true, Action<ModelGatewayOptions>? configure = null, GpuTier gpuTier = GpuTier.Gpu8GB, IEnumerable<IModelProviderFactory>? extraFactories = null)
+    public GatewayHarness(bool withCloud = true, bool withLocal = true, Action<ModelGatewayOptions>? configure = null, GpuTier gpuTier = GpuTier.Gpu8GB, IEnumerable<IModelProviderFactory>? extraFactories = null, ContextAssembler? assembler = null, IAutocompleteSnippetSource? snippets = null)
     {
         Options = new ModelGatewayOptions
         {
@@ -62,7 +62,9 @@ internal sealed class GatewayHarness : IDisposable
             Progress,
             Options,
             Clock,
-            gpuTierDetector: new FixedGpuTierDetector(gpuTier));
+            gpuTierDetector: new FixedGpuTierDetector(gpuTier),
+            assembler: assembler,
+            snippets: snippets);
     }
 
     public ModelGatewayOptions Options { get; }

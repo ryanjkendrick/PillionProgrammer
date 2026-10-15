@@ -112,6 +112,20 @@ internal sealed class ChatToolWindow : ToolWindowPane
     public static void OpenCitation(string path, int line)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
+        OpenCitationSpan(path, line, line);
+    }
+
+    /// <summary>
+    /// Opens a file in the editor with a cited span selected, its first line centred (work item 2.12). A one-line span puts the
+    /// caret at the start of the line. Must be called on the UI thread.
+    /// </summary>
+    /// <param name="path">The full path of the file.</param>
+    /// <param name="startLine">The zero-based first line.</param>
+    /// <param name="endLine">The zero-based last line (inclusive).</param>
+    public static void OpenCitationSpan(string path, int startLine, int endLine)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var line = startLine;
         if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path))
         {
             PillionPackage.Instance?.Log?.Info("chat.citation.missing", "A cited file is not on disk any more.");
@@ -125,8 +139,22 @@ internal sealed class ChatToolWindow : ToolWindowPane
             if (view is not null)
             {
                 var target = Math.Max(0, line);
-                view.SetCaretPos(target, 0);
-                view.CenterLines(target, 1);
+                var last = Math.Max(target, endLine);
+                if (last > target && view.GetBuffer(out var lines) == Microsoft.VisualStudio.VSConstants.S_OK && lines is not null
+                    && lines.GetLineCount(out var count) == Microsoft.VisualStudio.VSConstants.S_OK && count > 0)
+                {
+                    // Select whole lines: from the start of the first to the end of the last (clamped to the file).
+                    last = Math.Min(last, count - 1);
+                    target = Math.Min(target, last);
+                    lines.GetLengthOfLine(last, out var length);
+                    view.SetSelection(target, 0, last, length);
+                    view.CenterLines(target, Math.Max(1, last - target + 1));
+                }
+                else
+                {
+                    view.SetCaretPos(target, 0);
+                    view.CenterLines(target, 1);
+                }
             }
         }
         catch (Exception ex) when (ex is COMException or System.IO.IOException or InvalidOperationException)

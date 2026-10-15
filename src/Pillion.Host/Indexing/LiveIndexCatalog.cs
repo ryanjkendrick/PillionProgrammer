@@ -31,6 +31,13 @@ internal sealed class LiveIndexCatalog : IIndexCatalog, ISymbolGraphProvider, IA
         _indexing = indexing;
         _features = features;
         _fallback = fallback;
+
+        // Asked for every index (no roots), the read-only catalog would otherwise open the roots the pipeline has open too
+        // (and keep them open), only for this catalog to drop them: a second opener of the same database.
+        if (fallback is ReadOnlyIndexCatalog readOnly)
+        {
+            readOnly.SkipRoot = root => _indexing.OpenRoots.Any(r => string.Equals(r.Store.Identity.NormalizedRoot, root, StringComparison.Ordinal));
+        }
     }
 
     /// <inheritdoc/>

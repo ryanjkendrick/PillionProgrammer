@@ -653,8 +653,24 @@
     <comment>Screen-reader name of a citation link; {0} is its text (file:line).</comment>
   </data>
   <data name="CitationsLabel" xml:space="preserve">
-    <value>Sources:</value>
-    <comment>Label before the cited spans under a reply.</comment>
+    <value>Cited:</value>
+    <comment>Label before the spans a reply names itself (explicit citations).</comment>
+  </data>
+  <data name="SourcesFormat" xml:space="preserve">
+    <value>Sources ({0})</value>
+    <comment>The collapsed line under a reply listing the retrieved code it was given but did not name; {0} is the count.</comment>
+  </data>
+  <data name="SourcesCollapsedNameFormat" xml:space="preserve">
+    <value>Sources, {0} retrieved spans, collapsed. Press to show them.</value>
+    <comment>Screen-reader name of the collapsed Sources line; {0} is the count.</comment>
+  </data>
+  <data name="SourcesExpandedNameFormat" xml:space="preserve">
+    <value>Sources, {0} retrieved spans, expanded. Press to hide them.</value>
+    <comment>Screen-reader name of the expanded Sources line; {0} is the count.</comment>
+  </data>
+  <data name="RemoveContextItemNameFormat" xml:space="preserve">
+    <value>Remove {0} from the context</value>
+    <comment>Screen-reader name of the remove button of a retrieved chunk or the repository map in the Context Inspector; {0} is its name.</comment>
   </data>
   <data name="ConversationsNotSavedOff" xml:space="preserve">
     <value>Saved conversations are turned off (feature localStore): conversations last until Visual Studio closes.</value>

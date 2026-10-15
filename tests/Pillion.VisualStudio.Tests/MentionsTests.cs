@@ -711,6 +711,55 @@ public sealed class ChatMentionsTests : IDisposable
     }
 
     [Fact]
+    public async Task RemovingARetrievedChunkOrTheRepoMap_InTheInspector_LeavesItOutOfThePreviewAndTheSend_ThenTheNextMessageHasItAgain()
+    {
+        _diagnostics.Preview = request =>
+        {
+            var excluded = new HashSet<string>(request.ExcludedContextKeys, StringComparer.Ordinal);
+            var items = new[]
+            {
+                new ContextReportItemDto { Kind = "system", Name = "System prompt", Tokens = 30, OriginalTokens = 30 },
+                new ContextReportItemDto { Kind = "repoMap", Name = "Repository map", Tokens = 120, OriginalTokens = 120, ContextKey = "repoMap" },
+                new ContextReportItemDto { Kind = "retrieved", Name = "src/Orders/OrderService.cs:9-12", Tokens = 60, OriginalTokens = 60, ContextKey = "idx:1" },
+                new ContextReportItemDto { Kind = "retrieved", Name = "src/Inventory/StockRoom.cs:3-8", Tokens = 50, OriginalTokens = 50, ContextKey = "idx:2" },
+                new ContextReportItemDto { Kind = "query", Name = "Your message", Tokens = 4, OriginalTokens = 4 },
+            };
+            return new ContextReportDto { ModelId = "qwen2.5-coder:7b", ProviderId = "ollama", IsLocal = true, ContextWindow = 8192, OutputReserve = 2048, BudgetTokens = 6114, Items = [.. items.Where(i => !excluded.Contains(i.ContextKey))], IsAssembled = true };
+        };
+        using var vm = await StartAsync();
+        vm.InputText = "how are totals computed";
+        await vm.InspectAsync().WithTimeout(Timeout);
+
+        var chunk = vm.Inspector.Items.Single(i => i.ContextKey == "idx:1");
+        var map = vm.Inspector.Items.Single(i => i.ContextKey == "repoMap");
+        Assert.True(chunk.CanRemove);
+        Assert.True(map.CanRemove);
+        Assert.Null(chunk.Pin);
+        Assert.Equal(ChatStrings.InspectorKindRetrieved, chunk.KindLabel);
+        Assert.Equal(ChatStrings.Format(ChatStrings.RemoveContextItemNameFormat, "src/Orders/OrderService.cs:9-12"), chunk.RemoveAutomationName);
+        Assert.True(vm.Inspector.RemoveCommand.CanExecute(chunk));
+
+        vm.Inspector.RemoveCommand.Execute(chunk);
+        await Wait.UntilAsync(() => _diagnostics.Previews.Count == 2 && vm.Inspector.Items.All(i => i.ContextKey != "idx:1"), "the inspector previews again without the chunk");
+        vm.Inspector.RemoveCommand.Execute(vm.Inspector.Items.Single(i => i.ContextKey == "repoMap"));
+        await Wait.UntilAsync(() => _diagnostics.Previews.Count == 3 && vm.Inspector.Items.All(i => i.ContextKey != "repoMap"), "the inspector previews again without the map");
+        Assert.Equal(["idx:1", "repoMap"], _diagnostics.Previews.Last().ExcludedContextKeys);
+
+        var script = _models.Next();
+        vm.Inspector.SendCommand.Execute(null);
+        var sent = await script.Started.Task.WithTimeout(Timeout);
+        script.Finish();
+        await Wait.UntilAsync(() => !vm.IsSending, "the reply finishes");
+        Assert.Equal(["idx:1", "repoMap"], sent.ExcludedContextKeys);
+
+        // The removals belonged to that message.
+        vm.InputText = "and taxes?";
+        await vm.InspectAsync().WithTimeout(Timeout);
+        Assert.Empty(_diagnostics.Previews.Last().ExcludedContextKeys);
+        Assert.Contains(vm.Inspector.Items, i => i.ContextKey == "idx:1");
+    }
+
+    [Fact]
     public async Task APreviewFailure_IsShownInTheInspector()
     {
         _diagnostics.Preview = _ => throw new PillionRpcException(new PillionError { Code = PillionErrorCode.ModelNotInstalled, Message = "No model can serve chat." });

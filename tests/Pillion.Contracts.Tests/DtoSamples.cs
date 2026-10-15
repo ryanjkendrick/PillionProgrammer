@@ -77,6 +77,7 @@ internal static class DtoSamples
             ProjectRules = "Use file-scoped namespaces.",
             RetrievalMode = RetrievalMode.On,
             MaxRetrievedChunks = 12,
+            ExcludedContextKeys = ["0123456789abcdef0123456789abcdef:7", "repoMap"],
         },
         new ChatChunk
         {
@@ -160,6 +161,9 @@ internal static class DtoSamples
             PromptTokensEstimated = 4200,
             PromptTokensMax = 1010,
             ResidentModels = [new ResidentModelInfo { ProviderId = "ollama", ModelId = "qwen2.5-coder:7b", ContextLength = 4096, VramBytes = 4748056984, KeepAlive = "-1", IsPinned = true }],
+            PromptPrefixChecks = 40,
+            PromptPrefixReuses = 31,
+            PromptPrefixReuseRate = 0.775,
         },
         new ResidentModelInfo { ProviderId = "ollama", ModelId = "gemma4:e2b", ContextLength = 4096, VramBytes = 1708392447, KeepAlive = "-1", IsPinned = true },
         new OutboundRecordDto
@@ -194,7 +198,8 @@ internal static class DtoSamples
             Redacts = true,
             RedactionCount = 1,
         },
-        new ContextReportItemDto { Kind = "history", Name = "Recent history (4 messages)", Tokens = 400, OriginalTokens = 800, Truncated = true, Dropped = true, Note = "Summarised.", PinIndex = 2, RedactionCount = 3 },
+        new ContextReportItemDto { Kind = "history", Name = "Recent history (4 messages)", Tokens = 400, OriginalTokens = 800, Truncated = true, Dropped = true, Note = "Summarised.", PinIndex = 2, RedactionCount = 3, ContextKey = "repoMap" },
+
         new SearchRequest
         {
             Query = "where is the pipe opened",

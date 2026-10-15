@@ -97,4 +97,12 @@ public sealed class ContextReportItemDto
     /// <summary>Gets or sets the number of secrets the scanner finds in the item when <see cref="ContextReportDto.Redacts"/> is set; else 0.</summary>
     [DataMember(Order = 8)]
     public int RedactionCount { get; set; }
+
+    /// <summary>
+    /// Gets or sets the key that leaves the item out when the client sends it back in <see cref="ChatRequest.ExcludedContextKeys"/>
+    /// (a <c>retrieved</c> chunk's id, or <c>repoMap</c>); empty for items removed another way (pins, by <see cref="PinIndex"/>)
+    /// or not at all. Added in contract 1.3 (work item 2.12).
+    /// </summary>
+    [DataMember(Order = 9)]
+    public string ContextKey { get; set; } = string.Empty;
 }

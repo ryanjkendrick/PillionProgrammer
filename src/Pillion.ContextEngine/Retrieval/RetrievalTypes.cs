@@ -14,6 +14,12 @@ public enum RetrievalSearchMode
 
     /// <summary>The exact symbol-name leg alone.</summary>
     Symbol,
+
+    /// <summary>
+    /// The lexical (BM25) and exact symbol-name legs fused, without the vector leg: no query embedding, so it fits a budget
+    /// shorter than one embedding on the CPU (autocomplete snippets, work item 2.12). Not on the contract.
+    /// </summary>
+    LexicalAndSymbol,
 }
 
 /// <summary>A search as the retriever receives it.</summary>

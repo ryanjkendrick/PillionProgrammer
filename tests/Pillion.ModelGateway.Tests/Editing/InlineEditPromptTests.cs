@@ -210,6 +210,26 @@ public sealed class InlineEditPromptTests
         Assert.Throws<FormatException>(() => InlineEditTemplates.Parse("""{ "system": { "edit": "x" } }"""));
     }
 
+    [Fact]
+    public void RetrievedCode_IsShownAfterTheHeader_WithItsSpans_AtMostFourChunks()
+    {
+        var related = Enumerable.Range(1, 6)
+            .Select(i => new ContextChunk($"idx:{i}", $"src/Math/Helper{i}.cs", $@"C:\repo\src\Math\Helper{i}.cs", i * 10, (i * 10) + 2, $"static int Helper{i}(int x) => x + {i};", "b", 1.0 / i))
+            .ToList();
+
+        var user = Builder.Build(Input(InlineEditCommand.None, "use the helper") with { Related = related })[1].Content;
+
+        Assert.Contains("Related code from elsewhere in the repository", user, StringComparison.Ordinal);
+        Assert.Contains("src/Math/Helper1.cs:10-12\n```csharp\nstatic int Helper1(int x) => x + 1;\n```", user, StringComparison.Ordinal);
+        Assert.Contains("Helper4.cs:40-42", user, StringComparison.Ordinal);
+        Assert.DoesNotContain("Helper5.cs", user, StringComparison.Ordinal);
+        Assert.True(user.IndexOf("File: Calc.cs", StringComparison.Ordinal) < user.IndexOf("Related code", StringComparison.Ordinal));
+        Assert.True(user.IndexOf("Related code", StringComparison.Ordinal) < user.IndexOf("Code before", StringComparison.Ordinal));
+        Assert.DoesNotContain(@"C:\repo", user, StringComparison.Ordinal);
+
+        Assert.DoesNotContain("Related code", Builder.Build(Input(InlineEditCommand.None, "x"))[1].Content, StringComparison.Ordinal);
+    }
+
     private static InlineEditPromptInput Input(InlineEditCommand command, string instruction) => new(
         "csharp",
         "Calc.cs",

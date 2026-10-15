@@ -72,13 +72,13 @@ public sealed partial class HybridRetriever
         var candidateBudget = TimeSpan.FromTicks((long)(budget.Ticks * Math.Clamp(_options.CandidateBudgetShare, 0.1, 1.0)));
 
         using var legs = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var lexical = query.Mode is RetrievalSearchMode.Hybrid or RetrievalSearchMode.Lexical
+        var lexical = query.Mode is RetrievalSearchMode.Hybrid or RetrievalSearchMode.Lexical or RetrievalSearchMode.LexicalAndSymbol
             ? StartLeg("lexical", ct => LexicalAsync(analysis, indexes, filter, ct), legs.Token)
             : null;
         var vector = query.Mode is RetrievalSearchMode.Hybrid or RetrievalSearchMode.Vector
             ? StartLeg("vector", ct => VectorAsync(query.Text, indexes, filter, ct), legs.Token)
             : null;
-        var symbol = query.Mode is RetrievalSearchMode.Hybrid or RetrievalSearchMode.Symbol
+        var symbol = query.Mode is RetrievalSearchMode.Hybrid or RetrievalSearchMode.Symbol or RetrievalSearchMode.LexicalAndSymbol
             ? StartLeg("symbol", ct => SymbolAsync(analysis, indexes, filter, ct), legs.Token)
             : null;
 

@@ -12,8 +12,9 @@ namespace Pillion.ModelGateway;
 /// <remarks>
 /// Shares of the budget left after the FIM framing: the suffix is guaranteed <see cref="SuffixMinimumShare"/> (15%) and
 /// the prefix <see cref="PrefixMinimumShare"/> (60%) when they need it; the header may then take up to
-/// <see cref="HeaderMaximumShare"/> (15%) of what is left; whatever remains goes to the prefix first and to the suffix last,
-/// so the suffix is the first to be trimmed.
+/// <see cref="HeaderMaximumShare"/> (15%) of what is left, and the retrieved snippets up to <see cref="SnippetMaximumShare"/>
+/// (20%) of what the header leaves; whatever remains goes to the prefix first and to the suffix last. So the snippets are
+/// the first to be trimmed, then the suffix, then the prefix.
 /// </remarks>
 public static class AutocompleteBudget
 {
@@ -31,6 +32,9 @@ public static class AutocompleteBudget
 
     /// <summary>The most the header may take, and only out of what the minimum shares leave.</summary>
     public const double HeaderMaximumShare = 0.15;
+
+    /// <summary>The most the retrieved snippets may take, and only out of what the minimum shares and the header leave (work item 2.12).</summary>
+    public const double SnippetMaximumShare = 0.20;
 
     /// <summary>The tokens reserved for a FIM template the server applies itself (Ollama): three FIM tokens and a BOS token, rounded up.</summary>
     public const int ServerTemplateReserveTokens = 8;
@@ -58,14 +62,23 @@ public sealed record AutocompletePrompt
     /// <summary>Gets the kept suffix (a whole-line head of the request's suffix, starting at the caret).</summary>
     public string Suffix { get; init; } = string.Empty;
 
-    /// <summary>Gets the text that goes before the caret: the header followed by the prefix.</summary>
-    public string PromptPrefix => Header + Prefix;
+    /// <summary>Gets the retrieved snippets as comment lines (each line ends with a newline), or an empty string (work item 2.12).</summary>
+    public string Snippets { get; init; } = string.Empty;
+
+    /// <summary>Gets the snippets' tokens.</summary>
+    public int SnippetTokens { get; init; }
+
+    /// <summary>Gets the number of snippets shown.</summary>
+    public int SnippetCount { get; init; }
+
+    /// <summary>Gets the text that goes before the caret: the snippets, the header, then the prefix (most stable first).</summary>
+    public string PromptPrefix => Snippets + Header + Prefix;
 
     /// <summary>Gets the budget the prompt was built for.</summary>
     public int Budget { get; init; }
 
-    /// <summary>Gets the tokens of the whole prompt: header, prefix, suffix and FIM framing.</summary>
-    public int PromptTokens => HeaderTokens + PrefixTokens + SuffixTokens + TemplateTokens;
+    /// <summary>Gets the tokens of the whole prompt: snippets, header, prefix, suffix and FIM framing.</summary>
+    public int PromptTokens => SnippetTokens + HeaderTokens + PrefixTokens + SuffixTokens + TemplateTokens;
 
     /// <summary>Gets the header's tokens.</summary>
     public int HeaderTokens { get; init; }
@@ -131,9 +144,10 @@ public static partial class AutocompletePromptBuilder
     /// <param name="budget">The prompt budget in tokens.</param>
     /// <param name="counter">The model's token counter.</param>
     /// <param name="explicitFormat">The FIM template when the gateway frames the prompt itself; <see langword="null"/> when the server applies the model's template.</param>
-    /// <param name="includeHeader">Whether to write the comment header (the model family's <c>fimHeader</c> capability); without it the prompt is the code alone.</param>
+    /// <param name="includeHeader">Whether to write the comment header (the model family's <c>fimHeader</c> capability); without it the prompt is the code alone, snippets included.</param>
+    /// <param name="snippets">The retrieved snippets, best first (at most three are shown); none when <see langword="null"/>.</param>
     /// <returns>The prompt.</returns>
-    public static AutocompletePrompt Build(CompletionRequest request, int budget, IModelTokenCounter counter, FimFormat? explicitFormat = null, bool includeHeader = true)
+    public static AutocompletePrompt Build(CompletionRequest request, int budget, IModelTokenCounter counter, FimFormat? explicitFormat = null, bool includeHeader = true, IReadOnlyList<AutocompleteSnippet>? snippets = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(counter);
@@ -159,18 +173,29 @@ public static partial class AutocompletePromptBuilder
 
         var context = new HeaderContext(request);
         var header = BuildHeader(context, headerRoom, counter, includeDeclaration: true);
-        var layout = Layout(request, prefix, suffix, available, header.Tokens, suffixFloor, prefixNeed, suffixNeed, counter);
+
+        // The snippets get what the minimum shares and the full header leave, up to their own share. The allowance does not
+        // depend on the caret position once the file is longer than the budget, so the block stays byte-identical while the
+        // user types in the same member (the source returns the same snippets).
+        var snippetRoom = includeHeader && snippets is { Count: > 0 } && context.Comment is not null
+            ? Math.Min((int)(available * AutocompleteBudget.SnippetMaximumShare), available - suffixFloor - prefixFloor - header.Tokens)
+            : 0;
+        var block = snippetRoom > 0 ? AutocompleteSnippets.Render(snippets!, context.Comment!.Value, snippetRoom, counter) : (Text: string.Empty, Tokens: 0, Count: 0);
+        var layout = Layout(request, prefix, suffix, available, header.Tokens + block.Tokens, suffixFloor, prefixNeed, suffixNeed, counter);
 
         // The declaration is left out when the kept prefix already shows it. A smaller header only gives the prefix more
         // room, so the declaration stays visible after the rebuild.
         if (header.Items.Contains("declaration") && context.Declaration is { } declaration && WithoutWhitespace(layout.Prefix).Contains(WithoutWhitespace(declaration), StringComparison.Ordinal))
         {
             header = BuildHeader(context, headerRoom, counter, includeDeclaration: false);
-            layout = Layout(request, prefix, suffix, available, header.Tokens, suffixFloor, prefixNeed, suffixNeed, counter);
+            layout = Layout(request, prefix, suffix, available, header.Tokens + block.Tokens, suffixFloor, prefixNeed, suffixNeed, counter);
         }
 
         return new AutocompletePrompt
         {
+            Snippets = block.Text,
+            SnippetTokens = block.Tokens,
+            SnippetCount = block.Count,
             Header = header.Text,
             HeaderItems = header.Items,
             HeaderTokens = header.Tokens,

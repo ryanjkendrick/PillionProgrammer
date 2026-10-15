@@ -470,8 +470,20 @@ public static class ChatStrings
     /// <summary>Gets the screen-reader name of a citation link, with the link text.</summary>
     public static string CitationNameFormat => Get(nameof(CitationNameFormat));
 
-    /// <summary>Gets the label before the cited spans under a reply.</summary>
+    /// <summary>Gets the label before the spans a reply names itself (explicit citations).</summary>
     public static string CitationsLabel => Get(nameof(CitationsLabel));
+
+    /// <summary>Gets the collapsed line under a reply listing its implicit sources; {0} is the count.</summary>
+    public static string SourcesFormat => Get(nameof(SourcesFormat));
+
+    /// <summary>Gets the screen-reader name of the collapsed Sources line; {0} is the count.</summary>
+    public static string SourcesCollapsedNameFormat => Get(nameof(SourcesCollapsedNameFormat));
+
+    /// <summary>Gets the screen-reader name of the expanded Sources line; {0} is the count.</summary>
+    public static string SourcesExpandedNameFormat => Get(nameof(SourcesExpandedNameFormat));
+
+    /// <summary>Gets the screen-reader name of the remove button of a retrieved chunk or the repository map; {0} is its name.</summary>
+    public static string RemoveContextItemNameFormat => Get(nameof(RemoveContextItemNameFormat));
 
     /// <summary>Gets the notice shown while saved conversations are turned off (the localStore feature).</summary>
     public static string ConversationsNotSavedOff => Get(nameof(ConversationsNotSavedOff));

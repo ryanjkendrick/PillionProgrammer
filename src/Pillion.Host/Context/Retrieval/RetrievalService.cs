@@ -20,6 +20,17 @@ internal interface IRetrievalService
     /// <param name="cancellationToken">Cancels the search.</param>
     /// <returns>The hits.</returns>
     Task<SearchResult[]> SearchAsync(SearchRequest request, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Runs a retriever query over the open indexes of some roots, for the host's own context sources (work item 2.12: chat,
+    /// autocomplete and inline edit context). The hits keep the retriever's shape: 1-based lines and the path relative to
+    /// the repository root, which is what prompts show.
+    /// </summary>
+    /// <param name="query">The query (its own time budget, focus files and result count).</param>
+    /// <param name="roots">The repository roots; empty means every index the catalog serves.</param>
+    /// <param name="cancellationToken">Cancels the search.</param>
+    /// <returns>The response; empty while <c>features.retrieval</c> is off.</returns>
+    Task<RetrievalResponse> RetrieveAsync(RetrievalQuery query, IReadOnlyList<string> roots, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -89,9 +100,7 @@ internal sealed partial class RetrievalService : IRetrievalService
             return new SearchResponse();
         }
 
-        var catalog = await _catalog.GetIndexesAsync(request.Roots ?? [], cancellationToken).ConfigureAwait(false);
-        var indexes = await Task.WhenAll(catalog.Select(i => StorageRetrievalIndex.CreateAsync(i.IndexId, i.RootPath, i.Storage, i.Graph, cancellationToken))).ConfigureAwait(false);
-        var response = await _retriever.SearchAsync(ToQuery(request), indexes, cancellationToken).ConfigureAwait(false);
+        var response = await RunAsync(ToQuery(request), request.Roots ?? [], cancellationToken).ConfigureAwait(false);
 
         return new SearchResponse
         {
@@ -107,6 +116,28 @@ internal sealed partial class RetrievalService : IRetrievalService
     /// <inheritdoc/>
     public async Task<SearchResult[]> SearchAsync(SearchRequest request, CancellationToken cancellationToken) =>
         (await SearchDetailedAsync(request, cancellationToken).ConfigureAwait(false)).Results;
+
+    /// <inheritdoc/>
+    public Task<RetrievalResponse> RetrieveAsync(RetrievalQuery query, IReadOnlyList<string> roots, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(roots);
+        return !_features.IsEnabled(FeatureNames.Retrieval) || string.IsNullOrWhiteSpace(query.Text)
+            ? Task.FromResult(RetrievalResponse.Empty)
+            : RunAsync(query, roots, cancellationToken);
+    }
+
+    private async Task<RetrievalResponse> RunAsync(RetrievalQuery query, IReadOnlyList<string> roots, CancellationToken cancellationToken)
+    {
+        var catalog = await _catalog.GetIndexesAsync(roots, cancellationToken).ConfigureAwait(false);
+        if (catalog.Count == 0)
+        {
+            return RetrievalResponse.Empty;
+        }
+
+        var indexes = await Task.WhenAll(catalog.Select(i => StorageRetrievalIndex.CreateAsync(i.IndexId, i.RootPath, i.Storage, i.Graph, cancellationToken))).ConfigureAwait(false);
+        return await _retriever.SearchAsync(query, indexes, cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>Maps a contract request to the retriever's query.</summary>
     /// <param name="request">The request.</param>

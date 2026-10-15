@@ -274,6 +274,7 @@ public sealed class PillionPackage : AsyncPackage
                 CopyText = ChatToolWindow.CopyToClipboard,
                 ConversationEvents = ConversationEvents,
                 OpenCitation = ChatToolWindow.OpenCitation,
+                OpenCitationSpan = ChatToolWindow.OpenCitationSpan,
             });
         return System.Threading.Tasks.Task.FromResult<object>(new ChatToolWindowState(viewModel, files));
     }

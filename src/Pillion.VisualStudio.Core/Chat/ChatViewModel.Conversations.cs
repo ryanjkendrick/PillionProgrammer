@@ -238,7 +238,16 @@ public sealed partial class ChatViewModel
     /// <param name="item">The citation.</param>
     private void OpenCitation(CitationItem? item)
     {
-        if (item is not null && item.FilePath.Length > 0)
+        if (item is null || item.FilePath.Length == 0)
+        {
+            return;
+        }
+
+        if (_openCitationSpan is not null)
+        {
+            _openCitationSpan(item.FilePath, item.StartLine, item.EndLine);
+        }
+        else
         {
             _openCitation?.Invoke(item.FilePath, item.StartLine);
         }
