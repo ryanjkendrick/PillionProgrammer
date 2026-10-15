@@ -37,11 +37,18 @@
 
   <Target Name="PillionAddTreeSitterNatives" BeforeTargets="AssignTargetPaths" Condition="'$(PkgTreeSitter_DotNet)' != ''">
     <ItemGroup>
+      <!-- One item per runtime and library (the batch over the libraries crosses them with the runtimes). -->
       <_PillionTreeSitterNative Include="@(PillionTreeSitterRid)" Library="%(PillionTreeSitterLibrary.Identity)" />
-      <None Include="@(_PillionTreeSitterNative->'$(PkgTreeSitter_DotNet)\runtimes\%(Identity)\native\%(Library).dll')"
-            Link="runtimes\%(Identity)\native\%(Library).dll"
-            CopyToOutputDirectory="PreserveNewest"
-            Visible="false" />
+      <_PillionTreeSitterNative>
+        <Rid>%(Identity)</Rid>
+      </_PillionTreeSitterNative>
+      <_PillionTreeSitterFile Include="@(_PillionTreeSitterNative->'$(PkgTreeSitter_DotNet)\runtimes\%(Rid)\native\%(Library).dll')" />
+      <_PillionTreeSitterFile>
+        <Link>runtimes\%(Rid)\native\%(Library).dll</Link>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <Visible>false</Visible>
+      </_PillionTreeSitterFile>
+      <None Include="@(_PillionTreeSitterFile)" />
     </ItemGroup>
   </Target>
 
