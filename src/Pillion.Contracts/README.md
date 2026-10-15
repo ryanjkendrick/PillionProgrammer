@@ -111,6 +111,9 @@ pipe `ContractV13RpcTests` and `HandshakeCompatibilityTests` in the host tests).
   whenever the set changes. The host pauses indexing while any flag is set (pause reasons `Build`, `Debug`, `Test`) and
   forgets the set when the client disconnects. It is the first client-to-host notification: the host registers it on every
   connection like an RPC target, and only after the handshake (`ContractV13Tests` keeps it from clashing with method names).
+  The extension (`IndexingRelay` in Pillion.VisualStudio.Core) sends `Build` from the solution build events and `Debug`
+  from the debugger's mode; it does not set `Test` yet (no supported Test Explorer API in the SDK packages it uses), so a
+  test run pauses indexing only through its build.
 
 - **Search (work item 2.11).** `SearchAsync` is unchanged (a 1.2 client keeps calling it); the new
   `SearchDetailedAsync(SearchRequest)` returns the hits with timings.
