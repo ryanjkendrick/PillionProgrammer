@@ -122,8 +122,8 @@ the built-in secret rules (`.env`, `.env.*` except examples, `*.pfx`, `*.p12`, `
 `Password`) resolve as unresolved with `RequiresApproval`; the client asks the user and asks again with `ApprovedSensitive`.
 An approved file comes back with `IsSensitive`, and the gateway never sends such a pin to a cloud model.
 
-`SearchAsync` returns an empty array and `GetIndexStatusAsync` reports nothing indexed (the index arrives in phase 2);
-`PauseIndexingAsync` does nothing. The chat side of context (pins, current file, rules, history summary) is in the Model
+`SearchAsync` and `SearchDetailedAsync` answer with hybrid retrieval ([below](#retrieval-contextretrieval));
+`GetIndexStatusAsync` reports nothing indexed (the pipeline arrives in work item 2.9) and `PauseIndexingAsync` does nothing. The chat side of context (pins, current file, rules, history summary) is in the Model
 Gateway README, Context assembly.
 
 ### Contract 1.3 stubs
@@ -133,12 +133,33 @@ Contract 1.3 added methods whose behaviour later phase 2 work items implement. U
 | Method | Answer now | Implemented by |
 | --- | --- | --- |
 | `IContextService.GetIndexStatusAsync` | `Phase` `Idle`, no `Roots`, no `Progress`: this host builds no index yet | 2.9 |
-| `IContextService.SearchDetailedAsync` | No hits and zero timings, like `SearchAsync` | 2.11 |
 | `IContextService.ListExcludedFilesAsync`, `RebuildIndexAsync`, `DeleteIndexAsync`, `ListIndexesAsync` | `PillionRpcException`, code `NotImplemented`, `Details` `work item 2.15` | 2.9, 2.15 |
 | `IConversationService` (every method) | `PolicyDenied` naming the flag while `localStore` is off; otherwise `NotImplemented`, `Details` `work item 2.2` | 2.2 |
 
 `RpcErrors.NotImplemented(feature, workItem)` builds that error; a work item that implements a method removes its stub and
 its row here.
+
+## Retrieval (`Context/Retrieval/`)
+
+Work item 2.11, behind `features.retrieval` (off: both search methods fail with `PolicyDenied` naming the flag).
+`ContextRpcService.SearchDetailedAsync` and `SearchAsync` delegate to `IRetrievalService` (`RetrievalService`), which takes
+the open indexes from an `IIndexCatalog`, adapts each with `StorageRetrievalIndex` (reading the embedding model and vector
+size from the index `meta` per search) and runs `HybridRetriever` (Pillion.ContextEngine, see its README, Hybrid
+retrieval). Results use the contract's zero-based lines and the opaque chunk id `<index-id>:<row-id>`; `SearchAsync`
+returns the same hits as `SearchDetailedAsync` without the timings. `SearchRequest` has no budget field, so the budget is
+`RetrievalOptions.TimeBudget` (300 ms; register a `RetrievalOptions` singleton to change it).
+
+- `IIndexCatalog` gives the open `IndexStorage` (and `SymbolGraph`, when the host keeps one) per repository root, for the
+  request's `Roots` or every index when there are none. `ReadOnlyIndexCatalog`, registered with `TryAdd`, finds index
+  folders by `state.json` under `index\`, picks the most recently opened one per root, opens it read-only (the reader path
+  of `IndexStoreFactory`: nothing created, migrated or locked), keeps it open until the host stops and warms its vector
+  cache in the background; it serves nothing while `indexing` or `localStore` is off. The indexing pipeline (work item 2.9)
+  registers its live catalog before `AddPillionRetrieval` to take its place.
+- `GatewayQueryEmbedder` embeds the question with `IModelGateway.EmbedAsync` (one input, purpose `Query`, the index's model
+  id and vector size), so the `embeddings` flag, routing, Local-only and the Outbound log apply as for any embedding. When
+  embedding fails or overruns the budget, the search answers from the lexical and symbol legs with `Degraded` set.
+- `features.reranker` (off by default) is read, but no cross-encoder ships yet (licence review, design section 18): the
+  fused order is kept and the host logs that once.
 
 ## Index status notification (`indexStatusChanged`)
 

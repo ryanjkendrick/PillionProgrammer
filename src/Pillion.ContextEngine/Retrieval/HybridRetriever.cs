@@ -83,7 +83,7 @@ public sealed partial class HybridRetriever
             : null;
 
         // The focus files (and files the query names) are looked up alongside; they are cheap and not part of the budget.
-        var focus = Task.Run(() => ResolveFocusAsync(query, analysis, indexes, legs.Token), legs.Token);
+        var focus = Task.Run(() => ResolveFocusAsync(query, analysis, indexes, cancellationToken), cancellationToken);
 
         var running = new[] { lexical, vector, symbol }.Where(t => t is not null).Select(t => (Task)t!.Task).ToArray();
         try

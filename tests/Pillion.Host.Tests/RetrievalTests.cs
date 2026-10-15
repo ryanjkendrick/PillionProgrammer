@@ -24,6 +24,9 @@ public sealed class RetrievalTests : IAsyncDisposable
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(30);
 
+    // Not about the budget: a busy machine must not cut a leg short.
+    private static readonly RetrievalOptions Generous = RetrievalOptions.Default with { TimeBudget = TimeSpan.FromSeconds(10) };
+
     private readonly TempDirectory _data = new();
     private readonly TempDirectory _repo = new();
     private readonly Flags _flags = new();
@@ -107,7 +110,7 @@ public sealed class RetrievalTests : IAsyncDisposable
     public async Task WithTheRetrievalFlagOff_SearchesAreRefusedNamingTheFlag()
     {
         _flags.Disabled.Add(FeatureNames.Retrieval);
-        var service = new RetrievalService(Catalog(), _flags);
+        var service = new RetrievalService(Catalog(), _flags, options: Generous);
 
         var detailed = await Assert.ThrowsAsync<PillionRpcException>(() => service.SearchDetailedAsync(new SearchRequest { Query = "x" }, CancellationToken.None));
         var plain = await Assert.ThrowsAsync<PillionRpcException>(() => service.SearchAsync(new SearchRequest { Query = "x" }, CancellationToken.None));
@@ -121,7 +124,7 @@ public sealed class RetrievalTests : IAsyncDisposable
     public async Task TheReadOnlyCatalog_OpensTheIndexOfARoot_AndTheSearchFindsTheCode()
     {
         var indexId = await TestIndex.BuildAsync(new PillionPaths(_data.Path), _repo.Path);
-        var service = new RetrievalService(Catalog(), _flags);
+        var service = new RetrievalService(Catalog(), _flags, options: Generous);
 
         var response = await service.SearchDetailedAsync(new SearchRequest { Query = "where do we Restock a product", IncludeText = true, Roots = [_repo.Path] }, CancellationToken.None);
 
@@ -164,7 +167,7 @@ public sealed class RetrievalTests : IAsyncDisposable
     [Fact]
     public async Task WithoutAnyIndex_TheSearchAnswersEmpty()
     {
-        var service = new RetrievalService(Catalog(), _flags);
+        var service = new RetrievalService(Catalog(), _flags, options: Generous);
 
         var response = await service.SearchDetailedAsync(new SearchRequest { Query = "anything" }, CancellationToken.None);
 

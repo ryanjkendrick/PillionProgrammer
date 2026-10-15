@@ -8,6 +8,9 @@ public sealed class HybridRetrieverTests
 {
     private const double Precision = 1e-12;
 
+    // Tests that are not about the budget get a generous one, so a busy machine cannot cut a leg short.
+    private static readonly RetrievalOptions Generous = RetrievalOptions.Default with { TimeBudget = TimeSpan.FromSeconds(10) };
+
     private readonly FakeIndex _index = new();
     private readonly FakeEmbedder _embedder = new();
 
@@ -226,7 +229,7 @@ public sealed class HybridRetrieverTests
     {
         var a = Chunk("src/A.cs");
         _index.LexicalReturns(a);
-        var retriever = new HybridRetriever(embedder: null);
+        var retriever = new HybridRetriever(embedder: null, Generous);
 
         var response = await retriever.SearchAsync(new RetrievalQuery { Text = "alpha" }, [_index], CancellationToken.None);
 
@@ -275,7 +278,7 @@ public sealed class HybridRetrieverTests
     public async Task TheQueryVector_IsEmbeddedOnce_ForRepeatedQueriesWithinTheWindow_WithTheIndexModel()
     {
         var clock = new SteppingClock();
-        var retriever = new HybridRetriever(_embedder, time: clock);
+        var retriever = new HybridRetriever(_embedder, Generous, time: clock);
 
         await retriever.SearchAsync(new RetrievalQuery { Text = "alpha" }, [_index], CancellationToken.None);
         await retriever.SearchAsync(new RetrievalQuery { Text = "alpha" }, [_index], CancellationToken.None);
@@ -328,7 +331,7 @@ public sealed class HybridRetrieverTests
         var b = second.AddChunk(f, 1);
         _index.Lexical = (_, _, _) => Task.FromResult<IReadOnlyList<LexicalHit>>([new LexicalHit(a, 5)]);
         second.Lexical = (_, _, _) => Task.FromResult<IReadOnlyList<LexicalHit>>([new LexicalHit(b, 9)]);
-        var retriever = new HybridRetriever(_embedder);
+        var retriever = new HybridRetriever(_embedder, Generous);
 
         var response = await retriever.SearchAsync(new RetrievalQuery { Text = "alpha", Mode = RetrievalSearchMode.Lexical }, [_index, second], CancellationToken.None);
 
@@ -340,7 +343,7 @@ public sealed class HybridRetrieverTests
     [Fact]
     public async Task NoIndexesOrABlankQuery_GiveAnEmptyResponse()
     {
-        var retriever = new HybridRetriever(_embedder);
+        var retriever = new HybridRetriever(_embedder, Generous);
 
         Assert.Empty((await retriever.SearchAsync(new RetrievalQuery { Text = "alpha" }, [], CancellationToken.None)).Hits);
         Assert.Empty((await retriever.SearchAsync(new RetrievalQuery { Text = "  " }, [_index], CancellationToken.None)).Hits);
@@ -356,7 +359,7 @@ public sealed class HybridRetrieverTests
             return [];
         };
         using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
-        var retriever = new HybridRetriever(_embedder);
+        var retriever = new HybridRetriever(_embedder, Generous);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             retriever.SearchAsync(new RetrievalQuery { Text = "alpha", TimeBudget = TimeSpan.FromSeconds(30) }, [_index], cancel.Token));
@@ -368,7 +371,7 @@ public sealed class HybridRetrieverTests
         var a = Chunk("src/A.cs");
         var b = Chunk("src/B.cs");
         _index.LexicalReturns(a, b);
-        var retriever = new HybridRetriever(_embedder, reranker: new ReversingReranker());
+        var retriever = new HybridRetriever(_embedder, Generous, reranker: new ReversingReranker());
 
         var response = await retriever.SearchAsync(new RetrievalQuery { Text = "alpha" }, [_index], CancellationToken.None);
 
@@ -394,7 +397,7 @@ public sealed class HybridRetrieverTests
         TimeSpan? budget = null,
         string[]? partitions = null,
         string[]? languages = null) =>
-        new HybridRetriever(_embedder).SearchAsync(
+        new HybridRetriever(_embedder, Generous).SearchAsync(
             new RetrievalQuery
             {
                 Text = text,

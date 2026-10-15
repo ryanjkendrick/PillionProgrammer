@@ -142,6 +142,14 @@ prefix, and FTS5 syntax in the query is dropped. Ranking is `bm25(chunks_fts, 1.
 `IndexStorageOptions`); `LexicalHit.Score` is the negated value, so higher is better. A delete trigger on `chunks` removes
 FTS5 rows, so deletes through any path (including a cascade from `files`) keep them in step.
 
+Question options (work item 2.11). The `SearchLexicalAsync` overload with `LexicalSearchOptions` serves hybrid retrieval:
+`LexicalSearchOptions.Question` turns off the prefix match of the last token (search as you type, not a question) and
+leaves out terms that occur in at least half of the chunks. FTS5's `bm25()` floors such a term's idf at about zero, so it
+only adds near-zero-scored matches that are expensive to rank (on the 100,000-chunk benchmark the twenty generated nouns
+each match about 69% of the chunks); when every term is that common, the rarest is kept. The document frequencies come
+from `count(*)` queries (about 6 ms each at 100,000 chunks), cached per repository for five minutes and dropped on every
+write through it. The plain overload is unchanged.
+
 Vectors. The int8 vectors live in `chunk_embeddings`; the first vector stored fixes `meta.vector_dimensions`.
 `IVectorIndex` (`UpsertAsync`, `DeleteByFileAsync`, `SearchAsync(query, k, filter)` returning chunk id and cosine
 distance) has two implementations over the same rows, chosen with `IndexStorageOptions.VectorBackend`; both compute the
