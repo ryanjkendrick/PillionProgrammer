@@ -15,7 +15,8 @@ namespace Pillion.FakeHost;
 /// <item>a name with <c>missing</c> in it: unresolved with a reason;</item>
 /// <item><c>@selection</c>, <c>@clipboard</c> and <c>@errors</c>, and from 1.3 <c>@output</c>, <c>@build</c> and <c>@tests</c>:
 /// resolved from the payload (unresolved without one);</item>
-/// <item>from 1.3, <c>@symbol:Name</c>: a canned class with a citation of its definition; <c>@docs</c>: a README with a citation;
+/// <item>from 1.3, <c>@symbol:Name</c>: a canned class with a citation of its definition (a name with <c>ambiguous</c> in it and
+/// no <c>#path:line</c>: two <c>Name#path:line</c> candidates); <c>@docs</c>: a README with a citation;
 /// <c>@solution</c>: a repo map; <c>@git</c>: a diff, the staged changes or a log, named by <see cref="MentionRequest.Arguments"/>;</item>
 /// <item>anything else: a resolved file, read from disk when the path (or a candidate file with that name) exists, else
 /// with canned content.</item>
@@ -278,9 +279,24 @@ internal sealed class FakeContextService : IContextService, IDisposable
                 return string.IsNullOrEmpty(request.Payload)
                     ? new MentionResolution { Mention = mention, Kind = kind, Reason = "There is nothing to pin for @" + kind + "." }
                     : Resolved(mention, kind, kind == "errors" ? "Errors and warnings" : char.ToUpperInvariant(kind[0]) + kind[1..], null, request.Payload!, false);
+            case "symbol" when value.Contains("ambiguous", StringComparison.OrdinalIgnoreCase) && !value.Contains('#', StringComparison.Ordinal):
+                {
+                    // Two namesakes, as the real host's Name#path:line candidates (work item 2.13's picker and sub-picker).
+                    var a = Path.Combine(workspace, "src", "A", value + ".cs");
+                    var b = Path.Combine(workspace, "src", "B", value + ".cs");
+                    return new MentionResolution
+                    {
+                        Mention = mention,
+                        Kind = kind,
+                        Candidates = ["Fake.A." + value + "#" + a + ":4", "Fake.B." + value + "#" + b + ":9"],
+                        Reason = "2 symbols are named '" + value + "'; pick one.",
+                    };
+                }
+
             case "symbol":
                 {
-                    var symbol = value.Length == 0 ? "Canned" : value;
+                    var hash = value.IndexOf('#', StringComparison.Ordinal);
+                    var symbol = value.Length == 0 ? "Canned" : (hash >= 0 ? value[..hash] : value).Split('.')[^1];
                     var file = Path.Combine(workspace, "src", symbol + ".cs");
                     var resolved = Resolved(mention, kind, symbol, file, "class " + symbol + " { }\n// 2 references (canned)\n", false);
                     resolved.Citations = [new Citation { FilePath = file, StartLine = 4, EndLine = 20, ChunkId = CannedIndexId + ":3", Breadcrumb = "src/" + symbol + ".cs > Fake > " + symbol }];
