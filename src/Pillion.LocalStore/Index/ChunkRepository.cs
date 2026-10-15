@@ -95,42 +95,52 @@ public sealed class ChunkRepository : IChunkRepository
             (connection, transaction, token) =>
             {
                 using var vectors = VectorStorage.BeginWrite(connection, transaction);
-                using var lookup = Sql.Command(
-                    connection,
-                    transaction,
-                    "SELECT f.language, f.partition FROM chunks c JOIN files f ON f.id = c.file_id WHERE c.id = $id",
-                    ("$id", 0L));
-                var stored = 0;
-                foreach (var embedding in embeddings)
-                {
-                    token.ThrowIfCancellationRequested();
-                    ArgumentNullException.ThrowIfNull(embedding);
-                    lookup.Parameters[0].Value = embedding.ChunkId;
-                    string? language;
-                    string? partition;
-                    using (var reader = lookup.ExecuteReader())
-                    {
-                        if (!reader.Read())
-                        {
-                            continue;
-                        }
-
-                        language = reader.IsDBNull(0) ? null : reader.GetString(0);
-                        partition = reader.IsDBNull(1) ? null : reader.GetString(1);
-                    }
-
-                    vectors.Upsert(embedding.ChunkId, embedding.Vector.Span, language, partition);
-                    if (!embedding.VectorFloat32.IsEmpty)
-                    {
-                        vectors.UpsertFloat32(embedding.ChunkId, embedding.VectorFloat32.Span);
-                    }
-
-                    stored++;
-                }
-
-                return Task.FromResult(stored);
+                return Task.FromResult(UpsertEmbeddings(connection, transaction, vectors, embeddings, null, token));
             },
             cancellationToken);
+    }
+
+    /// <summary>
+    /// Stores vectors for chunks already stored, inside the caller's write transaction (see <see cref="UpsertEmbeddingsAsync"/>);
+    /// <c>onVector</c>, when given, is told about every vector stored (chunk id, vector, language, partition) for the in-memory copy.
+    /// </summary>
+    internal static int UpsertEmbeddings(SqliteConnection connection, SqliteTransaction transaction, VectorWriteSession vectors, IReadOnlyList<ChunkEmbedding> embeddings, Action<long, ReadOnlyMemory<sbyte>, string?, string?>? onVector, CancellationToken token)
+    {
+        using var lookup = Sql.Command(
+            connection,
+            transaction,
+            "SELECT f.language, f.partition FROM chunks c JOIN files f ON f.id = c.file_id WHERE c.id = $id",
+            ("$id", 0L));
+        var stored = 0;
+        foreach (var embedding in embeddings)
+        {
+            token.ThrowIfCancellationRequested();
+            ArgumentNullException.ThrowIfNull(embedding);
+            lookup.Parameters[0].Value = embedding.ChunkId;
+            string? language;
+            string? partition;
+            using (var reader = lookup.ExecuteReader())
+            {
+                if (!reader.Read())
+                {
+                    continue;
+                }
+
+                language = reader.IsDBNull(0) ? null : reader.GetString(0);
+                partition = reader.IsDBNull(1) ? null : reader.GetString(1);
+            }
+
+            vectors.Upsert(embedding.ChunkId, embedding.Vector.Span, language, partition);
+            onVector?.Invoke(embedding.ChunkId, embedding.Vector, language, partition);
+            if (!embedding.VectorFloat32.IsEmpty)
+            {
+                vectors.UpsertFloat32(embedding.ChunkId, embedding.VectorFloat32.Span);
+            }
+
+            stored++;
+        }
+
+        return stored;
     }
 
     /// <inheritdoc/>
@@ -266,7 +276,7 @@ public sealed class ChunkRepository : IChunkRepository
     }
 
     /// <summary>Replaces one file's chunks (and their FTS5 rows and vectors) inside the caller's write transaction.</summary>
-    internal static long[] ReplaceChunks(ChunkWriter writer, VectorWriteSession vectors, long fileId, IReadOnlyList<NewChunk> chunks)
+    internal static long[] ReplaceChunks(ChunkWriter writer, VectorWriteSession vectors, long fileId, IReadOnlyList<NewChunk> chunks, Action<long, ReadOnlyMemory<sbyte>, string?, string?>? onVector = null)
     {
         var (language, partition) = writer.ReadFile(fileId)
             ?? throw new KeyNotFoundException($"There is no file with id {fileId} in the index.");
@@ -282,6 +292,7 @@ public sealed class ChunkRepository : IChunkRepository
             if (!chunk.Embedding.IsEmpty)
             {
                 vectors.Upsert(id, chunk.Embedding.Span, language, partition);
+                onVector?.Invoke(id, chunk.Embedding, language, partition);
             }
 
             if (!chunk.EmbeddingFloat32.IsEmpty)

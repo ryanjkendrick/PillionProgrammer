@@ -111,6 +111,14 @@ public sealed class IndexStore : IAsyncDisposable
         return null;
     }
 
+    /// <summary>
+    /// Checks that this host still owns <c>writer.lock</c> (work item 2.10): the file still carries this host's token. A
+    /// reader never does. The watcher and the incremental indexer stop when this turns false (the lock was deleted by hand,
+    /// or another host wrongly reclaimed it).
+    /// </summary>
+    /// <returns><see langword="true"/> while this host is the writer and its lock is in place.</returns>
+    public bool HoldsWriterLock() => _lock?.IsHeld() == true;
+
     /// <summary>Records that a full hash sweep finished now (writer only).</summary>
     /// <returns>The new state.</returns>
     /// <exception cref="InvalidOperationException">This host is only a reader.</exception>

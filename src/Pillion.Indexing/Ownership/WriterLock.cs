@@ -149,6 +149,23 @@ public sealed class WriterLock : IDisposable
     }
 
     /// <summary>
+    /// Checks that the lock file still carries this acquisition's token (work item 2.10: the watcher stops when its host
+    /// loses the lock). A file that cannot be read right now (a scanner has it open) counts as still held; a missing,
+    /// corrupt or foreign lock does not.
+    /// </summary>
+    /// <returns><see langword="true"/> while this host still owns the lock.</returns>
+    public bool IsHeld()
+    {
+        if (Volatile.Read(ref _released) != 0)
+        {
+            return false;
+        }
+
+        var (state, current) = TryRead(Path);
+        return state == LockState.Unavailable || (current is not null && string.Equals(current.Token, Info.Token, StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// Gives the lock up: deletes the file if it still carries this acquisition's token. If another host reclaimed it in
     /// the meantime, that host's lock is left alone.
     /// </summary>
