@@ -50,7 +50,9 @@ public sealed partial class PillionPackageTests
     /// <summary>The generated solution is open, indexed by the real host; secret-bearing files are excluded, listed and need approval.</summary>
     [Gate2ScenarioFact]
     [TestOrder(40)]
-    public async Task Gate2_GeneratedSolution_IsIndexed_AndSecretFilesAreExcludedListedAndNeedApproval()
+    public Task Gate2_GeneratedSolution_IsIndexed_AndSecretFilesAreExcludedListedAndNeedApproval() => RunGate2Async(Gate2_GeneratedSolution_IsIndexed_AndSecretFilesAreExcludedListedAndNeedApprovalCoreAsync);
+
+    private async Task Gate2_GeneratedSolution_IsIndexed_AndSecretFilesAreExcludedListedAndNeedApprovalCoreAsync()
     {
         using var lease = Gate2Lease(TimeSpan.FromMinutes(20));
         var clock = Stopwatch.StartNew();
@@ -94,17 +96,19 @@ public sealed partial class PillionPackageTests
     /// <summary>Keystroke latency (TypeChar on the UI thread, autocomplete off) while the index is being rebuilt the whole time.</summary>
     [Gate2ScenarioFact]
     [TestOrder(41)]
-    public Task Gate2_Keystrokes_WhileIndexing() => Gate2TypingPassAsync("keystrokes-indexing", "TypeIndexing.cs", keepIndexing: true);
+    public Task Gate2_Keystrokes_WhileIndexing() => RunGate2Async(() => Gate2TypingPassAsync("keystrokes-indexing", "TypeIndexing.cs", keepIndexing: true));
 
     /// <summary>The same keystrokes with the index idle, for the difference.</summary>
     [Gate2ScenarioFact]
     [TestOrder(42)]
-    public Task Gate2_Keystrokes_IndexIdle() => Gate2TypingPassAsync("keystrokes-idle", "TypeIdle.cs", keepIndexing: false);
+    public Task Gate2_Keystrokes_IndexIdle() => RunGate2Async(() => Gate2TypingPassAsync("keystrokes-idle", "TypeIdle.cs", keepIndexing: false));
 
     /// <summary>One saved file becomes searchable: ten one-member edits and three whole-file rewrites saved through Visual Studio.</summary>
     [Gate2ScenarioFact]
     [TestOrder(43)]
-    public async Task Gate2_SavedFile_BecomesSearchable()
+    public Task Gate2_SavedFile_BecomesSearchable() => RunGate2Async(Gate2_SavedFile_BecomesSearchableCoreAsync);
+
+    private async Task Gate2_SavedFile_BecomesSearchableCoreAsync()
     {
         using var lease = Gate2Lease(TimeSpan.FromMinutes(10));
         await OpenGate2SolutionAsync(lease.Token);
@@ -172,17 +176,19 @@ public sealed partial class PillionPackageTests
     /// <summary>A scripted branch switch touching 500 files: two members changed in each (the realistic diff).</summary>
     [Gate2ScenarioFact]
     [TestOrder(44)]
-    public Task Gate2_BranchSwitch_RealisticDiff() => Gate2BranchSwitchAsync("realistic", "BranchMarker{0}_1");
+    public Task Gate2_BranchSwitch_RealisticDiff() => RunGate2Async(() => Gate2BranchSwitchAsync("realistic", "BranchMarker{0}_1"));
 
     /// <summary>The same 500 files rewritten whole (every chunk new).</summary>
     [Gate2ScenarioFact]
     [TestOrder(45)]
-    public Task Gate2_BranchSwitch_WholeFileRewrite() => Gate2BranchSwitchAsync("rewrite", "RewriteMarker{0}_0");
+    public Task Gate2_BranchSwitch_WholeFileRewrite() => RunGate2Async(() => Gate2BranchSwitchAsync("rewrite", "RewriteMarker{0}_0"));
 
     /// <summary>Workspace queries answered by devenv.exe: @symbol resolutions through the host, which asks the live Roslyn workspace.</summary>
     [Gate2ScenarioFact]
     [TestOrder(46)]
-    public async Task Gate2_WorkspaceQueries_ThroughSymbolMentions()
+    public Task Gate2_WorkspaceQueries_ThroughSymbolMentions() => RunGate2Async(Gate2_WorkspaceQueries_ThroughSymbolMentionsCoreAsync);
+
+    private async Task Gate2_WorkspaceQueries_ThroughSymbolMentionsCoreAsync()
     {
         using var lease = Gate2Lease(TimeSpan.FromMinutes(8));
         await OpenGate2SolutionAsync(lease.Token);
@@ -218,7 +224,9 @@ public sealed partial class PillionPackageTests
     /// <summary>A conversation, its pins and the Outbound log survive a host kill; the conversation id is kept for the restart check.</summary>
     [Gate2ScenarioFact]
     [TestOrder(47)]
-    public async Task Gate2_Persistence_SurvivesAHostKill()
+    public Task Gate2_Persistence_SurvivesAHostKill() => RunGate2Async(Gate2_Persistence_SurvivesAHostKillCoreAsync);
+
+    private async Task Gate2_Persistence_SurvivesAHostKillCoreAsync()
     {
         using var lease = Gate2Lease(TimeSpan.FromMinutes(8));
         await OpenGate2SolutionAsync(lease.Token);
@@ -262,7 +270,9 @@ public sealed partial class PillionPackageTests
     /// <summary>Semantic search on the 100,000-chunk index through SearchDetailedAsync: p50 and p95 from devenv.exe.</summary>
     [Gate2ScenarioFact]
     [TestOrder(48)]
-    public async Task Gate2_BigIndex_SearchLatency()
+    public Task Gate2_BigIndex_SearchLatency() => RunGate2Async(Gate2_BigIndex_SearchLatencyCoreAsync);
+
+    private async Task Gate2_BigIndex_SearchLatencyCoreAsync()
     {
         using var lease = Gate2Lease(TimeSpan.FromMinutes(25));
         var (root, opened) = await OpenBigRepoAsync(lease.Token);
@@ -305,7 +315,9 @@ public sealed partial class PillionPackageTests
     /// <summary>Context assembly with retrieval on the same index: the Context Inspector's preview, p50 and p95.</summary>
     [Gate2ScenarioFact]
     [TestOrder(49)]
-    public async Task Gate2_BigIndex_ContextAssemblyWithRetrieval()
+    public Task Gate2_BigIndex_ContextAssemblyWithRetrieval() => RunGate2Async(Gate2_BigIndex_ContextAssemblyWithRetrievalCoreAsync);
+
+    private async Task Gate2_BigIndex_ContextAssemblyWithRetrievalCoreAsync()
     {
         using var lease = Gate2Lease(TimeSpan.FromMinutes(25));
         var (root, _) = await OpenBigRepoAsync(lease.Token);
@@ -358,7 +370,9 @@ public sealed partial class PillionPackageTests
     /// <summary>A chat on the indexed code: the reply cites file:line spans of retrieved chunks.</summary>
     [Gate2ScenarioFact]
     [TestOrder(50)]
-    public async Task Gate2_ChatWithRetrieval_CitesSpans()
+    public Task Gate2_ChatWithRetrieval_CitesSpans() => RunGate2Async(Gate2_ChatWithRetrieval_CitesSpansCoreAsync);
+
+    private async Task Gate2_ChatWithRetrieval_CitesSpansCoreAsync()
     {
         using var lease = Gate2Lease(TimeSpan.FromMinutes(10));
         await OpenGate2SolutionAsync(lease.Token);
@@ -383,7 +397,9 @@ public sealed partial class PillionPackageTests
     /// <summary>The Index window lists the real host's roots with their counts.</summary>
     [Gate2ScenarioFact]
     [TestOrder(51)]
-    public async Task Gate2_IndexWindow_ShowsTheRealRoot()
+    public Task Gate2_IndexWindow_ShowsTheRealRoot() => RunGate2Async(Gate2_IndexWindow_ShowsTheRealRootCoreAsync);
+
+    private async Task Gate2_IndexWindow_ShowsTheRealRootCoreAsync()
     {
         using var lease = Gate2Lease(TimeSpan.FromMinutes(6));
         await OpenGate2SolutionAsync(lease.Token);
@@ -429,7 +445,9 @@ public sealed partial class PillionPackageTests
     /// <summary>In a second Visual Studio session: the conversation written before the restart is still there.</summary>
     [Gate2RestartFact]
     [TestOrder(60)]
-    public async Task Gate2_Persistence_SurvivesAVisualStudioRestart()
+    public Task Gate2_Persistence_SurvivesAVisualStudioRestart() => RunGate2Async(Gate2_Persistence_SurvivesAVisualStudioRestartCoreAsync);
+
+    private async Task Gate2_Persistence_SurvivesAVisualStudioRestartCoreAsync()
     {
         using var lease = Gate2Lease(TimeSpan.FromMinutes(5));
         var earlier = Path.Combine(GateOutput, $"gate2-persistence-host-VS{(await GetVisualStudioVersionAsync()).Major}.json");
@@ -451,6 +469,17 @@ public sealed partial class PillionPackageTests
         await WriteGate2Async("persistence-restart", result);
         Assert.NotNull(detail);
         Assert.True(detail!.Messages.Length >= 2, $"{detail.Messages.Length} messages after the restart.");
+    }
+
+    /// <summary>
+    /// Runs a scenario body once the package is loaded: the bodies name Pillion.Contracts types, which devenv.exe resolves to
+    /// the installed extension's copy only after the package has loaded them (an async body's state machine loads those types
+    /// as soon as it starts, so the body is a separate method).
+    /// </summary>
+    private async Task RunGate2Async(Func<Task> body)
+    {
+        await EnsurePackageLoadedAsync();
+        await body();
     }
 
     private static string Gate2Folder => Path.GetDirectoryName(Gate2Solution) ?? string.Empty;
