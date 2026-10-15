@@ -1,4 +1,7 @@
 <!-- Exported from the Claude Doc https://claude.ai/code/artifact/02f3ee51-8712-47d2-89af-3c7f6f1559fb on 2026-10-08. The doc is the source of truth; re-export after changes. -->
+<!-- Phase 2 notes (work item 2.18, 2026-10-15) were written into this export first and are mirrored into the Claude Doc by the lead; the original text is kept and each note says what changed. Phase 0 and phase 1 updates made in the Claude Doc after the export are not in this file. -->
+
+> **Phase 2 notes.** Blocks like this one record what phase 2 (Context, work items 2.1 to 2.18, 2026-10-15) shipped where it differs from the text above them or adds to it. The original text stays for the record. Evidence: [phase-2-plan.md](phase-2-plan.md), [gate-2-report.md](gate-2-report.md), [eval-retrieval-baseline.md](eval-retrieval-baseline.md).
 
 # Pillion Programmer: Software Design Document
 
@@ -146,17 +149,34 @@ The contract is one versioned interface set in the shared contracts assembly. Th
 | Interface | Direction | Methods (summary) | Style |
 | --- | --- | --- | --- |
 | `IModelService` | VSIX to host | `CompleteAsync` (fill-in-the-middle), `ChatAsync`, `CancelAsync`, `ListModelsAsync` | Token streams as `IAsyncEnumerable<T>`; 3 s cloud and computed local timeouts |
-| `IContextService` | VSIX to host | `SearchAsync`, `ResolveMentionAsync`, `GetIndexStatusAsync`, `PauseIndexingAsync` | Request and reply; 2 MB payload limit |
+| `IContextService` | VSIX to host | `SearchAsync`, `ResolveMentionAsync`, `GetIndexStatusAsync`, `PauseIndexingAsync`; 1.3 adds `SearchDetailedAsync`, `SetWorkspaceAsync`, `ListExcludedFilesAsync`, `RebuildIndexAsync`, `DeleteIndexAsync`, `ListIndexesAsync` | Request and reply; 2 MB payload limit |
+| `IConversationService` (1.3) | VSIX to host | `ListConversationsAsync`, `GetConversationAsync`, `CreateConversationAsync`, `RenameConversationAsync`, `DeleteConversationAsync`, `DeleteAllConversationsAsync`, `SetPinsAsync` | Request and reply; no append method, the host saves a turn as `ChatAsync` runs |
 | `IAgentService` | VSIX to host | `StartSessionAsync`, `ApproveAsync`, `DenyAsync`, `StopAsync`, `RevertAsync` | Session events as notifications |
 | `ISettingsService` | VSIX to host | `GetAsync`, `SetAsync`, `TestProviderAsync` | Request and reply; idempotent |
 | `IEditorService` | Host to VSIX | `ApplyChangesetAsync`, `ShowPreviewAsync`, `GetOpenDocumentsAsync` | Request and reply; the only file-writing path |
 | `IApprovalService` | Host to VSIX | `RequestApprovalAsync` (tool, tier, arguments, provenance, taint reason) | Request and reply; waits for the user with no timeout |
-| `IWorkspaceQueryService` | Host to VSIX | `FindReferencesAsync`, `GetDiagnosticsAsync`, `GetSymbolAsync`, `RenameSymbolAsync`, `RunTestsAsync` | Request and reply; off the UI thread; one in flight; 2 s budget |
+| `IWorkspaceQueryService` | Host to VSIX | `FindReferencesAsync`, `GetDiagnosticsAsync`, `GetSymbolAsync`, `RenameSymbolAsync`, `RunTestsAsync`; 1.3 adds `CallersOfAsync` | Request and reply; off the UI thread; one in flight; 2 s budget |
 
 - Serialiser: MessagePack over StreamJsonRpc. The VSIX binds to the StreamJsonRpc and MessagePack assemblies Visual Studio already ships rather than carrying its own.
-- Error taxonomy: `ProviderUnavailable`, `ModelNotInstalled`, `ContextOverflow`, `PolicyDenied`, `ApprovalDenied`, `HostRestarting`, `Cancelled`, each with a user-facing message and a retry hint.
+- Error taxonomy: `ProviderUnavailable`, `ModelNotInstalled`, `ContextOverflow`, `PolicyDenied`, `ApprovalDenied`, `HostRestarting`, `Cancelled`, each with a user-facing message and a retry hint. Contract 1.3 adds `StorageUnavailable` and `NotImplemented`.
 - Cancellation: every call takes a cancellation token; the host stops provider streams and child processes within 1 s of a cancel.
 - Hardening: the VSIX verifies the host binary's Authenticode signature before launch, passes the handshake token over an inherited anonymous pipe (never the command line), opens the named pipe with the current-user-only option, and the host checks that the connecting client's process id is its parent devenv.exe.
+
+> **Phase 2 note (2026-10-15, contract 1.3; work items 2.2, 2.9 to 2.15).** `ContractVersion` is 1.3. Everything below is additive, batched into one minor bump as the batching rule above and the decision of 2026-10-15 require; a 1.2 peer still passes the handshake (a 1.2 host answers a new method with method-not-found, a 1.2 client never calls it and ignores the new fields and notifications). Per-field orders are in `src/Pillion.Contracts/README.md`. Services added in phases 0 and 1 (`IInlineEditService`, `IDiagnosticsService`, `IHostLifecycleService`) are not in the table above either; that README lists them.
+>
+> | Area (work item) | Added in 1.3 |
+> | --- | --- |
+> | Conversations (2.2) | New service `IConversationService` (table above). DTOs `ConversationListRequest`, `ConversationPage`, `ConversationSummary`, `ConversationDetail`, `ConversationMessage` (role, content, model, provider, tokens, `Citations`, `Cancelled` for a reply stopped before it finished), `ConversationPin` (kind, target, display name, token count: what to resolve again, never the content), `ConversationCreateRequest`, `DeleteAllConversationsResult` |
+> | Index status and control (2.9, 2.15) | `IndexStatus` grows `Phase` (`IndexPhase`: Idle, Discovering, Hashing, Chunking, Embedding, Storing, Paused, Failed), `PauseReason` (`IndexPauseReason`: None, User, Build, Test, Debug, Battery, Memory, LowDisk), `Roots` (`IndexRootStatus[]`: root path, index id, `Role` Writer or Reader, files indexed and found, excluded and secret-bearing counts, chunks, disk bytes, last full sweep, embedding model, chunker version, schema version), `ExcludedSecretFileCount`, `LastError`, `Progress` (`IndexProgress`: files and chunks done, estimated seconds remaining). Methods `ListExcludedFilesAsync` (`ExcludedFilesRequest`, `ExcludedFilesPage`, `ExcludedFile`), `RebuildIndexAsync`, `DeleteIndexAsync`, `ListIndexesAsync` (`IndexInfo[]`) |
+> | Workspace and IDE activity (2.9, 2.10) | `SetWorkspaceAsync(WorkspaceDescription)`: solution path, project paths, opened folder; the host resolves the repository roots from it. `IdeActivity` flags (Build, Debug, Test) |
+> | Search (2.11) | `SearchDetailedAsync` returns a `SearchResponse` (results, lexical, vector, fusion and total milliseconds, `Degraded`). `SearchRequest` grows `Roots`, `Partitions`, `Languages`, `Mode` (`SearchMode`: Hybrid, Lexical, Vector, Symbol), `MaxPerFile`, `IncludeText`, `FocusFiles`; `SearchResult` grows `ChunkId`, `Breadcrumb`, `Kind`, `Partition`, `Language`, `LexicalRank`, `VectorRank`, `FusedScore`, `Text`. `SearchAsync` is unchanged |
+> | Citations and retrieval in chat (2.12) | `Citation` (zero-based `file:line` span, chunk id, breadcrumb, `ReplyOffset` or -1 for the whole reply); `ChatChunk.Citations` on the final chunk; `ChatRequest.RetrievalMode` (`Auto`, `On`, `Off`), `MaxRetrievedChunks`, `ExcludedContextKeys` (what the Context Inspector removed); `ContextReportItemDto.ContextKey`; `AutocompleteHostCounters.PromptPrefixChecks`, `PromptPrefixReuses`, `PromptPrefixReuseRate` |
+> | Mentions (2.13) | `MentionKinds` names twelve kinds on the wire (the five of 1.2 and `symbol`, `docs`, `solution`, `git`, `output`, `build`, `tests`); `MentionRequest.Qualifier` and `Arguments`; `MentionResolution.Citations`. The pane text of `@output`, `@build` and `@tests` travels in the existing `Payload` |
+> | Workspace queries (2.14) | `IWorkspaceQueryService.CallersOfAsync` (`CallersOfRequest`, `CallersOfResponse`, `CallSite`) |
+> | Notifications (not methods on an interface) | Host to client: `indexStatusChanged` (the `IndexStatus`, at most twice a second, coalesced, not replayed to a late client). Client to host, the first of their kind: `ideActivityChanged` (the `IdeActivity` set in progress, 2.9), `documentSaved` (a full path, 2.10) and `openDocumentsChanged` (the open documents' full paths, 2.10). A host without a handler drops them; its file watcher still sees the files |
+> | Error codes | `StorageUnavailable` (the Local Store cannot be opened or used: key, schema, migration, cipher) and `NotImplemented` (the method is on the contract, this host does not implement it; the message names the feature and the work item). A store that is switched off by its feature flag still answers `PolicyDenied`. Every 1.3 method is implemented by the end of phase 2 |
+>
+> Two members are declared but not driven yet: `IndexPauseReason.LowDisk` (nothing in the host raises it, so the 500 MB free-space pause in the failure table below is not implemented) and `IdeActivity.Test` (the extension reports builds and the debugger, so a test run pauses indexing only through its build).
 
 ### Failure modes and recovery
 
@@ -168,6 +188,8 @@ The contract is one versioned interface set in the shared contracts assembly. Th
 | Provider outage | The circuit breaker opens, the fallback chain is used, and the status bar shows Degraded. |
 | Index corruption or a newer schema | The host refuses to open a database written by a newer major schema and says so; a corrupt index is rebuilt in the background. |
 | Out of disk | Indexing and checkpoints pause at 500 MB free and the user is told. |
+
+> **Phase 2 note (2026-10-15, work items 2.1, 2.9, 2.15).** As built: a database written by a newer incompatible schema is refused with `StorageUnavailable` and a message naming both versions, and the file is not touched. An index that cannot be opened (missing or unreadable key, a key that does not fit, a damaged file) shows as Failed with its error in the Index window; it is not rebuilt in the background on its own, the developer chooses Rebuild or Delete there. The pause at 500 MB free disk is not implemented (see the note under the contract above). In flight, a half-written file is never visible: each file's row, chunks, vectors and symbols commit in one transaction.
 
 The host moves through five states, Starting, Ready, Degraded, Restarting and Failed, shown in the status bar and the Agent window.
 
@@ -211,6 +233,8 @@ The in-process layer is deliberately thin: it turns editor, build and test event
 | Terminal | A VT-parsed screen buffer with scrollback for the Pillion terminal, an input line for interactive prompts, and Open in Developer PowerShell. The Pillion terminal is separate because Visual Studio's integrated terminal has no public API; commands the developer runs there are not visible to `@terminal` |
 | Index | File and chunk counts, progress, pause and resume, exclusions, Rebuild, encryption status, disk use per index |
 
+> **Phase 2 note (2026-10-15, work items 2.2, 2.12, 2.13, 2.15).** The Index window shipped as designed except that it shows no separate encryption status (every index is encrypted) and its Rebuild and Delete act per root and per index folder; it has three tabs, a status bar indicator and an Indexing options page, described in [index-window.md](index-window.md). The Chat window's conversation list now reads the host's saved conversations (they survive a restart), replies cite `file:line` spans (explicit citations are links that select the span, implicit ones sit under a collapsed Sources line), and the Context Inspector can remove a retrieved chunk or the repo map before sending. The Terminal and Agent windows are later phases.
+
 All windows are WPF, themed from Visual Studio's colour resources. Markdown renders through Markdig with remote images disabled and links opened only after confirmation; code blocks render in embedded editor views so they get native colourisation and a one-click Insert at cursor.
 
 ### Changeset preview and apply (F3)
@@ -231,6 +255,8 @@ All windows are WPF, themed from Visual Studio's colour resources. Markdown rend
 | Document opened, saved, closed | Running Document Table events | Incremental re-index of saved files; open-document context |
 | Symbols and references | The live Roslyn workspace, queried by the host through `IWorkspaceQueryService` off the UI thread within a 2 s budget | `@symbol`, `find_references`, `callers_of`, `rename_symbol`, citations |
 | Output window panes | Build, Debug and Tests panes | `@output` pin |
+
+> **Phase 2 note (2026-10-15, work items 2.9, 2.10, 2.13, 2.14).** The signals the indexer uses reach the host as contract 1.3 notifications: builds and the debugger as `ideActivityChanged`, saves as `documentSaved`, the open documents as `openDocumentsChanged`. Test Explorer has no hook, so a test run pauses indexing only through its build, and `@tests` pins the Tests pane's text. The workspace-query budgets (one in flight, 2 s, at most five a second) are enforced in the VSIX; over the concurrency or rate limit a call fails at once with `Cancelled`, and one that reaches 2 s returns what it found marked truncated.
 
 ### Commands and default shortcuts
 
@@ -281,6 +307,8 @@ The Model Gateway is the only component that talks to a language model. It offer
 | Mistral | HTTPS | Yes | Codestral FIM through a dedicated adapter (not an OpenAI-compatible endpoint) | Yes | Varies | No |
 | OpenAI-compatible cloud gateways (OpenRouter, enterprise proxies) | HTTPS `/v1` | Yes | Chat-framed only | Varies | Varies | No |
 | Bundled ONNX embedding model | In-process ONNX Runtime | No | No | Yes | No | Yes |
+
+> **Phase 2 note (2026-10-15, work items 2.6, 2.7).** The embedding column is implemented for Ollama (`/api/embed`), OpenAI-compatible servers, Mistral, Azure OpenAI, Gemini (`embedContent`, `batchEmbedContents`) and the bundled ONNX provider. Anthropic has no embeddings endpoint. The `Embedding` task class stays local: `cloudSwitches.embedding` is off by default, Local-only always wins, and under Auto a cloud embedding model is used only when a profile or the request names one. The catalog's provider order tries the bundled model first, whether or not an Ollama embedding model is installed (provisional until the default is decided, issue #95). An Ollama embedding model is loaded with a small `num_ctx` and never pushes a resident chat or completion model off the GPU; when it would, it runs on the CPU.
 
 ### Task classes, profiles and the Auto policy
 
@@ -363,6 +391,17 @@ The Context Engine maintains a local, encrypted index of the repository and answ
 6. **Store.** One encrypted SQLite database per repository root (schema in section 10).
 7. **Watch.** A file-system watcher on repository roots with 500 ms debounce, save events relayed from Visual Studio, and a watch on the real git directory's `HEAD` (resolved through worktrees and submodules) for branch switches. Indexing pauses during builds, test runs and debugging, and on battery saver.
 
+> **Phase 2 note (2026-10-15, work items 2.3 to 2.5, 2.9, 2.10): the pipeline as built.** The seven steps ran as designed; these are the differences and the details the design left open.
+>
+> - **Discover.** Roots come from the git top-level of each project path the extension relays (a linked worktree's or submodule's `.git` file is followed to the real git directory) or from the opened folder; a nested repository is indexed under its own root. Thirteen rules apply in a fixed order and each excluded path keeps its reason (full table in `src/Pillion.Indexing/README.md`, user view in [pillionignore.md](pillionignore.md)): reparse points are never followed; secret-bearing names come first (`.env`, `.env.*`, `*.pfx`, `*.pem`, `*.key`, `*.p12`, `secrets.json`, `appsettings.*.json`, `*.publishsettings`, `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `*.ppk`, `*.jks`, `*.keystore`, `.netrc`, `.pgpass`) and such a file is never opened, hashed or stored; then `.gitignore` at every level, the root `.pillionignore`, built-in names, the `indexing.exclude` setting and the policy `exclude`, generated and minified names and lock files, the 1 MB cap, generated headers in the first 2 KB, and binary detection (a NUL byte in the first 8 KB). **The `packages` built-in is narrower than the design's list:** it excludes only a folder at the repository root that looks like a NuGet packages folder (a `repositories.config`, or a `*.nupkg` one or two levels down); any other `packages` folder is source. **A `!` rule in the root `.pillionignore` re-includes** a built-in name (`!packages/`, `!bin/`; not `.git`) and anything `.gitignore` ignored; `indexing.exclude` and the secret list cannot be opted back in to. The gitignore syntax is Pillion's own implementation, compiled to string comparisons or non-backtracking regular expressions, so a hostile pattern cannot slow matching down.
+> - **Hash.** `XxHash64` from `System.IO.Hashing`. A file whose size and modified time match its stored row is not even opened; a row written within 2 seconds of its file's time is hashed again (git's "racily clean" rule). A branch switch is a sweep of this kind, never a rebuild.
+> - **Parse and chunk.** The tree-sitter grammars come through the **TreeSitter.DotNet** 1.3.0 binding (MIT, prebuilt win-x64 and win-arm64 native libraries; the project copies the 12 libraries the chunkers load). The binding ships no SQL grammar, so SQL is chunked by Pillion's own statement lexer. Razor is split into its C# and markup parts. A parse that fails badly (Roslyn: more than one syntax error per 20 lines; tree-sitter: more than 30% of the text in error nodes) falls back to the 60-line window. The chunk cap is the smaller of the model's own input size and 512 tokens, counted in the model's tokenizer with the breadcrumb included. `ChunkerVersion` is part of the index identity.
+> - **Extract symbols.** A definition's id is a hash of path, container, name, kind and **overload ordinal** (no line number), so an edit that moves a definition keeps its id and the edges other files hold to it. `symbols_version` is stored separately from `chunker_version`: when only symbol extraction or resolution changes, the symbols are rebuilt without re-chunking or re-embedding. References are resolved by name and marked approximate; an ambiguous reference becomes one edge per candidate (at most five) flagged ambiguous, and more candidates give none.
+> - **Embed.** Batches of 32 through the Model Gateway, the model pinned by id so one index never mixes models; a failed batch is retried three times (1, 2 and 4 s) before the run stops as Failed with the files already stored kept. Under memory pressure (`indexing.maxMemoryMb`, 1,536 by default) the host compacts once, halves the batch (32, 16, 8, 4), then pauses; it resumes below 90% of the cap. The ONNX Runtime memory pattern is off on the CPU and a run is capped at 512 x 512 attention cells, which cut peak memory from over 2 GB to about 315 MB on this repository and made it about 50% faster.
+> - **Store.** One transaction per file holds its row, chunks, FTS5 rows, vectors and symbols. After the first stored batch, and then at most every `max(10 s, 10 x the last refresh)`, the symbol graph and the in-memory vector copy are refreshed, so partial results are searchable while the run goes on (first results after 2.5 to 9.5 s in the Gate 2 runs).
+> - **Watch.** A recursive `FileSystemWatcher` per root this host owns feeds a queue with the 500 ms debounce (a burst is handed over together after at most 1 s); events are filtered by the discovery rules first, so changes under `bin`, `obj`, `.git` or an ignored folder cost a string check. A watcher on the real git directory sees `HEAD` and `index.lock`: when git is done and the directory has been quiet for 300 ms, a changed checked-out commit asks for a hash sweep. The `documentSaved` notification hands a saved file to the incremental indexer at once, bypassing the debounce; its chunks whose breadcrumb and text did not change keep their stored vectors (in every run, full or incremental), the new ones are embedded in batches of 8 while the 500 ms budget lasts, and a large new file is searchable lexically at once and by vector in part, the rest following right after. `openDocumentsChanged` lets a branch-switch sweep index the open documents first. If the watcher fails, the root is swept again and the watcher is retried every 5 minutes.
+> - **Pauses and priority.** Pipeline work runs on half the logical processors at below-normal priority. Pause reasons are reported in the order User, Memory, Build, Test, Debug, Battery, LowDisk when several hold; the host honours Test but the extension never reports it, and nothing raises LowDisk (see the note under the contract in section 4). Battery saver is read every 15 s and `indexing.pauseOnBattery` is on by default.
+
 ### Embedding models (F6)
 
 | Model | Parameters | Dimensions | Approximate size | Role |
@@ -374,6 +413,22 @@ The Context Engine maintains a local, encrypted index of the repository and answ
 
 Switching embedding models re-embeds the whole index in the background; the old index serves queries until the new one completes. The shipped default is confirmed by the retrieval benchmark in section 15.
 
+> **Phase 2 note (2026-10-15, work items 2.6, 2.7, 2.16, 2.17): models as built and measured.**
+>
+> - **What ships.** The bundled provider runs ONNX Runtime 1.24.4 (the DirectML package, which carries both the CPU and the DirectML execution providers) in the host. `bge-small-en-v1.5` (`model_quantized.onnx`, 34.0 MB, 384 dimensions, 512 WordPiece tokens, CLS pooling, MIT) is in the VSIX under `Host\models\`. `multilingual-e5-small` (118.3 MB, mean pooling) and `jina-embeddings-v2-base-code` (161.9 MB, 768 dimensions, Apache-2.0, input capped at 2,048 tokens) are downloaded on request from pinned URLs and verified by SHA-256 and size against a manifest compiled into `Pillion.ModelGateway.dll`; nothing is fetched under Local-only. The optional FP16 graph of bge-small (66.7 MB) is not bundled. Ollama's `qwen3-embedding:0.6b` works through the Ollama adapter; `nomic-embed-text` was not run (not pulled on the reference machine).
+> - **Switching models.** The model id is part of the index identity, so a different model opens a different index and builds it from scratch; the design's rule that the old index serves queries until the new one completes is not implemented as a separate behaviour. The old index goes away through retention or from the Index window.
+> - **Measured baseline** (work item 2.16, hybrid mode, 60 hand-checked queries over this repository's `src`, 601 indexed files, about 10,000 chunks; reference machine, 2026-10-15; bundled models on the CPU, qwen3 on the GPU; one query is 1.7 points, so one or two queries are within noise):
+>
+> | Model | Recall@10 by file | MRR by file | Recall@10 by symbol | Query p50 / p95 | Index time |
+> | --- | ---: | ---: | ---: | ---: | ---: |
+> | bge-small-en-v1.5 (bundled) | 0.967 | 0.831 | 0.750 | 12 / 16 ms | 259 s |
+> | qwen3-embedding:0.6b (Ollama, GPU) | 1.000 | 0.814 | 0.700 | 28 / 33 ms | 356 s |
+> | jina-embeddings-v2-base-code | 0.967 | 0.826 | 0.783 | 23 / 31 ms | 852 s |
+> | multilingual-e5-small | 0.950 | 0.764 | 0.767 | 11 / 14 ms | 328 s |
+>
+> The int8 loss against float32 is 0.0 points for all four models (file MRR moved by at most 0.008), well inside the 2 points. Every model clears the proposed 0.85 gate on this set; the 0.90 target for the code model cannot be judged until it runs on the three external fixture repositories (issue #50). **The default is not changed by this note**: the catalog still tries `bge-small-en-v1.5` first and the choice waits on the product owner (issue #95; the lead's recommendation is to keep bge-small as the default and the others selectable).
+> - **DirectML.** The int8 graph does accelerate under DirectML, contrary to the design's expectation: in the isolated benchmark of full 512-token batches it ran at 55.2 chunks/s against 14.1 on the CPU (3.9 times; work item 2.7 measured about 62 against about 9, issue #78). In the indexing pipeline on real code it did not help: 33.6 chunks/s against 45.2 on the CPU (5.20 against 3.86 minutes per 100,000 lines) and only 8% faster on generated code; the likely cause is the attention-cell cap set for the CPU's memory, which splits mixed-length chunks into many small runs that DirectML pays dispatch for. The FP16 graph was not measured in the pipeline. DirectML ships under Microsoft's own terms with a data-collection clause; whether it stays the default is issue #78.
+
 ### Storage
 
 - **Lexical:** FTS5 with a custom tokenizer that splits camelCase and snake\_case while also keeping the whole identifier as a token; BM25 ranking.
@@ -381,6 +436,13 @@ Switching embedding models re-embeds the whole index in the background; the old 
 - **Symbols:** `symbols` and `symbol_refs` tables. The repo map ranks files and symbols by PageRank over the reference graph and renders the top of the ranking as a compact outline.
 - **Encryption:** an in-house SQLite3MultipleCiphers build (MIT) with sqlite-vec statically linked, for x64 and Arm64, because the free SQLCipher packages for .NET are deprecated. Each database has its own 256-bit key, protected with Windows DPAPI for the current user and stored beside the database under `%LOCALAPPDATA%` with a user-only ACL. The same build encrypts conversations and checkpoints. This protects data at rest against other OS users, lost disks and backups; it does not protect against software running as the developer.
 - **Ownership:** one writer per database, elected through a lock file (section 10).
+
+> **Phase 2 note (2026-10-15, work items 2.1, 2.5, 2.8; decisions of 2026-10-15 in the log): storage as built. The Lexical, Vector and Encryption bullets above changed.**
+>
+> - **Lexical.** FTS5 with the stock `unicode61` tokenizer (`tokenchars '_'`) and BM25 (`bm25(chunks_fts, 1.0, 0.5)`), not a custom tokenizer, which would have needed native C code in the SQLite build. Identifier splitting happens **at write time** into a second FTS5 column, `identifiers`, beside the column that keeps the whole identifier (`get_order_total` stays one token in `text` while `identifiers` holds `get order total`); splitting breaks on underscores, lower-to-upper changes, the end of an acronym (`HTTPServer`) and letter-digit changes. A query is split the same way. For questions (not search-as-you-type) the last token is not a prefix and terms found in at least half the chunks are left out, because BM25 gives them no weight and ranking them is expensive (hybrid p50 157 ms before that change and 40 ms after, on the 100,000-chunk benchmark).
+> - **Vector: no sqlite-vec in phase 2.** Vectors are int8 blobs in a plain `chunk_embeddings` table (with the language and partition columns for scoping). Search is managed code (AVX2 or 128-bit SIMD, brute force) over an in-memory copy of the vectors behind `IVectorIndex`, used while the copy fits 64 MiB (about 170,000 chunks at 384 dimensions) and reloaded when a generation counter moves (about 0.8 s per 100,000 chunks); beyond that, or when asked, a table scan reads and decrypts the rows on every search (`TableScanVectorIndex`). The copy holds vectors only, never text, and is never written to disk. Measured on 100,000 chunks of 384 dimensions with k = 50: in-memory p50 3 ms, p95 3.4 ms; table scan p50 about 400 ms; sqlite-vec 0.1.9 p50 about 205 ms, because every page is decrypted on read, against the 100 ms query budget, and it kept a second copy of every vector (about 450 bytes a chunk), which put the index over its 1.5 KB budget. sqlite-vec also has no Windows Arm64 build. Its implementation is kept in the history at commit `6a487f9`; an HNSW or sqlite-vec backend can return behind `IVectorIndex` for indexes beyond the cap. The design's "adequate to about 500,000 chunks" was not measured; the in-memory path is capped at about 170,000 chunks. A `vec_float32` table holds the float32 vectors for the int8 recall-loss measurement; it is development only and is dropped before release.
+> - **Symbols.** `symbols` and `symbol_refs` as designed, with stable ids (overload ordinal, no line) and `ambiguous` and `candidates` columns on the references. The repo map is a weighted PageRank (damping 0.85) over the symbol graph and the file graph, multiplied by `1 + ln(1 + n)` for the number of other files that refer to a definition, rendered within a token cap in the injected counter.
+> - **Encryption.** The maintained `SQLitePCLRaw.bundle_e_sqlite3mc` 2.1.11 (SQLite3 Multiple Ciphers 2.1.0 on SQLite 3.49.1, ChaCha20-Poly1305, MIT) through `Microsoft.Data.Sqlite.Core`, **not** an in-house build: it ships the same cipher the design chose and x64 and Arm64 binaries, and a native build pipeline is a phase of work of its own. The in-house build moves to phase 5, when the Arm64 host is built, if the bundle still lacks what is needed. Only the `.Core` package is referenced so that no plain `e_sqlite3` is ever loaded. Keys are as designed: 256 bits per database, DPAPI for the current user, a user-only ACL on the key file; the key is applied as the first statement on every connection and anything but an `ok` answer stops the open, so a database is never created unencrypted. Temporary tables are kept in memory and freed pages are zeroed (`secure_delete`). Conversations are encrypted (work item 2.2); checkpoints do not exist yet. Chunk text is stored only inside the encrypted database. Gate 2 checked at rest: plain `sqlite3` reports "file is not a database" for `index.db` and `conversations.db`, the key files carry one access rule for the current user, and a sentence only the indexed code held was found in none of 162 files under `%LOCALAPPDATA%\PillionProgrammer`.
 
 ### Hybrid retrieval (F4)
 
@@ -391,6 +453,16 @@ Switching embedding models re-embeds the whole index in the background; the old 
 5. **Answer with citations.** The model receives the chunks with `file:line` spans and the repo map, and must cite them; citations in the reply are clickable and open the location.
 
 Architecture questions ("how does the order service reach the payment gateway?") add the reference graph: the model calls `find_references` and `callers_of` iteratively. For C# and VB those calls go to the live Roslyn workspace through the VSIX, off the UI thread, within a 2 s budget, and fall back to the index's approximate edges; for other languages the index answers directly.
+
+> **Phase 2 note (2026-10-15, work items 2.11, 2.12, 2.14): retrieval as built.** The five steps are implemented as `HybridRetriever` (Context Engine) behind `features.retrieval`, with these specifics.
+>
+> 1. **Understand the query.** Identifiers are split exactly as the lexical index splits them (camelCase, snake\_case, acronyms, letter-digit); qualified names (`OrderService.Place`, `ns::Type`), file names and symbol candidates are detected; the lexical query drops English stop words.
+> 2. **Gather candidates.** Three legs run together on the thread pool: lexical (top 50 by BM25 per index), vector (the question embedded once per model and vector size and cached for 60 s, then the top 50 by cosine similarity per index, filtered by partition and language) and symbols (exact name hits, ordinal; a qualified name also by its container; types and callables ahead of fields, at most 5 definitions per name and 20 hits). Each search has a time budget, 300 ms by default; the legs get 80% of it, a leg still running then is abandoned and the response is marked `Degraded` with a reason per leg. A request can run one leg alone (`Mode` Lexical, Vector or Symbol).
+> 3. **Fuse.** Reciprocal Rank Fusion, `1 / (60 + rank)`, over the three lists. The boost for open and recently edited files adds `1 / (60 + n)` for a candidate in the n-th focus file (files the question names first, then the request's focus files, most recent first); it reorders what the legs found and never adds chunks. The cross-encoder reranker does not ship: `features.reranker` is off by default and, on or off, the fused order is kept until the licence review in section 18 has happened.
+> 4. **Expand.** Best first, up to `MaxResults` (10 by default, at most 100): a hit grows to its full member (all parts of a split unit) and then one neighbouring chunk on each side while the span stays within 1,024 tokens; a hit whose own chunk is already shown is dropped, overlaps are trimmed, and at most 3 hits come from one file by default.
+> 5. **Cite.** Results carry zero-based `file:line` spans (the contract) and an opaque chunk id. In chat the cited chunks are the ones sent: an explicit `path:line` or `path:start-end` reference in the reply that falls inside a sent chunk becomes a citation positioned in the text, and when the reply names none, every sent chunk is cited as a whole-reply (implicit) citation.
+>
+> Query text is never logged. Retrieval reads the indexes the pipeline has open (`LiveIndexCatalog`) and, for roots it does not have open, other index folders on the machine read-only. **Known defect (Gate 2 open issue 3):** with no roots in the request, retrieval asks for every index on the machine, so a chat can cite and send code from another repository; chat retrieval should be scoped to the workspace's roots.
 
 ### Context pinning with @-mentions (F5)
 
@@ -410,6 +482,8 @@ Grammar: `@` followed by a fuzzy name resolves to a file, folder, symbol or docu
 
 Pins persist for the conversation, each showing its token count. Pinning an excluded secret file needs per-file approval, and its content never goes to a cloud model without confirmation. In chat, the Context Inspector lists the fully assembled context before sending, with a remove button per item; every request from every task class is recorded in the Outbound log (section 12).
 
+> **Phase 2 note (2026-10-15, work items 2.13, 2.2): mentions as built.** Twelve kinds resolve: `file`, `folder`, `symbol`, `docs`, `solution`, `git`, `output`, `build`, `tests`, `selection`, `clipboard` and `errors`. **`@terminal` is not among them**: it waits for the Command Runner in phase 3 and answers "not available in this version". A bare `@name` tries a file, then an exactly named symbol, then a folder; `@kind:value` names the kind and has no fuzzy fallback; a colon only starts a value after a known kind, so `@C:\src\Foo.cs` is one name. `@file` and `@folder` read the open index's `files` table (fuzzy matched, folder outlines from the symbol graph) and fall back to the client's file list when there is no index or no strong match, because the index leaves out secret files that still need to resolve for approval. The pane text of `@output`, `@build` and `@tests` is sent by the VSIX (at most the last 65,536 characters of the pane) and the host keeps its tail within the token limit and cites the files and lines the diagnostics and stack traces name. Caps when a request sets none: 12,000 tokens for `@file`, `@folder`, `@selection`, `@clipboard` and `@errors` (files are read up to 1 MiB; a folder outline lists up to 200 files), 6,000 for `@symbol` (the definition may take 70% of it; up to 50 reference sites asked for, 30 listed), 8,000 for `@docs` and `@git`, 4,000 for `@solution`, `@output`, `@build` and `@tests`; `@git:log` lists 10 commits by default and at most 50, and a git mention gathers at most 400,000 characters and 300 files. Approval: a file the `indexing.exclude` globs or the host's secret-file rules refuse (`.env`, `.env.*` except examples, `*.pfx`, `*.p12`, `*.pem`, `*.key`, `*.jks`, `*.keystore`, `secrets.json`, anything under `.ssh`, `.aws` or `.gnupg`, and `appsettings.*.json` that mentions `ConnectionStrings` or `Password`) comes back unresolved and `RequiresApproval`; the client asks and sends the mention again with `ApprovedSensitive`, and an approved file is marked sensitive so context assembly never sends it to a cloud model. `@git` lists such files without their changes, passes every patch through the secret scanner and `@symbol` shows no reference snippet from them. Pins are saved with the conversation as `kind`, `target`, `display name` and token count, and resolved again when the conversation is reopened; the content is never stored. User view: [mentions.md](mentions.md).
+
 ### Context assembly
 
 - Budget = model context window, minus an output reserve (default 4,000 tokens), minus the system prompt.
@@ -417,11 +491,15 @@ Pins persist for the conversation, each showing its token count. Pinning an excl
 - Per-item caps apply; a large file is reduced to its outline plus the relevant regions; history over budget is compressed into a rolling summary by the Summarise task class.
 - Token counts come from Microsoft.ML.Tokenizers for OpenAI- and Llama-family tokenizers, and from a calibrated estimate with a 10% safety margin for others.
 
+> **Phase 2 note (2026-10-15, work item 2.12).** The priority order is as designed, and the retrieved chunks and the repo map are wired to retrieval. Caps as built, each taking what it needs from what is left: rules 10% of the budget, each pin 25%, the current file region 15%, retrieved chunks 20% in all and 8% each, the repo map 10%, then history. A chat asks for 8 retrieved chunks by default (at most 20), found with the user's latest message plus the identifiers of pinned selections, focused on the current and pinned files; chunks of a pinned file are left out; the result is kept for 30 s per request so fallback models and the Context Inspector do not search again. Retrieval is asked only when an index is open (`RetrievalMode` `Auto`). The Context Inspector removes a retrieved chunk or the repo map by key and the host leaves it out of the send. Measured through the IDE on a 121,001-chunk index (2026-10-15, reference machine): p50 53 ms, p95 160 ms with 8 retrieved chunks and the repo map (Visual Studio 2022 17.14: 70 and 176 ms); see section 13.
+
 ### Autocomplete prompt budget
 
 - At most 1,024 prompt tokens on CPU and 2,048 on GPU or in the cloud, including prefix and suffix; the suffix is trimmed before the prefix.
 - At most three retrieved snippets, placed before the file prefix and kept stable across keystrokes, so a resident local model reuses its cached prefix.
 - No rules injection. The cache hit rate and the prompt-evaluation time are measured in the performance suite (section 15).
+
+> **Phase 2 note (2026-10-15, work item 2.12).** The snippets come from `AutocompleteSnippetProvider` and use the **LexicalAndSymbol** retrieval mode: the lexical and symbol legs only, with no query embedding. Embedding the question with the bundled model on the CPU takes longer than the 100 ms budget the snippet search has, so the vector leg is left out here. The query is the enclosing declaration plus the identifiers on the caret's lines, open documents are the focus files, chunks of the current file are excluded, at most three come back, and a degraded search gives none. Snippets are chosen once per document and enclosing member and reused for every keystroke in it until the declaration changes or 30 s pass (one search in flight per member, detached from the keystroke's cancellation), so the prompt prefix stays the same; the gateway caches completions per snippet set. Inline edits get related code the same way (at most four chunks, none overlapping the scope). Measured with retrieval on (Gate 2, 2026-10-15): 7B time to suggestion p50 217 ms, p95 521 ms (Gate 1: 184 to 277 and 421 to 498 ms), prompt-prefix reuse 59% (13 of 22 requests) for the 7B and 61% for the 1.5B against the 70% target (issue #47 stays open), and keystroke latency with autocomplete on +0.14 ms p50 and +4.17 ms p95 on 18.11 against the +2 ms budget (+0.96 ms on 17.14, which passes).
 
 ## 8. Agent Runtime: tools, permissions and self-healing
 
@@ -563,17 +641,45 @@ All persistent state lives under the user's profile, owned by the host, in encry
   prompts\*.md                    custom slash commands
 ```
 
+> **Phase 2 note (2026-10-15, work items 2.1, 2.3, 2.7).** As built, the phase 2 part of the layout is:
+>
+> ```
+> %LOCALAPPDATA%\PillionProgrammer\
+>   conversations.db                encrypted SQLite (SQLite3 Multiple Ciphers), WAL
+>   conversations.db-wal, -shm      SQLite's WAL and its index while the database is open (the WAL is encrypted too)
+>   conversations.key.bin           the database key, DPAPI-protected for the current user, user-only ACL
+>   conversations.db.v<n>.bak       a byte copy of the still encrypted file, made before migrating from schema <n>
+>   models\<model-id>\              models downloaded on request, verified against the manifest
+>   index\<index-id>\
+>     index.db, key.bin             encrypted SQLite and its own DPAPI-protected key (one key per database)
+>     writer.lock                   JSON: process id, process start time, pipe name, acquisition time, token
+>     state.json                    plain text on purpose (paths and versions, never code): root path, embedding model,
+>                                   chunker version, schema version, created, last opened, last full sweep
+> <install folder>\Host\models\<id>\   the bundled embedding model, shipped in the VSIX
+> ```
+>
+> The conversations key is named after its database (`conversations.key.bin`) because the data root can hold several databases and every database has its own key; an index folder holds one database, so its key is the plain `key.bin`. Only the index's owner writes `state.json`, atomically (temporary file, then a replacing move); the Index window and retention list indexes from it without opening a database. The audit trail, checkpoints, the ledgers, changesets and the apply journal arrive with the agent phases; `conversations.db` holds conversations, messages, pins and the Outbound log today.
+
 ### Index identity and ownership
 
 - An index is keyed by repository root (the git top-level directory, or the opened folder), embedding model and chunker version, and is shared by every solution under that root. A solution maps to the set of roots its projects live in and queries their union, which also covers folder mode and solutions that span several repositories.
 - The first host to open an index takes `writer.lock` and runs the indexer and the watcher; other hosts open the database read-only and send update requests to the writer over the pipe named in the lock. A stale lock (dead process id) is reclaimed.
 - Indexes whose root no longer exists, or that have not been opened for 30 days (configurable), are deleted; the Index window shows disk use per index.
 
+> **Phase 2 note (2026-10-15, work items 2.3, 2.9, 2.10, 2.17): identity and ownership as built.**
+>
+> - **Identity.** `<index-id>` is 32 lower-case hex digits: the first 16 bytes of SHA-256 over the text `pillion-index-v1`, the normalised root (full path, lower-cased, `\` separators, no trailing separator; links and 8.3 names are not resolved), the embedding model id and the chunker version, joined with U+001F. Change any of them and the index is a different one in a different folder.
+> - **The lock.** `writer.lock` is written to a temporary name and moved into place without overwriting, so exactly one process wins. A lock is stale when its process id does not exist, when the id exists but the process started more than 2 seconds away from the recorded start time (the id was reused), or when the file cannot be parsed; a lock that cannot be read right now (a scanner has it open) is never stale. A stale lock is reclaimed under a short-lived guard file that the OS deletes when its handle closes, so two hosts cannot each delete the other's fresh lock. Before every run the writer checks that the lock still carries its token and, if not, closes the root and opens it again, as a reader if another live host owns it.
+> - **Readers do not forward.** The design said readers send update requests to the writer over the pipe named in the lock. That needs a host-to-host handshake (the pipe and its token are bound to the owner's own extension) that does not exist. A host that opened an index read-only does not index it, does not watch it and forwards nothing; it still searches it; it checks every 30 s whether the owner is alive and, when the owner is gone, reclaims the stale lock, becomes the writer and runs a full sweep, which picks up whatever changed in between. A rebuild requested on a reader is refused with `PolicyDenied` naming the other instance. A save in a Visual Studio that only reads the index reaches the owner through the owner's file watcher (500 ms debounce), not the save path, so only the save path's head start is lost. Gate 2: with two Visual Studio instances on one folder there was one `writer.lock` owner; after the owner's Visual Studio and host were killed hard, the other host took the index over after 14.3 s. Forwarding can still come through the same endpoint later.
+> - **Retention.** The rule is implemented as a library (`IndexRetention.SweepAsync`: delete an index whose root no longer exists or whose last use, the latest of `state.json`'s last-opened time and the modification times of `index.db`, its WAL and the lock, is older than `indexing.retentionDays`, 30 by default, 0 turns the age rule off). It never deletes an index whose lock belongs to a live process, a root on a drive or share that is not available now, or a folder whose name is not a 32-digit hex id. **The host does not run the sweep on a schedule yet**: stale indexes are listed in the Index window (with disk use and "Root is gone") and deleted there on request (Gate 2 open issue 4). The `retentionDays` setting and the Indexing options page are in place for when it does.
+
 ### Concurrency and versions
 
 - Every database runs in WAL mode with a busy timeout and a single writer queue per process.
 - `meta` holds `schema_version` and `min_reader_version`. A host refuses to open a database written by a newer major schema and says so; migrations back the file up first. This is what lets Visual Studio 2022 and 2026 installs with different extension versions share data.
 - `settings.json` is written atomically (temp file and rename), preserves unknown keys, and carries a `version` field.
+
+> **Phase 2 note (2026-10-15, work item 2.1).** The Local Store is the `SQLitePCLRaw.bundle_e_sqlite3mc` package (section 7), not an in-house build. Each database has one writer connection per process (one write at a time, each in its own `BEGIN IMMEDIATE` transaction) and up to four pooled read-only connections; the busy timeout is 5 s and keying a connection costs about 40 ms. Migrations run inside `BEGIN IMMEDIATE`: a `min_reader_version` newer than this build refuses the file with `StorageUnavailable` and does not touch it; a newer `schema_version` whose `min_reader_version` this build satisfies opens as is; an older one is copied to `<file>.v<old>.bak` (and its WAL) and migrated in the same transaction, and a failure rolls back and leaves the file at its old version. A migration that only adds (a table, a nullable column, an index) keeps `min_reader_version`, so Visual Studio 2022 and 2026 with different extension versions keep sharing the file. A host that does not own an index opens it read-only (no key is created, no migration runs, an older schema is refused).
 
 ### Index schema
 
@@ -587,10 +693,22 @@ All persistent state lives under the user's profile, owned by the host, in encry
 | `symbol_refs` | from\_symbol\_id, to\_symbol\_id, file\_id, line, kind | Name-based reference edges for the repo map and `callers_of` |
 | `meta` | key, value | `schema_version`, `min_reader_version`, embedding model id, vector dimensions, chunker version |
 
+> **Phase 2 note (2026-10-15, work items 2.3, 2.5, 2.8, 2.9): the index schema as built.** `index.db` is at schema version 3, in three migrations, each chained after the one before (earlier SQL is never edited):
+>
+> | Version | Work item | What it adds | `min_reader_version` |
+> | --- | --- | --- | --- |
+> | 1 | 2.3 | `files` (id, path relative with `/` and unique without regard to case, language, partition, hash as the signed 64-bit integer with the xxHash64 bits, size, mtime, indexed\_at) and `meta`; `meta` rows `embedding_model`, `chunker_version`, `root_path` | 1 |
+> | 2 | 2.8 | `chunks` (id never reused, file\_id cascading from `files`, start\_line, end\_line, kind, breadcrumb, text, token\_count); `chunks_fts` (FTS5, contentless with `contentless_delete`, rowid = chunk id, columns `text` and `identifiers`); `chunk_embeddings` (chunk\_id, language, partition, int8 embedding); `vec_float32` (development only); `vec_generation` (one counter bumped by triggers on every change to `chunk_embeddings`); `symbols` and `symbol_refs`; triggers so a deleted `files` row removes its chunks, FTS5 rows, vectors and symbols | 2 |
+> | 3 | 2.5 | `symbols` and `symbol_refs` recreated: `symbols.id` is the extractor's stable id (a plain integer key), `symbol_refs` gains `ambiguous` (0 or 1) and `candidates` (at least 1) and `from_symbol_id` may be null for file-level code; the migration clears `symbols_version`, so the symbols of a migrated index are rebuilt | 2 |
+>
+> The designed `chunk_vectors (vec0)` table does not exist (section 7): `chunk_embeddings` holds the vectors. `meta` additionally holds `vector_dimensions` (fixed by the first vector stored), `symbols_version`, `embedding_tokenizer`, `embedding_max_tokens` and `chunk_max_tokens`, written by the owner at the end of a run. A chunk's `text` column holds the chunk text only; the FTS5 `text` column holds the breadcrumb, a line break and the text.
+
 ### Conversations, journal and audit trail
 
 - `conversations.db` holds conversations, messages (role, content, model, tokens in and out, cost), pins, agent ledgers, changesets (per-file diff, applied flag, checkpoint id), the apply journal (intent, committed, aborted) and the Outbound log (time, provider, model, task class, files and line spans, token counts, redactions applied).
 - Each audit record is one JSON line: timestamp, session, tool, tier, provenance, arguments after redaction, approval (automatic, user or denied, with any taint reason), result summary, duration, exit code, changeset hash, and the hash of the previous record, so tampering is detectable. The file exports in a form SIEM tools ingest.
+
+> **Phase 2 note (2026-10-15, work item 2.2): conversations as built.** `conversations.db` is at schema version 2 with `conversations` (id, title, created, updated, model), `messages` (id, conversation, role, content, model, provider, tokens in and out, cost, created, `citations` as JSON, `cancelled`), `pins` (conversation, kind, target, token count, `ordinal`, `display_name`) and `outbound_log` (every field of the gateway's in-memory record plus `spans`); schema 2 only adds, so `min_reader_version` stays 1. Pins hold what to resolve again, never the content. A reply is written once, when its stream ends, with the final chunk's citations; a reply stopped by Stop or a lost connection is written with what had arrived and `cancelled` set (and not at all when nothing had arrived); a reply that failed is not saved, but the user's message stays so Retry does not repeat it; a storage failure never fails the chat. The Outbound log is queued (5,000 records at most) and written by one background task, so a request never waits for the disk; autocomplete cache hits never reached a model and stay in the in-memory log only, so after a restart the view has none from before. Inline edits are not saved. Ledgers, changesets and the journal are not in the schema yet; the audit trail is phase 3.
 
 ### Settings and precedence
 
@@ -609,6 +727,8 @@ All persistent state lives under the user's profile, owned by the host, in encry
 | Audit trail | 90 days by default; exportable |
 | Browser profiles | Deleted when the session ends |
 | Index | Until its root disappears, it goes unused for 30 days, or it is rebuilt |
+
+> **Phase 2 note (2026-10-15, work items 2.1, 2.2, 2.15).** Conversations and the Outbound log are kept until the user deletes them, as designed: **Delete all** on the Privacy options page (after a confirmation) empties every table, compacts the file with `VACUUM` so the freed pages go too, deletes the migration backups and clears the in-memory Outbound log; settings and the code index are not touched. A conversation can also be deleted from the Chat window's list. The index rule is implemented but not scheduled (see the retention note in "Index identity and ownership"). Logs, crash dumps, checkpoints, the audit trail and browser profiles are not phase 2 data. The indexing options (`indexing.exclude`, `indexing.maxMemoryMb`, `indexing.pauseOnBattery`, `indexing.retentionDays`) are in `settings.json` and on the Indexing options page; `mentions.docsFolders` lists extra documentation folders for `@docs`.
 
 ## 11. Offline operation
 
@@ -719,45 +839,47 @@ The budgets below are release gates measured by the performance suite in section
 
 ### Latency budgets
 
-| Operation | Target p50 | Target p95 | Notes |
-| --- | --- | --- | --- |
-| Autocomplete, cloud Fast profile | 400 ms | 1,000 ms | First visible suggestion after the 200 ms debounce; prompt within 2,048 tokens |
-| Autocomplete, resident local 7B FIM model on the reference GPU | 300 ms | 800 ms | Prompt within 2,048 tokens with a cached prefix. CPU-only 1.5B model within 1,024 tokens: 600 ms and 1,500 ms |
-| Autocomplete hard timeout, cloud | 3 s |  | Suggestion dropped silently; local requests show progress instead of failing |
-| Cold load of a local model |  | 10 s | Shown as progress; the residency policy keeps it rare |
-| Chat first token, cloud | 1.5 s | 3 s | Includes context assembly |
-| Context assembly (retrieval plus budgeting) | 150 ms | 400 ms | On a 100,000-chunk index |
-| Semantic search query | 100 ms | 300 ms | Hybrid without reranker; the reranker adds about 150 ms |
-| Workspace query answered by devenv.exe (find references) | 300 ms | 2 s | Off the UI thread; one in flight |
-| Changeset apply, 20 files | 500 ms | 2 s | Includes checkout, invisible editors and the journal |
-| Inline chat preview, first line | 2 s | 5 s |  |
-| Host cold start to first RPC reply | 1.5 s | 3 s | Self-contained, ReadyToRun compiled |
-| Visual Studio startup cost of the VSIX | 0 ms blocking |  | Background load; under 50 ms total UI-thread CPU |
-| Keystroke latency with autocomplete on | +0 ms | +2 ms | All work off the UI thread |
+| Operation | Target p50 | Target p95 | Notes | Measured, phase 2 (2026-10-15, reference machine; see the note below) |
+| --- | --- | --- | --- | --- |
+| Autocomplete, cloud Fast profile | 400 ms | 1,000 ms | First visible suggestion after the 200 ms debounce; prompt within 2,048 tokens | Not a phase 2 measurement (Gate 1) |
+| Autocomplete, resident local 7B FIM model on the reference GPU | 300 ms | 800 ms | Prompt within 2,048 tokens with a cached prefix. CPU-only 1.5B model within 1,024 tokens: 600 ms and 1,500 ms | With retrieval on, 7B time to suggestion p50 217 ms, p95 521 ms (Gate 1 re-run in the Gate 2 session; Gate 1: 184 to 277 and 421 to 498 ms). Visual Studio 2022 17.14: p50 216 ms, p95 640 ms |
+| Autocomplete hard timeout, cloud | 3 s |  | Suggestion dropped silently; local requests show progress instead of failing | Not a phase 2 measurement |
+| Cold load of a local model |  | 10 s | Shown as progress; the residency policy keeps it rare | Not a phase 2 measurement |
+| Chat first token, cloud | 1.5 s | 3 s | Includes context assembly | Not measured against the cloud in phase 2. Local chat first text with retrieval on: p50 95 ms, p95 654 ms (information; 17.14: 129 and 1,035 ms) |
+| Context assembly (retrieval plus budgeting) | 150 ms | 400 ms | On a 100,000-chunk index | **Pass.** Through the IDE (the Context Inspector's preview, 8 retrieved chunks and the repo map, 121,001 chunks): p50 53 ms, p95 160 ms (17.14: 70 and 176 ms). The component benchmark with the bundled model on the CPU is at the limit: p50 150.9 ms, p95 164 ms, of which the query embedding takes 132 ms (issue #64 tracks the margin) |
+| Semantic search query | 100 ms | 300 ms | Hybrid without reranker; the reranker adds about 150 ms | **Pass.** Round trip from devenv.exe on 121,001 chunks: p50 82 ms, p95 140 ms, 1 of 40 degraded (17.14: 78 and 180 ms, 2 of 40). Component benchmark with a hashing embedder: p50 33.5 ms, p95 42.7 ms |
+| Workspace query answered by devenv.exe (find references) | 300 ms | 2 s | Off the UI thread; one in flight | **Pass.** `@symbol` through the host: p50 14 ms, p95 16 ms (17.14: 15 and 41 ms); the integration test for the UI thread, one in flight and the rate passed |
+| Changeset apply, 20 files | 500 ms | 2 s | Includes checkout, invisible editors and the journal | Not a phase 2 budget |
+| Inline chat preview, first line | 2 s | 5 s |  | With retrieval on, p50 468 ms, p95 1,163 ms (information; 17.14: 443 and 1,046 ms) |
+| Host cold start to first RPC reply | 1.5 s | 3 s | Self-contained, ReadyToRun compiled | Not a phase 2 measurement. The host is published self-contained but neither trimmed nor ReadyToRun (section 16) |
+| Visual Studio startup cost of the VSIX | 0 ms blocking |  | Background load; under 50 ms total UI-thread CPU | **Pass.** Pillion's own UI-thread time from opening a folder to Ready: 8.6 ms on 18.11, 13.4 ms on 17.14 (after the status bar fix of the Gate 2 report's Part A, which had cost 52 to 83 ms on CI) |
+| Keystroke latency with autocomplete on | +0 ms | +2 ms | All work off the UI thread | **Miss on 18.11, pass on 17.14.** Autocomplete on against off: +0.14 ms p50 and **+4.17 ms p95** on 18.11 (budget +2 ms), +0.20 and +0.96 ms on 17.14. With indexing running and autocomplete off: +0.12 ms p50, +0.26 ms p95 (17.14: +0.09, +0.06). Gate 2 report, open issue 5 |
 
 ### Indexing throughput
 
-| Scenario | Target |
-| --- | --- |
-| Initial index, 100,000 lines (about 10,000 chunks), bundled model, CPU | 3 minutes or less |
-| Initial index, 1,000,000 lines, CPU | 30 minutes or less, in the background, with partial results searchable after the first minute |
-| Same, with a GPU through DirectML and the FP16 model | Measured per release; a 3 to 5 times speed-up is the hypothesis until the benchmark confirms it |
-| One saved file becomes searchable | 500 ms or less |
-| Branch switch touching 500 files | 30 s or less |
-| Autocomplete prefix cache hit rate | 70% or more of requests during steady typing |
+| Scenario | Target | Measured, phase 2 (2026-10-15, reference machine; see the note below) |
+| --- | --- | --- |
+| Initial index, 100,000 lines (about 10,000 chunks), bundled model, CPU | 3 minutes or less | **Pass on generated code, miss on real code.** Generated C#: 101,101 lines, 12,101 chunks (69 tokens each) in 1.48 min. This repository's `src`: 112,311 lines, 10,469 chunks (172 tokens each) in **3.86 min**. Embedding is 95% of the time. In the IDE the generated solution (102,600 lines, 9,605 chunks) was indexed in 79 s. Issue #90 |
+| Initial index, 1,000,000 lines, CPU | 30 minutes or less, in the background, with partial results searchable after the first minute | **Miss on real code, partial results pass.** Generated: 1,011,001 lines, 121,001 chunks in 15.7 min. Real code (11 copies of `src`): 1,010,791 lines, 94,227 chunks in **35.3 min**. First results searchable after 3.1 s and 9.5 s; 7,866 and 2,812 chunks searchable at the one-minute mark. Issue #90 |
+| Same, with a GPU through DirectML and the FP16 model | Measured per release; a 3 to 5 times speed-up is the hypothesis until the benchmark confirms it | **Not confirmed.** DirectML with the int8 graph: 1.37 min per 100,000 generated lines (8% faster than the CPU) and **5.20 min** on real code (slower than the CPU's 3.86; 33.6 against 45.2 chunks/s). The isolated full-batch benchmark gives 3.9 times the CPU. The FP16 graph was not measured in the pipeline. The 1,000,000-line DirectML run was stopped after 48 s. Issues #78 and #90 |
+| One saved file becomes searchable | 500 ms or less | **Pass.** Through the IDE save path: one-member edits p50 224 ms, p95 and max 272 ms (17.14: p50 217 ms, max 272 ms); whole-file rewrites (every chunk new) p50 360 ms, max 408 ms, searchable lexically in full and by vector in part, the rest right after. Host-side without RPC polling: median 33 ms, max 81 ms |
+| Branch switch touching 500 files | 30 s or less | **Pass for the realistic diff, miss for the rewrite.** Two members changed in each of 500 files: searchable after 22.9 s, idle after **26.5 s** (git itself 6.2 s; 17.14: 26.3 s). The same 500 files rewritten whole: idle after **92.1 s** (17.14: 91.3 s). The definition of the budget is pending the product owner |
+| Autocomplete prefix cache hit rate | 70% or more of requests during steady typing | **Miss.** Prompt-prefix reuse with retrieval on: 59% (13 of 22 requests, 7B) and 61% (11 of 18, 1.5B); the host's own cache had no hits in the typing passes. Issue #47 |
 
 ### Memory and CPU ceilings
 
-| Measure | Ceiling |
-| --- | --- |
-| Added working set in devenv.exe | 60 MB; no model, index or browser runs in-process |
-| devenv.exe CPU for workspace queries | One query in flight, 2 s budget, at most 5 per second |
-| Host, idle | 150 MB |
-| Host, indexing | 1.5 GB by default, configurable; embedding batch size adapts to the cap |
-| Host, agent session with a browser open | 2.5 GB including Playwright and the browser |
-| Index on disk | About 1.5 KB per chunk; a 100,000-chunk index is about 150 MB |
-| CPU during background indexing | Below-normal priority, at most half the cores; paused during build, test and debug, and on battery saver |
-| GPU memory for local models | One resident completion model below 16 GB of VRAM; a completion and a chat model above it (section 6) |
+| Measure | Ceiling | Measured, phase 2 (2026-10-15, reference machine; see the note below) |
+| --- | --- | --- |
+| Added working set in devenv.exe | 60 MB; no model, index or browser runs in-process | Not measured in phase 2 |
+| devenv.exe CPU for workspace queries | One query in flight, 2 s budget, at most 5 per second | **Pass.** Enforced in the VSIX and covered by the integration test (UI thread untouched, one in flight, the rate) |
+| Host, idle | 150 MB | Not measured in phase 2 |
+| Host, indexing | 1.5 GB by default, configurable; embedding batch size adapts to the cap | **Pass.** Peak working set of the indexing process: 332 to 392 MB at 100,000 lines; 681 MB (generated) and 853 MB (real code) at 1,000,000 lines; no memory pause, batch 32 throughout. The halving and pausing are covered by component tests |
+| Host, agent session with a browser open | 2.5 GB including Playwright and the browser | Not a phase 2 budget |
+| Index on disk | About 1.5 KB per chunk; a 100,000-chunk index is about 150 MB | **Miss on real code.** Generated code 1,222 to 1,271 bytes a chunk (1,483 to 1,723 with the WAL); real code **2,204 to 2,220** (2,492 to 2,933 with the WAL); the IDE's own index of the generated solution 2,012. Issue #90 |
+| CPU during background indexing | Below-normal priority, at most half the cores; paused during build, test and debug, and on battery saver | **Pass.** The pipeline runs on half the logical processors at below-normal priority (component tests); keystrokes while the index was rebuilt the whole time: +0.12 ms p50, +0.26 ms p95. The pauses for build and debug work through the extension's notifications, battery saver through a 15 s poll; a test run pauses only through its build |
+| GPU memory for local models | One resident completion model below 16 GB of VRAM; a completion and a chat model above it (section 6) | Not a phase 2 budget. `qwen3-embedding:0.6b` at `num_ctx` 2,048 occupied 2,053 MiB of GPU memory; the bundled models run on the CPU unless DirectML is chosen |
+
+> **Phase 2 note (2026-10-15, work item 2.17): how the Measured columns were produced.** The figures come from the Gate 2 evidence run, `tools/gate2/Invoke-Gate2.ps1`, on the reference machine (Ryzen 7 3700X, 8 cores and 16 threads, 32 GB, RTX 2080 SUPER 8 GB, Windows 11 Pro 26300) with Visual Studio 2026 18.11 (run `20261015-164218-gate2`) and, where a second figure is given, Visual Studio 2022 17.14 (run `20261015-182457-gate2`, which reused the 18.11 run's indexes, so the indexing rows have one set of figures), bundled `bge-small-en-v1.5` int8, ONNX Runtime 1.24.4. The IDE rows are measured from devenv.exe against the real host; the component benchmarks are marked as such. The retrieval baseline and the watcher figures in the pipeline note of section 7 and in the host README were taken earlier on the same machine while other builds were running, so they are indicative. The full table with evidence paths is [gate-2-report.md](gate-2-report.md). **Misses:** the CPU indexing throughput on real code (100,000 lines in 3.86 minutes against 3; 1,000,000 lines in 35.3 minutes against 30) and the index size on real code (2.2 KB a chunk against about 1.5) are the decisions in issue #90 (restate the budgets per tier and for real code, embed a truncated view of long chunks, or fund more ONNX tuning); the rewrite branch switch (92.1 s) waits for the definition of the budget; the keystroke p95 with autocomplete on (+4.17 ms on 18.11) and the prefix reuse (59 to 61%) are open issues 5 and 6 of the Gate 2 report (issue #47). The budgets in the tables above are unchanged; phase 2 restated none of them.
 
 ### UI-thread rules
 
