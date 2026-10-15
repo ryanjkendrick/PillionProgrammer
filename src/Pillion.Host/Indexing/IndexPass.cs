@@ -136,8 +136,26 @@ internal sealed class PassStatistics
     /// <summary>Gets or sets, for an incremental run, the longest time from a save's arrival to its file being searchable.</summary>
     public TimeSpan? SaveToSearchable { get; set; }
 
+    /// <summary>Gets or sets how many of the run's added or changed files were open in Visual Studio (indexed first).</summary>
+    public int PriorityFiles { get; set; }
+
+    /// <summary>Gets or sets the time from the start of the run until the open documents were stored and refreshed (searchable lexically and by vector).</summary>
+    public TimeSpan? PrioritySearchable { get; set; }
+
+    /// <summary>Gets or sets when the open documents became searchable (a <see cref="Stopwatch"/> timestamp), for measurements from outside the run.</summary>
+    public long? PrioritySearchableAt { get; set; }
+
     /// <summary>Gets or sets the saved files stored before all their chunks had vectors (the save budget ran out).</summary>
     public int PartialFiles { get; set; }
+
+    /// <summary>Gets or sets, for the last saved file, how many chunks it has.</summary>
+    public int SavedChunks { get; set; }
+
+    /// <summary>Gets or sets, for the last saved file, how many of its chunks had vectors when it became searchable (reused or embedded within the budget).</summary>
+    public int SavedChunksWithVectors { get; set; }
+
+    /// <summary>Gets or sets, for the last saved file, the time from the save's arrival to every chunk having its vector.</summary>
+    public TimeSpan? SavedAllVectorsAfter { get; set; }
 
     private long _chunksReused;
 
@@ -176,6 +194,8 @@ internal sealed partial class IndexPass
     private TimeSpan _lastRefreshCost;
     private bool _symbolWritesFailed;
     private bool _incremental;
+    private int _priorityTotal;
+    private int _priorityStored;
     private TimeSpan _lastEmbedDuration;
 
     /// <summary>Initializes a new instance of the <see cref="IndexPass"/> class.</summary>
@@ -224,6 +244,13 @@ internal sealed partial class IndexPass
     /// <summary>Gets an action run when the sweep is about to start (after any pause): the watcher's queued paths are dropped, the sweep sees them.</summary>
     public Action? BeforeSweep { get; init; }
 
+    /// <summary>
+    /// Gets the paths (relative to the root) of the documents open in Visual Studio (work item 2.10): a run indexes them
+    /// before every other added or changed file, and refreshes the vectors and the graph as soon as they are stored, so after
+    /// a branch switch what the developer is looking at is searchable first.
+    /// </summary>
+    public IReadOnlySet<string> PriorityPaths { get; init; } = new HashSet<string>();
+
     /// <summary>Runs the pass to the end.</summary>
     /// <param name="cancellationToken">Stops the run (files already stored stay stored).</param>
     /// <returns>A task that completes when the index is up to date with the tree.</returns>
@@ -264,6 +291,14 @@ internal sealed partial class IndexPass
             ? [.. sweep.Unchanged, .. sweep.Touched]
             : new List<FileRecord>();
         var work = sweep.Added.Concat(sweep.Changed).ToList();
+        if (PriorityPaths.Count > 0)
+        {
+            // Open documents first (a stable partition keeps the sweep's order within each part).
+            work = [.. work.Where(f => PriorityPaths.Contains(f.Path)), .. work.Where(f => !PriorityPaths.Contains(f.Path))];
+            _priorityTotal = work.Count(f => PriorityPaths.Contains(f.Path));
+            Statistics.PriorityFiles = _priorityTotal;
+        }
+
         Progress.FilesTotal = work.Count + symbolsOnly.Count;
         Progress.SetBytesTotal(work.Sum(f => f.Size));
         Advance(IndexPhase.Chunking);
@@ -272,10 +307,16 @@ internal sealed partial class IndexPass
         await ExtractSymbolsOnlyAsync(symbolsOnly, storeSymbols: !symbolsCurrent, cancellationToken).ConfigureAwait(false);
         _root.SymbolsLoaded = true;
 
-        // 3 to 6 for the added and changed files.
-        if (work.Count > 0)
+        // 3 to 6 for the added and changed files: the open documents on their own first, then searchable, then the rest.
+        if (_priorityTotal > 0)
         {
-            await IndexFilesAsync(work, cancellationToken).ConfigureAwait(false);
+            await IndexFilesAsync(work.GetRange(0, _priorityTotal), cancellationToken).ConfigureAwait(false);
+            await RefreshAsync(force: true, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (work.Count > _priorityTotal)
+        {
+            await IndexFilesAsync(work.GetRange(_priorityTotal, work.Count - _priorityTotal), cancellationToken).ConfigureAwait(false);
         }
 
         Advance(IndexPhase.Storing);
@@ -778,6 +819,11 @@ internal sealed partial class IndexPass
             cancellationToken).ConfigureAwait(false);
 
         Track(row);
+        if (_priorityTotal > 0 && PriorityPaths.Contains(row.Path))
+        {
+            _priorityStored++;
+        }
+
         _root.Symbols.AddFile(file.Symbols!);
         _root.LastUpdatedUtc = DateTimeOffset.UtcNow;
         Statistics.FilesIndexed++;
@@ -902,6 +948,13 @@ internal sealed partial class IndexPass
         if (Statistics.FirstSearchable is null && Statistics.FilesIndexed > 0)
         {
             Statistics.FirstSearchable = Stopwatch.GetElapsedTime(_started);
+        }
+
+
+        if (Statistics.PrioritySearchable is null && _priorityTotal > 0 && _priorityStored >= _priorityTotal)
+        {
+            Statistics.PrioritySearchable = Stopwatch.GetElapsedTime(_started);
+            Statistics.PrioritySearchableAt = Stopwatch.GetTimestamp();
         }
 
         LogRefreshed(_logger, _root.Store.Identity.Id, writes.Count, graph.Edges.Count, _lastRefreshCost.TotalMilliseconds);

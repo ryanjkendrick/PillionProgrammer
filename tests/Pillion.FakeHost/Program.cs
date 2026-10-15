@@ -15,8 +15,8 @@ using StreamJsonRpc;
 // Contract 1.3: IConversationService (FakeConversationService: two canned conversations in memory; every chat request
 // with a conversation id is appended to it), the index methods of IContextService (PILLION_FAKEHOST_INDEX=ready starts
 // with an indexed root; pause, rebuild and delete change the status), and the indexStatusChanged notification, sent after
-// every such change and never more than twice a second; SetWorkspaceAsync and the ideActivityChanged and documentSaved
-// notifications are recorded and logged. A chat message containing /cite ends with canned citations.
+// every such change and never more than twice a second; SetWorkspaceAsync and the ideActivityChanged, documentSaved and
+// openDocumentsChanged notifications are recorded and logged. A chat message containing /cite ends with canned citations.
 // PILLION_FAKEHOST_MODE selects the behaviour:
 //   normal (default)  accept the handshake, report Ready, call the VSIX's services and print the results to stderr
 //   quiet             like normal, but without calling the VSIX's services
@@ -102,6 +102,7 @@ rpc.AddLocalRpcMethod("ideActivityChanged", new Action<IdeActivity>(context.OnId
 
 // Like Pillion Host, take the documents the client saved (documentSaved, one string argument, contract 1.3, work item 2.10).
 rpc.AddLocalRpcMethod("documentSaved", new Action<string>(context.OnDocumentSaved));
+rpc.AddLocalRpcMethod("openDocumentsChanged", new Action<string[]>(context.OnOpenDocumentsChanged));
 rpc.AddLocalRpcTarget<IDiagnosticsService>(new FakeDiagnosticsService(recorder), null);
 var settings = new FakeSettingsService();
 rpc.AddLocalRpcTarget<ISettingsService>(settings, null);

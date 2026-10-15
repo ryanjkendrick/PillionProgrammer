@@ -44,6 +44,9 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     /// <summary>The client-to-host notification for a document saved in Visual Studio (one positional argument, the full path; contract 1.3, work item 2.10).</summary>
     public const string DocumentSavedNotification = "documentSaved";
 
+    /// <summary>The client-to-host notification with every document open in Visual Studio (one positional argument, a string array of full paths; contract 1.3, work item 2.10).</summary>
+    public const string OpenDocumentsChangedNotification = "openDocumentsChanged";
+
     /// <summary>How many reader connections are opened ahead of the first search (the Local Store keeps up to four).</summary>
     private const int WarmReaderConnections = 2;
 
@@ -79,6 +82,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     private IndexPass? _currentPass;
     private RootIndex? _currentRoot;
     private string? _lastError;
+    private string[] _openDocuments = [];
     private bool _failed;
     private bool _started;
     private int _disposed;
@@ -369,6 +373,20 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         Wake();
     }
 
+    /// <summary>
+    /// Takes the documents open in Visual Studio (the <c>openDocumentsChanged</c> notification, work item 2.10): a run indexes
+    /// the open ones among its added and changed files first, so after a branch switch they are searchable before the rest.
+    /// </summary>
+    /// <param name="paths">The full paths of every open document; <see langword="null"/> or empty for none.</param>
+    public void SetOpenDocuments(string[]? paths)
+    {
+        var open = (paths ?? []).Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => p.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        lock (_gate)
+        {
+            _openDocuments = open;
+        }
+    }
+
     /// <summary>Pauses or resumes indexing for the user (<see cref="IContextService.PauseIndexingAsync"/>).</summary>
     /// <param name="pause">Whether to pause.</param>
     public void SetUserPause(bool pause) => _pause.Set(IndexPauseReason.User, pause);
@@ -644,6 +662,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         if (_vsix is { IsConnected: false })
         {
             _activity.Set(IdeActivity.None);
+            SetOpenDocuments(null);
         }
     }
 
@@ -931,6 +950,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             var pass = new IndexPass(root, _embedder, _options, _scheduler, _pause, _memory, _settings.GetCurrent().Exclude, Publish, _logger)
             {
                 BeforeSweep = root.ClearPending,
+                PriorityPaths = OpenDocumentsUnder(root),
             };
             Dictionary<string, long?>? pending = null;
             try
@@ -1031,6 +1051,35 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
                 return;
             }
         }
+    }
+
+    /// <summary>The open documents under a root, relative to it.</summary>
+    private HashSet<string> OpenDocumentsUnder(RootIndex root)
+    {
+        string[] open;
+        lock (_gate)
+        {
+            open = _openDocuments;
+        }
+
+        var under = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in open)
+        {
+            try
+            {
+                var full = Path.GetFullPath(path);
+                if (full.Length > root.Path.Length + 1 && full.StartsWith(root.Path, StringComparison.OrdinalIgnoreCase) && full[root.Path.Length] is '\\' or '/')
+                {
+                    under.Add(PathClassifier.Normalize(full[(root.Path.Length + 1)..]));
+                }
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                // Not a usable path: not prioritised.
+            }
+        }
+
+        return under;
     }
 
     private static void Requeue(RootIndex root, Dictionary<string, long?>? pending)

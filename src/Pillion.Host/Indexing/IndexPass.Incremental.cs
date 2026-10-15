@@ -346,6 +346,8 @@ internal sealed partial class IndexPass
 
         var (_, chunkIds) = await StoreAsync(file, cancellationToken).ConfigureAwait(false);
         var searchable = Stopwatch.GetElapsedTime(savedAt);
+        Statistics.SavedChunks = file.Chunks.Count;
+        Statistics.SavedChunksWithVectors = file.Chunks.Count - (missing.Count - done);
         Progress.FilesDone++;
         Progress.AddBytesDone(record.Size);
         _changed();
@@ -376,6 +378,7 @@ internal sealed partial class IndexPass
                 cancellationToken).ConfigureAwait(false);
         }
 
+        Statistics.SavedAllVectorsAfter = Stopwatch.GetElapsedTime(savedAt);
         return searchable;
     }
 

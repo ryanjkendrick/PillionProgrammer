@@ -403,6 +403,42 @@ public sealed class IndexingWatcherTests(ITestOutputHelper output) : IDisposable
         output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"{summary.Chunks} chunks; searchable after {harness.Service.LastSaveToSearchable!.Value.TotalMilliseconds:0} ms with part of the vectors."));
     }
 
+    [Fact]
+    public async Task OpenDocuments_AreIndexedFirst_AndSearchableBeforeTheRestOfASweep()
+    {
+        Fixtures.Copy("shop", _workspace.Repository);
+        for (var i = 0; i < 600; i++)
+        {
+            File.WriteAllText(_workspace.File($"src/Gen/Item{i:D3}.cs").EnsureDirectory(), $"namespace Shop.Gen;\n\npublic static class Item{i:D3}\n{{\n    public static int Weight() => {i};\n}}\n");
+        }
+
+        Fixtures.Age(_workspace.Repository);
+        var embedder = new FakeEmbedder();
+        var options = new IndexingOptions { WatchFileSystem = false, MinimumRefreshInterval = TimeSpan.FromSeconds(30), EmbeddingRetryDelay = TimeSpan.FromMilliseconds(10) };
+        await using var harness = new IndexingHarness(_workspace.Data, embedder, options);
+        await harness.StartAsync(_workspace.Repository);
+        await harness.WaitForIdleAsync();
+
+        // A "branch switch": every generated file changes; two of the last ones (in sweep order) are open in Visual Studio.
+        for (var i = 0; i < 600; i++)
+        {
+            File.WriteAllText(_workspace.File($"src/Gen/Item{i:D3}.cs"), $"namespace Shop.Gen;\n\npublic static class Item{i:D3}\n{{\n    public static int Weight() => {i + 1000};\n}}\n");
+        }
+
+        harness.Service.SetOpenDocuments([_workspace.File("src/Gen/Item599.cs"), _workspace.File("src/Gen/Item598.cs"), Path.Combine(Path.GetTempPath(), "elsewhere.cs")]);
+        embedder.Delay = TimeSpan.FromMilliseconds(30);
+        var full = harness.Service.FullRuns;
+        harness.Service.RequestRun();
+        await UntilAsync(() => harness.Service.FullRuns > full, "the sweep", TimeSpan.FromMinutes(2));
+
+        var stats = harness.Service.LastRunStatistics!;
+        Assert.Equal(600, stats.FilesIndexed);
+        Assert.Equal(2, stats.PriorityFiles);
+        Assert.NotNull(stats.PrioritySearchable);
+        output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"Open documents searchable after {stats.PrioritySearchable!.Value.TotalSeconds:0.00} s of a {stats.Duration.TotalSeconds:0.00} s run (first searchable {stats.FirstSearchable?.TotalSeconds:0.00} s, sweep {stats.SweepTime.TotalSeconds:0.00} s, embedding {stats.EmbeddingTime.TotalSeconds:0.00} s in {stats.EmbeddingBatches} batches, {stats.Refreshes} refreshes taking {stats.RefreshTime.TotalSeconds:0.00} s)."));
+        Assert.True(stats.PrioritySearchable < stats.Duration / 2, $"{stats.PrioritySearchable} of {stats.Duration}");
+    }
+
     /// <summary>A C# file with <paramref name="methods"/> documented methods, each naming a marker.</summary>
     internal static string LargeCSharpFile(string ns, string type, int methods, string marker)
     {

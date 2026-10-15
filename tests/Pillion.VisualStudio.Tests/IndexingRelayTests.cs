@@ -243,6 +243,35 @@ public sealed class IndexingRelayTests : IDisposable
         Assert.Empty(Saved);
     }
 
+    [Fact]
+    public async Task OpenDocuments_AreSentAfterTheQuietPeriod_AsOneSet_AndAgainOnlyWhenTheSetChanges()
+    {
+        _relay.Start();
+        await ConnectAsync();
+        Assert.Equal([Array.Empty<string>()], Opened); // the empty set goes with the connection
+
+        _hub.NotifyDocumentOpened(@"C:\src\App\App\Program.cs");
+        _hub.NotifyDocumentOpened(@"C:\src\App\App\Startup.cs");
+        _hub.NotifyDocumentOpened(@"C:\src\App\App\Program.cs"); // a repeat (issue #58): no change
+        await SettleAsync();
+        Assert.Single(Opened);
+
+        _clock.Advance(IndexingRelay.WorkspaceQuietPeriod);
+        await Wait.UntilAsync(() => Opened.Length == 2, "the open documents to be sent");
+        Assert.Equal([@"C:\src\App\App\Program.cs", @"C:\src\App\App\Startup.cs"], Opened[1]);
+
+        _hub.NotifyDocumentClosed(@"C:\src\App\App\Startup.cs");
+        await SettleAsync();
+        _clock.Advance(IndexingRelay.WorkspaceQuietPeriod);
+        await Wait.UntilAsync(() => Opened.Length == 3, "the smaller set to be sent");
+        Assert.Equal([@"C:\src\App\App\Program.cs"], Opened[2]);
+    }
+
+    private string[][] Opened => _connection.Notifications
+        .Where(n => n.Method == IndexingRelay.OpenDocumentsChangedMethod)
+        .Select(n => (string[])n.Argument!)
+        .ToArray();
+
     private string[] Saved => _connection.Notifications
         .Where(n => n.Method == IndexingRelay.DocumentSavedMethod)
         .Select(n => (string)n.Argument!)
