@@ -99,7 +99,10 @@ internal sealed partial class ContextRpcService
             if (hintLine > 0 && inFile.Count > 1)
             {
                 var atLine = inFile.Where(m => m.Definition.StartLine == hintLine).ToList();
-                inFile = atLine.Count > 0 ? atLine : inFile.Where(m => m.Definition.StartLine <= hintLine && hintLine <= m.Definition.EndLine).OrderBy(m => m.Definition.EndLine - m.Definition.StartLine).Take(1).ToList();
+                var around = inFile.Where(m => m.Definition.StartLine <= hintLine && hintLine <= m.Definition.EndLine).OrderBy(m => m.Definition.EndLine - m.Definition.StartLine).Take(1).ToList();
+                inFile = atLine.Count > 0 ? atLine
+                    : around.Count > 0 ? around
+                    : [.. inFile.OrderBy(m => Math.Abs(m.Definition.StartLine - hintLine)).Take(1)]; // the line moved: the nearest namesake
             }
 
             matches = inFile.Count > 0 ? inFile : matches;

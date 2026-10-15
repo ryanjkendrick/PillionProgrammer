@@ -367,6 +367,32 @@ closes when you apply or discard, when the document closes, or when the caret mo
 editor shows lines. Every control is in the tab order with a screen-reader name; while the prompt has focus, keys the
 editor would otherwise take (typing, Backspace, arrows, Ctrl+A/C/V/X/Z, Enter, Esc, Tab) go to the prompt.
 
+## Mentions
+
+Type `@` in the Chat window's input to pin context to the conversation (behind the `mentions` flag). The picker groups its
+entries under headings (kinds, files, folders, symbols, docs, and the options of `@git` and `@output`), each with its kind's
+icon and a hint line, and is driven from the keyboard: Up and Down move, Enter or Tab pick, Esc closes. Every pin shows its
+token count; `@kind:value` names the kind explicitly.
+
+| Mention | What is pinned | Where it comes from |
+| --- | --- | --- |
+| `@file`, `@folder` | The file, or a folder outline (each file's first-chunk summary and its top definitions) | The open index's file list, fuzzy matched; the solution's file list when there is no index |
+| `@symbol` | The definition's code and a summary of its references | The index's symbols; references from Roslyn for C# and VB, the index otherwise |
+| `@docs` | A Markdown or text document, chunk by chunk up to the limit; bare `@docs` lists them | The index, plus the folders in `mentions.docsFolders` |
+| `@solution` | The repo map, focused on the open documents | The index |
+| `@git` | The working-tree diff (`@git`), the staged changes (`@git:staged`) or the last commits (`@git:log:5`), with secrets redacted | The repository of the open folder (LibGit2Sharp) |
+| `@output`, `@build`, `@tests` | An Output pane's tail (`@output:build`, `debug`, `tests`), the last build's outcome and output, the Tests pane's failures | Visual Studio |
+| `@selection`, `@clipboard`, `@errors` | The editor selection, the clipboard text, the Error List | Visual Studio |
+
+A file the exclusion globs or the secret-file rules refuse needs approval before it is pinned, and an approved one never goes
+to a cloud model; `@git` lists such files without their changes, and `@symbol` shows no reference snippet from them. To let
+`@docs` search documentation outside the repository, list the folders in `settings.json` (full paths, or relative to the
+first open folder; empty by default):
+
+```json
+{ "mentions": { "docsFolders": ["C:\\docs\\handbook", "docs/adr"] } }
+```
+
 ## IDE signals
 
 The extension watches what happens in the IDE and offers it to later features (`@errors`, the inline `/fix`, and the phase 2
