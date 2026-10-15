@@ -6,6 +6,8 @@ namespace Pillion.Eval.Tests;
 /// <summary>Parsing <c>queries.jsonl</c>, the breadcrumb symbol rules, model specs, and the golden sets checked into <c>eval/</c>.</summary>
 public sealed class GoldenSetTests
 {
+    private static readonly string[] Kinds = ["where", "which", "symbol", "concept"];
+
     [Fact]
     public void AQueriesFile_ParsesEveryLine_SkippingBlankOnes()
     {
@@ -127,7 +129,7 @@ public sealed class GoldenSetTests
 
         Assert.Equal(count, set.Queries.Count);
         Assert.Empty(Corpus.CheckExpectedFiles(set, corpus));
-        Assert.All(set.Queries, q => Assert.Contains(q.Kind, new[] { "where", "which", "symbol", "concept" }));
+        Assert.All(set.Queries, q => Assert.Contains(q.Kind, Kinds));
         Assert.DoesNotContain(corpus, f => f.Split('/').Any(part => part is "bin" or "obj"));
     }
 }
