@@ -116,8 +116,10 @@ add another SQLitePCLRaw bundle to the host: the provider is process-wide.
 Schema. Index schema version 1 (the `files` table and the index identity) belongs to repository discovery (work item
 2.3). `IndexStorageSchema.Migration` is version 2 and chains after it:
 `new StoreSchema("index", [version1, IndexStorageSchema.Migration])`, or `IndexStorageSchema.After(version1)`. It needs
-only `files (id, language, partition)` and raises `min_reader_version` to 2. The tables are listed in
-`Index/IndexStorageSchema.cs`:
+only `files (id, language, partition)` and raises `min_reader_version` to 2. Version 3 (`IndexSymbolsSchema`, work item
+2.5) recreates the symbol tables with stable ids and ambiguity columns and keeps the reader version at 2;
+`IndexStorageSchema.After(version1)` returns all three, and `IndexStorage` needs version 3. The tables are listed in
+`Index/IndexStorageSchema.cs` and `Index/IndexSymbolsSchema.cs`:
 
 | Table | Columns |
 | --- | --- |
@@ -126,9 +128,9 @@ only `files (id, language, partition)` and raises `min_reader_version` to 2. The
 | `chunk_embeddings` | chunk\_id (cascade from `chunks`), language, partition, embedding (int8 blob) |
 | `vec_float32` | chunk\_id, embedding (float32 blob). **Development only**, for the int8 recall-loss measurement; drop before release |
 | `vec_generation` | one counter that every change to `chunk_embeddings` bumps (triggers, so cascades count too) |
-| `symbols` | id, file\_id, name, kind, container, start\_line, end\_line, signature |
-| `symbol_refs` | from\_symbol\_id (null at file scope), to\_symbol\_id, file\_id, line, kind; cascades from both symbols |
-| `meta` | adds `vector_dimensions` |
+| `symbols` | id (a plain `INTEGER PRIMARY KEY`: the extractor's stable id, or assigned), file\_id, name, kind, container, start\_line, end\_line, signature |
+| `symbol_refs` | from\_symbol\_id (null at file scope), to\_symbol\_id, file\_id, line, kind, ambiguous (0/1), candidates (at least 1); cascades from both symbols |
+| `meta` | adds `vector_dimensions` and `symbols_version` |
 
 Lexical search. Identifier splitting happens at write time into the second FTS5 column (phase 2 decision of 2026-10-15),
 with the stock `unicode61` tokenizer and `tokenchars '_'`, so `get_order_total` stays one token in `text` while
@@ -163,6 +165,12 @@ at commit `6a487f9` (branch `feature/index-storage`, work item 2.8). It was drop
 decrypted on every read, its KNN query took about 205 ms at 100,000 chunks, and its copy of the vectors cost about 450
 bytes per chunk. `EncryptedDatabaseOptions.ConnectionOpened` is where such an extension would be loaded.
 
-Symbols. `ISymbolRepository` stores and reads `symbols` and `symbol_refs`; extraction is work item 2.5. Replacing a
-file's symbols removes the references to them from other files too (cascade), which the extractor restores when it
-next visits those files.
+Symbols. `ISymbolRepository` stores and reads `symbols` and `symbol_refs`; extraction, resolution and the repo map are
+work item 2.5 (Pillion.ContextEngine). Symbols written with their stable `NewSymbol.Id` (a hash of path, container, name,
+kind and overload ordinal, with no line in it) are upserted when their file is replaced, so references from other files
+to a symbol that is still there survive; the file's other symbols go, and with them (cascade) every reference from or to
+them, which the extractor restores when it next visits the referring files. Symbols without an id get a new one each
+time. An ambiguous reference is one row per candidate with `ambiguous = 1` and the candidate count.
+`GetSymbolsVersionAsync`/`SetSymbolsVersionAsync` read and write `meta.symbols_version`, which the host records after
+rebuilding the symbols, separately from `chunker_version`; the version 3 migration clears it, so the symbols of a
+migrated index are rebuilt.

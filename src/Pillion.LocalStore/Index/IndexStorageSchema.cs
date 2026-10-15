@@ -7,8 +7,10 @@ namespace Pillion.LocalStore.Index;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Chaining: the index schema is <c>new StoreSchema("index", [version1, IndexStorageSchema.Migration])</c>, which is
-/// what <see cref="After"/> returns. Later index migrations append after this one.
+/// Chaining: the index schema is <c>new StoreSchema("index", [version1, IndexStorageSchema.Migration,
+/// IndexSymbolsSchema.Migration])</c>, which is what <see cref="After"/> returns. Later index migrations append after
+/// these; version 3 (<see cref="IndexSymbolsSchema"/>, work item 2.5) recreates the symbol tables below with stable ids
+/// and ambiguity columns.
 /// </para>
 /// <para>
 /// The int8 vectors live in the plain table <c>chunk_embeddings</c>; the vector dimension is recorded in
@@ -134,13 +136,16 @@ public static class IndexStorageSchema
     public static StoreMigration Migration { get; } =
         StoreMigration.Sql(Version, MinReaderVersion, "chunks, FTS5 lexical index, vectors and symbols", Version2Sql);
 
-    /// <summary>Builds the index schema from version 1 (work item 2.3's <c>files</c> and identity) followed by this migration.</summary>
+    /// <summary>
+    /// Builds the index schema from version 1 (work item 2.3's <c>files</c> and identity) followed by this migration and
+    /// every later one (<see cref="IndexSymbolsSchema.Migration"/>, version 3).
+    /// </summary>
     /// <param name="version1">Migration 1 of the index schema; it must create <c>files</c> with an integer <c>id</c> primary key.</param>
-    /// <returns>The schema <c>index</c> at version 2.</returns>
+    /// <returns>The schema <c>index</c> at version 3.</returns>
     public static StoreSchema After(StoreMigration version1)
     {
         ArgumentNullException.ThrowIfNull(version1);
-        return new StoreSchema(Name, [version1, Migration]);
+        return new StoreSchema(Name, [version1, Migration, IndexSymbolsSchema.Migration]);
     }
 
     /// <summary>The <c>meta</c> keys this schema reads and writes, beside the store's own.</summary>

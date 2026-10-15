@@ -107,7 +107,15 @@ public sealed record VectorMetadata(string? Language, string? Partition);
 /// <param name="StartLine">The first line.</param>
 /// <param name="EndLine">The last line.</param>
 /// <param name="Signature">The signature text, if any.</param>
-public sealed record NewSymbol(string Name, string Kind, string? Container, int StartLine, int EndLine, string? Signature);
+public sealed record NewSymbol(string Name, string Kind, string? Container, int StartLine, int EndLine, string? Signature)
+{
+    /// <summary>
+    /// Gets the symbol's stable id (work item 2.5's <c>SymbolDefinition.Id</c>: a positive hash of path, container, name,
+    /// kind and overload ordinal), or <see langword="null"/> to let the database assign one. With stable ids, replacing a
+    /// file's symbols updates the rows in place, so references from other files to an unchanged symbol survive.
+    /// </summary>
+    public long? Id { get; init; }
+}
 
 /// <summary>A stored symbol.</summary>
 /// <param name="Id">The symbol id.</param>
@@ -125,5 +133,7 @@ public sealed record SymbolRecord(long Id, long FileId, string Name, string Kind
 /// <param name="ToSymbolId">The referenced symbol.</param>
 /// <param name="FileId">The file the reference is in.</param>
 /// <param name="Line">The line of the reference.</param>
-/// <param name="Kind">The reference kind, for example <c>call</c> or <c>type</c>.</param>
-public sealed record SymbolReference(long? FromSymbolId, long ToSymbolId, long FileId, int Line, string Kind);
+/// <param name="Kind">The reference kind, for example <c>call</c> or <c>type-use</c>.</param>
+/// <param name="Ambiguous">Whether the name resolved to several candidate definitions (one row is stored per candidate).</param>
+/// <param name="Candidates">How many candidates the name resolved to (1 when it was unambiguous).</param>
+public sealed record SymbolReference(long? FromSymbolId, long ToSymbolId, long FileId, int Line, string Kind, bool Ambiguous = false, int Candidates = 1);
