@@ -152,7 +152,7 @@ public sealed class TaskRouteViewModel : ObservableObject
     /// <summary>Gets the property name under <c>cloudSwitches</c>, or <see langword="null"/> when the class has no switch.</summary>
     public string? CloudSwitchKey { get; }
 
-    /// <summary>Gets a value indicating whether the class has a cloud switch (Embedding is always local and has none).</summary>
+    /// <summary>Gets a value indicating whether the class has a cloud switch (Embedding has none on this page: it is local unless <c>cloudSwitches.embedding</c> is set in settings.json).</summary>
     public bool HasCloudSwitch => CloudSwitchKey is not null;
 
     /// <summary>Gets the short text shown instead of a switch when the class has none.</summary>

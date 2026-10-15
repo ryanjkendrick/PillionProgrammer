@@ -25,6 +25,11 @@ internal static class LiveOllama
 
     public static bool HasChatModel => State.Value.Models.Contains(ChatModel, StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Determines whether a model is installed.</summary>
+    /// <param name="model">The model name, for example <c>qwen3-embedding:0.6b</c>.</param>
+    /// <returns><see langword="true"/> when Ollama lists it.</returns>
+    public static bool Has(string model) => State.Value.Models.Contains(model, StringComparer.OrdinalIgnoreCase);
+
     public static string? InsertModel => State.Value.InsertModel;
 
     private static (bool, IReadOnlyList<string>, string?) Probe()

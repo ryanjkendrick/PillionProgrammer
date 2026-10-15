@@ -526,12 +526,12 @@ internal sealed partial class OllamaResidency : ILocalResidencySource, IDisposab
         }
 
         // A resident instance that is too small is unloaded first (through /api/embed: embedding models have no /api/generate).
-        var others = instances.Count > 0 ? ResidentMiBExcept(key) : ResidentMiB();
         if (instances.Count > 0)
         {
             await ReleaseAsync(request, key, instances.Max(i => i.Context ?? 0), target, cancellationToken).ConfigureAwait(false);
-            others = ResidentMiBExcept(key);
         }
+
+        var others = ResidentMiBExcept(key);
 
         var cpuOnly = false;
         if (TierBudgetMiB(tier) is { } budget)
