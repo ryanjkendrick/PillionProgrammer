@@ -13,6 +13,9 @@ Context/                            ContextRpcService (IContextService): @file, 
 Conversations/                      ConversationRpcService (IConversationService, contract 1.3), ConversationRecorder (saves chat turns),
                                     StoreOutboundSink (Outbound log to the store), ConversationRetentionService (see Saved conversations)
 Rpc/                                RpcServer, RpcConnection, PillionJsonRpc, handshake, IRpcTarget, IVsixConnection
+WorkspaceQueries/                   IWorkspaceQueries (work item 2.14): find_references and callers_of for @symbol and chat,
+                                    from the VSIX's Roslyn workspace, falling back to the index's approximate edges
+                                    (ISymbolGraphProvider, empty until the index supplies graphs)
 Logging/                            Rolling JSON-lines file sink and retention
 ```
 

@@ -15,10 +15,12 @@ using Pillion.VisualStudio.Autocomplete;
 using Pillion.VisualStudio.Core;
 using Pillion.VisualStudio.Core.Autocomplete;
 using Pillion.VisualStudio.Core.Signals;
+using Pillion.VisualStudio.Core.WorkspaceQueries;
 using Pillion.VisualStudio.InlineChat;
 using Pillion.VisualStudio.Options;
 using Pillion.VisualStudio.Signals;
 using Pillion.VisualStudio.ToolWindows;
+using Pillion.VisualStudio.WorkspaceQueries;
 using Task = System.Threading.Tasks.Task;
 
 namespace Pillion.VisualStudio;
@@ -66,6 +68,9 @@ public sealed class PillionPackage : AsyncPackage
     private AutocompleteFeature? _autocomplete;
     private InlineChatFeature? _inlineChat;
     private IdeSignalsFeature? _signals;
+    private HostFeatureFlag? _workspaceQueriesFlag;
+    private RoslynWorkspaceQueryEngine? _workspaceQueryEngine;
+    private WorkspaceQueryService? _workspaceQueries;
     private IntelliCodeStatus _intelliCodeReported = IntelliCodeStatus.NotRequired;
     private int _intelliCodeCheckRunning;
 
@@ -96,6 +101,9 @@ public sealed class PillionPackage : AsyncPackage
     /// <summary>Gets inline chat (feature flag, recent prompts, the command), once initialization has created it.</summary>
     internal InlineChatFeature? InlineChat => _inlineChat;
 
+    /// <summary>Gets the workspace query service the host calls (work item 2.14), once initialization has created it.</summary>
+    internal WorkspaceQueryService? WorkspaceQueries => _workspaceQueries;
+
     /// <inheritdoc/>
     /// <remarks>
     /// Start-up cost (design section 13: 0 ms blocking, under 50 ms of UI-thread CPU). The first statement moves the work
@@ -119,6 +127,8 @@ public sealed class PillionPackage : AsyncPackage
         _log = log;
         var supervisor = CreateSupervisor(log);
         _supervisor = supervisor;
+        var workspaceQueriesFlag = new HostFeatureFlag(supervisor, WorkspaceQueryService.Flag, log);
+        _workspaceQueriesFlag = workspaceQueriesFlag;
         var chatAvailability = new ChatAvailability(supervisor, log);
         _chatAvailability = chatAvailability;
         var autocomplete = new AutocompleteFeature(supervisor, log);
@@ -186,6 +196,8 @@ public sealed class PillionPackage : AsyncPackage
         autocomplete.Start();
         inlineChat.Start();
         _ = JoinableTaskFactory.RunAsync(() => signals.StartAsync(this, DisposalToken, startupOver));
+        workspaceQueriesFlag.Start();
+        _ = JoinableTaskFactory.RunAsync(() => WarmUpWorkspaceQueriesAsync(startupOver));
         _ = JoinableTaskFactory.RunAsync(() => CheckIntelliCodeAsync(DisposalToken));
         supervisor.Start();
         start.Dispose();
@@ -245,6 +257,8 @@ public sealed class PillionPackage : AsyncPackage
             _inlineChat = null;
             _signals?.Dispose();
             _signals = null;
+            _workspaceQueriesFlag?.Dispose();
+            _workspaceQueriesFlag = null;
         }
 
         if (disposing && _supervisor is { } supervisor)
@@ -306,13 +320,49 @@ public sealed class PillionPackage : AsyncPackage
     private HostSupervisor CreateSupervisor(PillionLog log)
     {
         var extensionAssembly = typeof(PillionPackage).Assembly.Location;
-        var targets = new HostLocalTargets(new EditorService(this), new NotImplementedApprovalService(), new NotImplementedWorkspaceQueryService());
+        // Workspace queries (work item 2.14): the host's find_references and callers_of, answered from the live Roslyn
+        // workspace on the thread pool. The flag object is created right after the supervisor; until then it reads as on.
+        var engine = new RoslynWorkspaceQueryEngine(log);
+        _workspaceQueryEngine = engine;
+        _workspaceQueries = new WorkspaceQueryService(
+            engine,
+            () => _workspaceQueriesFlag?.IsEnabled ?? true,
+            log,
+            new WorkspaceQueryOptions { IsUiThread = ThreadHelper.CheckAccess });
+        var targets = new HostLocalTargets(new EditorService(this), new NotImplementedApprovalService(), _workspaceQueries);
         var options = new HostLauncherOptions(HostLauncherOptions.DefaultHostPath(extensionAssembly), extensionAssembly, targets)
         {
             LogDirectory = PillionLog.DefaultDirectory,
         };
 
         return new HostSupervisor(new HostLauncherSelector(options, log), JoinableTaskFactory, log); // The selector lets the IDE tests swap in the fake host.
+    }
+
+    /// <summary>
+    /// Looks up the Roslyn workspace for the workspace queries once the package's start-up is over, on the thread pool, so
+    /// no query pays for the lookup (the component model may visit the UI thread once to create itself).
+    /// </summary>
+    private async Task WarmUpWorkspaceQueriesAsync(Func<Task> startupOver)
+    {
+        try
+        {
+            await startupOver().ConfigureAwait(false);
+            await TaskScheduler.Default;
+            if (_workspaceQueryEngine is { } engine)
+            {
+                await engine.WarmUpAsync().ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Visual Studio is shutting down.
+        }
+#pragma warning disable CA1031 // The first query looks again; a failed warm-up must not break the package.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            _log?.Warning("workspace.query.warmup.failed", "Looking up the Roslyn workspace failed.", ("error", ex.GetType().Name), ("detail", ex.Message));
+        }
     }
 
     /// <summary>Raised on a background thread; switches to the UI thread only to update the status bar and Output pane.</summary>
