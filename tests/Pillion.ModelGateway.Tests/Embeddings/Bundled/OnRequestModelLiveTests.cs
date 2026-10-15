@@ -39,9 +39,9 @@ public class OnRequestModelLiveTests(ITestOutputHelper output)
     [Fact]
     public async Task WithTheOptionalFp16Graph_DirectMLRunsIt_AndAgreesWithTheCpuInt8Graph()
     {
-        if (!OrtEnv.Instance().GetAvailableProviders().Contains("DmlExecutionProvider") || !OperatingSystem.IsWindows())
+        if (!OrtEnv.Instance().GetAvailableProviders().Contains("DmlExecutionProvider") || !OperatingSystem.IsWindows() || new Pillion.Common.Hardware.DxgiProbe().Probe() is not { Count: > 0 })
         {
-            output.WriteLine("This build has no DirectML; nothing to measure.");
+            output.WriteLine("This build has no DirectML, or the machine has no hardware adapter for it (a CI runner); nothing to measure.");
             return;
         }
 

@@ -8,8 +8,9 @@ public sealed class HybridRetrieverTests
 {
     private const double Precision = 1e-12;
 
-    // Tests that are not about the budget get a generous one, so a busy machine cannot cut a leg short.
-    private static readonly RetrievalOptions Generous = RetrievalOptions.Default with { TimeBudget = TimeSpan.FromSeconds(10) };
+    // Tests that are not about the budget get a generous one, so a busy machine cannot cut a leg short. (10 s was not enough
+    // on a CI runner: the candidate legs get a share of it, and the first search of a cold process missed about 5 s.)
+    private static readonly RetrievalOptions Generous = RetrievalOptions.Default with { TimeBudget = TimeSpan.FromSeconds(60) };
 
     private readonly FakeIndex _index = new();
     private readonly FakeEmbedder _embedder = new();
