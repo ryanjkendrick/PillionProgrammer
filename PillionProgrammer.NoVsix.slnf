@@ -20,7 +20,9 @@
       "tests\\Pillion.VisualStudio.IntegrationTests\\Pillion.VisualStudio.IntegrationTests.csproj",
       "tests\\Pillion.VisualStudio.IntegrationTests.VS2022\\Pillion.VisualStudio.IntegrationTests.VS2022.csproj",
       "src\\Pillion.Indexing\\Pillion.Indexing.csproj",
-      "tests\\Pillion.Indexing.Tests\\Pillion.Indexing.Tests.csproj"
+      "tests\\Pillion.Indexing.Tests\\Pillion.Indexing.Tests.csproj",
+      "tools\\eval\\Pillion.Eval\\Pillion.Eval.csproj",
+      "tests\\Pillion.Eval.Tests\\Pillion.Eval.Tests.csproj"
     ]
   }
 }
