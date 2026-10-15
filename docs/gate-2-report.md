@@ -37,8 +37,8 @@ the test projects in parallel) on `feature/phase2-wave1` at `8f07fdf` before any
 
 Three runs of the Visual Studio test project alone after the first fixes found one more: `InlineChatSessionTests.Escape_WhileStreaming_CancelsOnTheHostAndCloses`
 (below), which then failed every time it ran alone. Each gate run repeats the suite (step b): 4,513 passed, 0 failed, 1
-skipped (the TSX regression test) in the 18.11 run. The CI runs of this pull request showed four more failures that only a
-loaded runner produces, also fixed here (the last rows of the table).
+skipped (the TSX regression test) in the 18.11 run. The CI runs of the wave branch and of this pull request showed more failures that only a loaded runner produces, also fixed
+here (the rows marked CI in the table).
 
 Causes and fixes. All are test changes unless marked; no timeout was widened without the figure being logged.
 
