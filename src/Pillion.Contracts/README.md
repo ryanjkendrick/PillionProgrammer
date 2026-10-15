@@ -46,7 +46,10 @@ pipe `ContractV13RpcTests` and `HandshakeCompatibilityTests` in the host tests).
 
 - **Conversations (work item 2.2).** A new VSIX-to-host service over `conversations.db`, behind the `localStore` flag. There
   is no append method: the host appends the user's message and the reply as `ChatAsync` runs a request whose
-  `ConversationId` names a conversation.
+  `ConversationId` names a conversation. Pillion Host implements it in work item 2.2 (see the host README, Saved
+  conversations). Contract 1.3 has no member for a reply that was stopped before it finished, so the host returns such a
+  reply with `[Reply stopped before it finished.]` (after a blank line) appended to its `Content` and the Chat window strips
+  it; a later minor revision can add a member and retire the convention.
 
   | Type | Member | Order | Meaning |
   | --- | --- | --- | --- |

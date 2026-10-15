@@ -14,7 +14,7 @@ Caching/        AutocompleteCache (LRU, 256 entries, exact and type-through hits
 Autocomplete/   AutocompletePromptBuilder + AutocompleteBudget, CompletionShaper, AutocompleteCounters, PromptEvaluationRates
 Context/        ContextAssembler (budget, priority, caps, rolling summary), ContextReport, FileAccessPolicy, TextTruncation, GatewayHistorySummariser
 Tokens/         token-families.json (data) and ITokenCounter / TokenCounter (Microsoft.ML.Tokenizers or a calibrated estimate)
-Outbound/       IOutboundLog / InMemoryOutboundLog (ring buffer of 500), TokenEstimator
+Outbound/       IOutboundLog / InMemoryOutboundLog (ring buffer of 500), IOutboundSink, TokenEstimator
 Templates/      system-prompts.json, fim-formats.json (data) and PromptTemplates
 Providers/      ProviderRegistry (builds providers from settings), IGatewaySettingsSource, ModelInventory, ProviderRuntime, LocalResidencyMap
 Providers/Ollama/  The native Ollama adapter and its residency manager (OllamaResidency)
@@ -615,7 +615,7 @@ Common to all four:
 | `IGatewaySettingsSource` | `SettingsStoreGatewaySettingsSource` (no policies) | Pillion Host: `ConnectivityGatewaySettingsSource`, the monitor's effective settings, so Local-only has one source |
 | `IProgressSink` | `NoProgressSink` | Chat window (0.11) |
 | `ICostGovernor` | `NoCostCaps` | Cost governance (phase 1) |
-| `IOutboundLog` | `InMemoryOutboundLog` | Persistence with the audit trail |
+| `IOutboundLog` | `InMemoryOutboundLog` | Persistence: the host registers an `IOutboundSink` that writes each record to the Local Store (work item 2.2); the audit trail is separate |
 | `IModelProviderFactory` | Ollama, OpenAI-compatible, OpenAI, Anthropic, Gemini, Mistral, Azure OpenAI | In-process plug-ins are out of version 1 |
 | `IEmbeddingGenerator<string, Embedding<float>>` | `IModelProvider.GetEmbeddingGenerator(modelId)`: Ollama, OpenAI-compatible, Mistral, Azure OpenAI, Gemini; `null` for Anthropic and by default | The bundled ONNX model (work item 2.7) |
 | `IContextSource` | none | The index (phase 2): retrieved chunks (`ContextSlot.RetrievedChunks`) and the repository map (`ContextSlot.RepoMap`); register with `AddSingleton<IContextSource, ...>` |
