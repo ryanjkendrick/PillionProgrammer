@@ -205,6 +205,7 @@ public sealed class FeatureSettings : SettingsNode
                 break;
             case "indexing":
                 Indexing = false;
+                break;
             case "embeddings":
                 Embeddings = false;
                 break;
