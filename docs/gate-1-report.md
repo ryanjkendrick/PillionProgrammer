@@ -305,7 +305,7 @@ the evidence paths are relative to those run folders.
 
 ## What the product owner must do
 
-1. **Cloud rows** (autocomplete on the Fast profile, chat first token). Add a cloud provider on **Tools > Options >
+1. **Cloud rows** (autocomplete on the Fast profile, chat first token). Chat first token done on 2026-10-13 with the Anthropic key (issue #53); the autocomplete row needs a Mistral key for Codestral. Add a cloud provider on **Tools > Options >
    Pillion Programmer > Providers and keys** and store its key (Windows Credential Manager, `PillionProgrammer/<id>`),
    then run `pwsh tools/gate1/Invoke-Gate1.ps1 -SkipTests -CloudProviderId <id> -CloudModel <model>`. The script only asks
    `cmdkey /list:PillionProgrammer/<id>` whether the key exists. It routes autocomplete to the Fast profile with the
@@ -325,7 +325,7 @@ the evidence paths are relative to those run folders.
 3. **Ghost-text content** (open issues 1 and 2) is fixed and re-measured (PR 44, re-run of 2026-10-11). What is left to decide is the definition of the cache hit rate row (open issue 5) and how the displayed ghost text could grow (open issue 4).
 4. **Golden-set repository** (work item 1.17): say where the private repository lives; the completion slice and its
    baseline follow.
-5. **Ordering default**: confirm or change `autocomplete.ordering` = `pillionFirst` (decision log, 2026-10-10).
+5. **Ordering default**: `autocomplete.ordering` = `pillionFirst` confirmed on 2026-10-14 (issue #46). Done.
 6. **Try ghost text and inline chat by hand for feel**, in a private hive so no test run disturbs it:
    `"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\VSIXInstaller.exe" /rootSuffix:PillionManual1 src\Pillion.VisualStudio\bin\Release\net48\Pillion.VisualStudio.vsix`,
    `devenv /rootsuffix PillionManual1 /updateconfiguration`, then `devenv /rootsuffix PillionManual1`. With Ollama running
