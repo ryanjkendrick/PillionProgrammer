@@ -96,6 +96,80 @@ internal sealed class VectorCache
         return new VectorCache(generation, dimensions, [.. ids], vectors, [.. norms], [.. partitions], [.. languages], partitionCodes, languageCodes);
     }
 
+    /// <summary>
+    /// Builds the copy that a committed change leads to (work item 2.10): the rows of <see cref="VectorDelta.Removed"/> and
+    /// of every re-stored chunk dropped, the new vectors appended, tied to <see cref="VectorDelta.After"/>. One pass over the
+    /// arrays (a few milliseconds for 100,000 chunks), against reading and decrypting the whole table again.
+    /// </summary>
+    /// <param name="delta">What the transaction changed; its <see cref="VectorDelta.Before"/> must be this copy's generation.</param>
+    /// <param name="maxBytes">The cap; a copy that would outgrow it is not built.</param>
+    /// <returns>The new copy, or <see langword="null"/> when it cannot be built (another generation, another dimension, over the cap).</returns>
+    public VectorCache? Apply(VectorDelta delta, long maxBytes)
+    {
+        if (delta.Before != Generation || delta.Added.Any(a => a.Vector.Length != Dimensions))
+        {
+            return null;
+        }
+
+        var dropped = new HashSet<long>(delta.Removed);
+        foreach (var added in delta.Added)
+        {
+            dropped.Add(added.ChunkId);
+        }
+
+        var keep = 0;
+        for (var row = 0; row < _ids.Length; row++)
+        {
+            if (!dropped.Contains(_ids[row]))
+            {
+                keep++;
+            }
+        }
+
+        var count = keep + delta.Added.Count;
+        if ((long)count * Dimensions > maxBytes)
+        {
+            return null;
+        }
+
+        var dims = Dimensions;
+        var ids = new long[count];
+        var vectors = new sbyte[(long)count * dims];
+        var norms = new int[count];
+        var partitions = new ushort[count];
+        var languages = new ushort[count];
+        var partitionCodes = new Dictionary<string, ushort>(_partitionCodes, StringComparer.Ordinal);
+        var languageCodes = new Dictionary<string, ushort>(_languageCodes, StringComparer.Ordinal);
+        var next = 0;
+        for (var row = 0; row < _ids.Length; row++)
+        {
+            if (dropped.Contains(_ids[row]))
+            {
+                continue;
+            }
+
+            ids[next] = _ids[row];
+            Array.Copy(_vectors, (long)row * dims, vectors, (long)next * dims, dims);
+            norms[next] = _norms[row];
+            partitions[next] = _partitions[row];
+            languages[next] = _languages[row];
+            next++;
+        }
+
+        foreach (var added in delta.Added)
+        {
+            ids[next] = added.ChunkId;
+            var target = vectors.AsSpan(next * dims, dims);
+            added.Vector.Span.CopyTo(target);
+            norms[next] = Int8Vectors.SquaredNorm(target);
+            languages[next] = Code(languageCodes, added.Language ?? string.Empty);
+            partitions[next] = Code(partitionCodes, added.Partition ?? string.Empty);
+            next++;
+        }
+
+        return new VectorCache(delta.After, dims, ids, vectors, norms, partitions, languages, partitionCodes, languageCodes);
+    }
+
     /// <summary>Finds the nearest vectors, as <see cref="TableScanVectorIndex.Scan"/> does over the table.</summary>
     public IReadOnlyList<VectorHit> Search(ReadOnlySpan<sbyte> query, int k, ChunkFilter filter, CancellationToken cancellationToken)
     {

@@ -84,6 +84,33 @@ internal sealed class VectorStorage
         }
     }
 
+    /// <summary>
+    /// Brings the in-memory copy up to date with a committed change without reading the table again (work item 2.10).
+    /// Applied only when the copy is exactly at the generation the change started from (both run under the cache lock, so
+    /// a reload and a delta never cross); a copy that missed another change is left to reload on the next search.
+    /// </summary>
+    /// <param name="delta">What the transaction changed.</param>
+    /// <returns><see langword="true"/> when the copy now includes the change.</returns>
+    public bool ApplyDelta(VectorDelta delta)
+    {
+        if (CacheMaxBytes <= 0)
+        {
+            return false;
+        }
+
+        lock (_cacheLock)
+        {
+            var updated = _cache?.Apply(delta, CacheMaxBytes);
+            if (updated is null)
+            {
+                return false;
+            }
+
+            Volatile.Write(ref _cache, updated);
+            return true;
+        }
+    }
+
     internal static int? ReadDimensions(SqliteConnection connection, SqliteTransaction? transaction) =>
         int.TryParse(Sql.ReadMeta(connection, transaction, IndexStorageSchema.MetaKeys.VectorDimensions), NumberStyles.Integer, CultureInfo.InvariantCulture, out var dims) && dims > 0
             ? dims

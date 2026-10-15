@@ -72,6 +72,25 @@ public sealed class IndexStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task HoldsWriterLock_IsTrueForTheWriter_FalseForAReader_AndFalseOnceTheLockIsGoneOrTaken()
+    {
+        _processes.SetAlive(100);
+        _processes.SetAlive(200);
+        await using var writer = await Host(100).OpenAsync(Request(100));
+        await using var reader = await Host(200).OpenAsync(Request(200));
+        Assert.True(writer.HoldsWriterLock());
+        Assert.False(reader.HoldsWriterLock());
+
+        // A lock file another host wrote over this one's (it took this host for dead).
+        var info = WriterLock.Read(writer.Folder.LockFile)!;
+        File.WriteAllText(writer.Folder.LockFile, File.ReadAllText(writer.Folder.LockFile).Replace(info.Token, "someone-else", StringComparison.Ordinal));
+        Assert.False(writer.HoldsWriterLock());
+
+        File.Delete(writer.Folder.LockFile);
+        Assert.False(writer.HoldsWriterLock());
+    }
+
+    [Fact]
     public async Task ASecondStoreOfTheSameProcess_IsAReader_OfTheSameDatabase()
     {
         var host = Host(100);

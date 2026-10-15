@@ -320,15 +320,84 @@ background, so the first search pays for neither.
 - Pauses take effect at the next checkpoint: before each file is read and before each embedding batch. Reported in the
   order User, Memory, Build, Test, Debug, Battery when several hold.
 
+### Watcher and incremental updates (work item 2.10)
+
+Design section 7 step 7 and section 10 (the writer runs the indexer and the watcher), behind `features.indexing` like the
+rest of the pipeline.
+
+- **`RootWatcher`**, one per root this host owns (never on a reader), started when the index opens as the writer and
+  disposed with the root (workspace closed, flag off, embedding model changed, or the writer lock lost). A recursive
+  `FileSystemWatcher` on the root with a 64 KiB buffer (`IndexingOptions.WatcherBufferBytes`, the Windows maximum) feeds a
+  `ChangeQueue`: a path is ready after 500 ms without events (`WatcherDebounce`), and the ready paths are handed over
+  together when every queued path is ready or the burst has lasted 1 s (`WatcherCoalescingWindow`), so a save-all or a
+  generator's 200 files become one batch. Every event is filtered first by the discovery rules (`PathClassifier.ClassifyByName`
+  of Pillion.Indexing: the scan's `.gitignore`, `.pillionignore`, built-in names, `indexing.exclude`, secret, generated,
+  minified and lock-file names, checked against every ancestor folder), so events under `bin`, `obj`, `.git`,
+  `node_modules` or an ignored folder cost a string check and queue nothing. A folder's own "changed" event is dropped; a
+  new folder is checked with the folder rules. A rename is a delete of the old path and an event on the new one. A change
+  to a `.gitignore` or `.pillionignore` forgets the cached rules and asks for a sweep.
+- **Branch switches.** A second watcher on the real git directory (`RepositoryRoot.GitDirectory`: `.git`, or where a
+  worktree's or submodule's `.git` file points) watches `HEAD` and `index.lock`. While git holds `index.lock` the file events
+  are held back; once it is gone and the directory has been quiet for 300 ms (`GitSettleDelay`), `GitHead.Read` compares the
+  checked-out ref and commit (through `commondir` and `packed-refs`) with the last reading: when it moved (checkout, pull,
+  reset, rebase, commit) the queue is dropped and the root gets a **hash sweep** (an ordinary run: unchanged files are not
+  even opened), never a rebuild; otherwise the held events go to the indexer. A lock left by a crashed git is waited for at
+  most 2 minutes (`GitBusyMaxWait`).
+- **Failures never take the host down.** An overflow drops the queue and asks for a sweep. Any other watcher error (the
+  root went away, the handle failed), or a watcher that cannot start, closes it, asks for a sweep, and every 5 minutes
+  (`WatcherFallbackInterval`) tries to start it again, sweeping once more while it cannot. Event handlers catch and log.
+- **Saves from Visual Studio.** The `documentSaved` notification (contract 1.3, see the Contracts README) calls
+  `IndexingService.NotifySaved`: the file goes to its root's queue at once, with the time it arrived, bypassing the debounce
+  (the watcher forgets the path so its own event does not repeat the work; when it arrives anyway the run finds the hash
+  unchanged). The save path chunks the file, keeps the stored vectors of chunks whose text did not change, embeds the new
+  ones in batches of 8 (`SaveEmbeddingBatchSize`) while the next batch still fits `SaveSearchableBudget` (500 ms) less
+  `SaveStoreReserve` (80 ms), and stores the file: searchable lexically at once and by vector for every chunk embedded so
+  far. When the budget ran out (a large or entirely new file on a slow CPU) the remaining chunks get their vectors right
+  after, in normal batches; until then the file's row carries a modified time of 0, so if that never completes the next
+  sweep indexes the file again.
+- **Incremental runs** (`IndexPass.RunIncrementalAsync`, between full runs on the same loop, never while a full run or a
+  pause is on): each queued path is decided with `PathClassifier.Classify` (the scan's rules, size cap and content checks
+  included) and hashed. Gone or newly excluded files lose their rows (and everything under a folder that went away); files
+  whose hash is unchanged are skipped; the others are chunked, embedded and stored, saved files first, the rest through
+  the batched pipeline. Every write sets `IndexWriteSession.UpdateVectorCache`, so the in-memory vector copy takes the
+  stored and deleted vectors with the commit instead of being reloaded (see the Local Store README). At the end the symbol
+  builder (`AddFile`/`RemoveFile` as files were stored or deleted) rebuilds the graph and the changed reference edges are
+  written, once. A folder that appeared with files the batch does not name (moved or copied in) asks for a sweep; a file
+  the editor still has locked is queued again 500 ms later. Status: `Storing` with the batch's file count, then `Idle`.
+- **Chunk-level reuse, every run.** A changed file's chunks whose breadcrumb and text match a stored chunk of that file keep
+  its vector (same model, same text), so an edit or a branch switch embeds only the members that changed.
+- **Open documents first.** The `openDocumentsChanged` notification (contract 1.3) gives the open documents; a full run
+  indexes the open ones among its added and changed files as a batch of their own and refreshes at once, so after a branch
+  switch what the developer is looking at is searchable first (`PassStatistics.PrioritySearchable`). Forgotten when the
+  extension disconnects.
+- **Pauses and ownership.** While indexing is paused (user, memory, build, test, debug, battery) the watcher keeps
+  queueing; nothing runs, and on resume the queued paths are applied as one coalesced batch. Before every run the service
+  checks that `writer.lock` still carries this host's token (`IndexStore.HoldsWriterLock`); when it does not (deleted, or
+  reclaimed by a host that took this one for dead) the root, its watcher with it, is closed and opened again, as a reader
+  if another live host owns it now.
+
+Measured on this machine (16 logical processors, CPU only, bundled `bge-small-en-v1.5` int8; shared with other agents'
+builds, so indicative): a 202-line C# file with one method edited is searchable 40 to 50 ms after the save arrives (median;
+outliers to 580 ms under load); the same file with every chunk new is searchable after 280 to 420 ms with 16 to 24 of its
+29 chunks embedded, and all its vectors are in place after about 500 to 600 ms. A branch switch touching 500 files of
+about 100 lines (two members changed in each) is indexed 17 to 21 s after `git checkout` starts, git's own 3.6 to 5.9 s
+included; 500 files rewritten whole (6,500 new chunks) take 87 to 107 s, over the 30 s budget, with the open documents
+searchable about 6.6 s after the checkout started. See `IndexingWatcherModelTests`.
+
+Event ids: watcher 2960-2969, incremental runs 2906-2907, sweeps requested and the lost lock 2917-2919.
+
 ### Readers
 
-A host that opened an index read-only (another Visual Studio owns it) does not index it, and **forwards nothing**: forwarding
+A host that opened an index read-only (another Visual Studio owns it) does not index it, does not watch it, and
+**forwards nothing**: forwarding
 "file changed" or "rebuild" requests to the owner's pipe needs a host-to-host handshake (the pipe and its token are bound
 to the owner's own extension), which is not cheap to add here. Instead the reader checks every 30 s whether the owner is
 still alive (`IndexStore.GetLiveWriter`); when it is gone the reader opens the index again, reclaiming the stale lock, and
 as the new writer runs a full sweep, which picks up whatever changed meanwhile. A reader still searches the index. A
-rebuild requested on a reader is refused with `PolicyDenied` naming the other instance. The watcher (work item 2.10) can
-add forwarding later through the same `IndexWriterEndpoint`.
+rebuild requested on a reader is refused with `PolicyDenied` naming the other instance. Work item 2.10 kept this: a save
+in a Visual Studio that only reads the index is not forwarded either; the owner's watcher sees the file change on disk
+(with its 500 ms debounce, not the save path), which covers every instance on the same machine. Forwarding can still come
+through the same `IndexWriterEndpoint`.
 
 Event ids 2900-2999 (the indexing libraries use 2300-2399).
 

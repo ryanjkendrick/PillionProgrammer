@@ -1,5 +1,6 @@
 using Pillion.ContextEngine.Symbols;
 using Pillion.Contracts;
+using Pillion.Indexing.Discovery;
 using Pillion.Indexing.Ownership;
 using Pillion.Indexing.Roots;
 using Pillion.Indexing.Sweep;
@@ -15,6 +16,10 @@ namespace Pillion.Host.Indexing;
 /// </summary>
 internal sealed class RootIndex : IAsyncDisposable
 {
+    private readonly Lock _pendingGate = new();
+    private readonly Dictionary<string, long?> _pending = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<string> _exclude = [];
+    private PathClassifier? _classifier;
     private SymbolGraph? _graph;
 
     /// <summary>Initializes a new instance of the <see cref="RootIndex"/> class.</summary>
@@ -105,6 +110,89 @@ internal sealed class RootIndex : IAsyncDisposable
     /// <summary>Gets or sets when the index last changed.</summary>
     public DateTimeOffset? LastUpdatedUtc { get; set; }
 
+    /// <summary>Gets or sets the watcher of this root (work item 2.10); only a writer has one, and only while it owns the lock.</summary>
+    public RootWatcher? Watcher { get; set; }
+
+    /// <summary>Gets the discovery rules for one path at a time (the watcher's filter and the incremental indexer), rebuilt when <c>indexing.exclude</c> changes.</summary>
+    public PathClassifier Classifier
+    {
+        get
+        {
+            lock (_pendingGate)
+            {
+                return _classifier ??= new PathClassifier(Path, new ScanOptions { ExcludePatterns = _exclude });
+            }
+        }
+    }
+
+    /// <summary>Gets a value indicating whether changed paths wait for the incremental indexer.</summary>
+    public bool HasPendingChanges
+    {
+        get
+        {
+            lock (_pendingGate)
+            {
+                return _pending.Count > 0;
+            }
+        }
+    }
+
+    /// <summary>Sets the <c>indexing.exclude</c> patterns the classifier uses.</summary>
+    /// <param name="exclude">The effective patterns.</param>
+    /// <returns><see langword="true"/> when they differ from the ones in use (the root needs a sweep).</returns>
+    public bool SetExclusions(IReadOnlyList<string> exclude)
+    {
+        lock (_pendingGate)
+        {
+            if (_exclude.SequenceEqual(exclude, StringComparer.Ordinal))
+            {
+                return false;
+            }
+
+            _exclude = [.. exclude];
+            _classifier = null;
+            return true;
+        }
+    }
+
+    /// <summary>Queues changed paths for the incremental indexer (relative to the root).</summary>
+    /// <param name="paths">The paths.</param>
+    /// <param name="savedAt">For a save relayed from Visual Studio, when it arrived (a <see cref="System.Diagnostics.Stopwatch"/> timestamp): the save path's budget counts from there.</param>
+    public void AddPending(IEnumerable<string> paths, long? savedAt = null)
+    {
+        lock (_pendingGate)
+        {
+            foreach (var path in paths)
+            {
+                if (savedAt is not null || !_pending.ContainsKey(path))
+                {
+                    _pending[path] = savedAt ?? (_pending.TryGetValue(path, out var earlier) ? earlier : null);
+                }
+            }
+        }
+    }
+
+    /// <summary>Takes every queued path (with the save time of the ones Visual Studio saved).</summary>
+    /// <returns>The paths.</returns>
+    public Dictionary<string, long?> TakePending()
+    {
+        lock (_pendingGate)
+        {
+            var taken = new Dictionary<string, long?>(_pending, StringComparer.OrdinalIgnoreCase);
+            _pending.Clear();
+            return taken;
+        }
+    }
+
+    /// <summary>Forgets every queued path (a sweep is about to look at the whole tree).</summary>
+    public void ClearPending()
+    {
+        lock (_pendingGate)
+        {
+            _pending.Clear();
+        }
+    }
+
     /// <summary>Starts the session's symbol state again (after a rebuild wiped the index).</summary>
     public void ResetSession()
     {
@@ -129,6 +217,8 @@ internal sealed class RootIndex : IAsyncDisposable
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
     {
+        Watcher?.Dispose();
+        Watcher = null;
         await Storage.DisposeAsync().ConfigureAwait(false);
         await Store.DisposeAsync().ConfigureAwait(false);
     }

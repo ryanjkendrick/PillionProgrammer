@@ -16,17 +16,29 @@ public abstract class VectorIndexBase : IVectorIndex
     private protected VectorStorage Storage { get; }
 
     /// <inheritdoc/>
-    public Task UpsertAsync(long chunkId, ReadOnlyMemory<sbyte> vector, VectorMetadata metadata, CancellationToken cancellationToken = default)
+    /// <remarks>
+    /// The in-memory copy of the default backend takes the vector incrementally after the commit (work item 2.10) when it
+    /// was current, instead of being reloaded whole by the next search.
+    /// </remarks>
+    public async Task UpsertAsync(long chunkId, ReadOnlyMemory<sbyte> vector, VectorMetadata metadata, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(metadata);
-        return Storage.Database.WriteAsync(
+        var delta = await Storage.Database.WriteAsync(
             (connection, transaction, _) =>
             {
+                var before = VectorCache.ReadGeneration(connection, transaction);
                 using var session = VectorStorage.BeginWrite(connection, transaction);
                 session.Upsert(chunkId, vector.Span, metadata.Language, metadata.Partition);
-                return Task.CompletedTask;
+                var after = VectorCache.ReadGeneration(connection, transaction);
+                return Task.FromResult(after - before == 1
+                    ? new VectorDelta { Before = before, After = after, Added = [new AddedVector(chunkId, vector.ToArray(), metadata.Language, metadata.Partition)] }
+                    : null);
             },
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
+        if (delta is not null)
+        {
+            Storage.ApplyDelta(delta);
+        }
     }
 
     /// <inheritdoc/>

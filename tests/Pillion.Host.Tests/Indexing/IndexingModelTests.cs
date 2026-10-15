@@ -199,7 +199,7 @@ public sealed class IndexingModelTests(ITestOutputHelper output) : IDisposable
         throw new DirectoryNotFoundException("The repository root was not found above the test assembly.");
     }
 
-    private static ServiceProvider BuildGateway(PillionSettings settings)
+    internal static ServiceProvider BuildGateway(PillionSettings settings)
     {
         var services = new ServiceCollection();
         services.AddLogging();

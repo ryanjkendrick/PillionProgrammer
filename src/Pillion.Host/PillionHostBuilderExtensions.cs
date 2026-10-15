@@ -185,6 +185,15 @@ internal static class PillionHostBuilderExtensions
             IdeActivityMonitor.NotificationName,
             sp => new Action<IdeActivity>(sp.GetRequiredService<IdeActivityMonitor>().Set));
 
+        // Work item 2.10: a document saved in Visual Studio goes to its root's incremental indexer at once (the watcher of each
+        // root this host owns catches every other change, with its debounce), and the open documents are indexed first by a run.
+        builder.Services.AddRpcNotification(
+            IndexingService.DocumentSavedNotification,
+            sp => new Action<string>(sp.GetRequiredService<IndexingService>().NotifySaved));
+        builder.Services.AddRpcNotification(
+            IndexingService.OpenDocumentsChangedNotification,
+            sp => new Action<string[]>(sp.GetRequiredService<IndexingService>().SetOpenDocuments));
+
         // RPC targets for the agent service are registered here by a later work item.
         return builder;
     }

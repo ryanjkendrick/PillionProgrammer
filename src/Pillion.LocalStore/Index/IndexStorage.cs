@@ -149,18 +149,41 @@ public sealed partial class IndexStorage : IAsyncDisposable
     /// <param name="work">The writes; it runs synchronously on the writer connection.</param>
     /// <param name="cancellationToken">Cancels waiting for the writer, and is passed to <paramref name="work"/>.</param>
     /// <returns>The result of <paramref name="work"/>.</returns>
+    /// <remarks>
+    /// When <paramref name="work"/> sets <see cref="IndexWriteSession.UpdateVectorCache"/>, the vectors it stored and deleted
+    /// are applied to the in-memory copy right after the commit (work item 2.10), so they are searchable at once without the
+    /// whole copy being reloaded.
+    /// </remarks>
     /// <exception cref="InvalidOperationException">The database is read-only.</exception>
-    public Task<T> WriteAsync<T>(Func<IndexWriteSession, CancellationToken, T> work, CancellationToken cancellationToken = default)
+    public async Task<T> WriteAsync<T>(Func<IndexWriteSession, CancellationToken, T> work, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(work);
-        return Database.WriteAsync(
+        VectorDelta? delta = null;
+        var result = await Database.WriteAsync(
             (connection, transaction, token) =>
             {
                 using var session = new IndexWriteSession(connection, transaction);
-                return Task.FromResult(work(session, token));
+                var value = work(session, token);
+                delta = session.CompleteVectorDelta();
+                return Task.FromResult(value);
             },
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
+
+        // Committed: the in-memory copy may follow.
+        if (delta is not null)
+        {
+            LastVectorDeltaApplied = Storage.ApplyDelta(delta);
+        }
+
+        return result;
     }
+
+    /// <summary>
+    /// Gets a value indicating whether the last write that asked for it (<see cref="IndexWriteSession.UpdateVectorCache"/>)
+    /// brought the in-memory vector copy up to date without a reload; <see langword="false"/> when there was no copy yet or it
+    /// had missed another change (the next search or <see cref="WarmVectorCacheAsync"/> reloads it). For logs and tests.
+    /// </summary>
+    public bool LastVectorDeltaApplied { get; private set; }
 
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()

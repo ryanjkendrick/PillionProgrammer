@@ -166,6 +166,15 @@ distance in managed code with AVX2 or 128-bit SIMD and rank alike:
   the table scan. The copy holds vectors only (never text), is never written to disk, and is reloaded when
   `vec_generation` moves (about 0.8 s per 100,000 chunks); `IndexStorage.WarmVectorCacheAsync` reloads it ahead of the
   next search, for the indexing pipeline to call after each batch.
+  **Incremental updates (work item 2.10).** A write through `IndexStorage.WriteAsync` that sets
+  `IndexWriteSession.UpdateVectorCache` first records the vectors it stores (`ReplaceFileChunks`, `UpsertEmbeddings`) and
+  deletes (`ReplaceFileChunks`, `DeleteFileChunks`) with `vec_generation` before and after; after the commit the copy is
+  rebuilt from itself with those rows dropped and added (one pass over the arrays, a few milliseconds at 100,000 chunks)
+  and tied to the new generation, instead of being read and decrypted again. It is applied only when the copy was at
+  exactly the generation the write started from and the generation moved by exactly the tracked writes; otherwise the copy
+  is left to reload on the next search (`IndexStorage.LastVectorDeltaApplied` says which happened). Both run under the
+  copy's lock, so a reload and a delta never cross. `IVectorIndex.UpsertAsync` updates the copy the same way. The host's
+  watcher and save path use it; a full indexing run does not (thousands of small deltas would cost more than one reload).
 - `TableScanVectorIndex` (`VectorBackendPreference.TableScan`): reads and decrypts `chunk_embeddings` on every search and
   keeps no copy.
 

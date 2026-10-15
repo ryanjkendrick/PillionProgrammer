@@ -132,6 +132,39 @@ internal sealed class PassStatistics
 
     /// <summary>Gets or sets the time from the start of the run to the end of the first refresh (partial results searchable), or <see langword="null"/> when nothing was stored.</summary>
     public TimeSpan? FirstSearchable { get; set; }
+
+    /// <summary>Gets or sets, for an incremental run, the longest time from a save's arrival to its file being searchable.</summary>
+    public TimeSpan? SaveToSearchable { get; set; }
+
+    /// <summary>Gets or sets how many of the run's added or changed files were open in Visual Studio (indexed first).</summary>
+    public int PriorityFiles { get; set; }
+
+    /// <summary>Gets or sets the time from the start of the run until the open documents were stored and refreshed (searchable lexically and by vector).</summary>
+    public TimeSpan? PrioritySearchable { get; set; }
+
+    /// <summary>Gets or sets when the open documents became searchable (a <see cref="Stopwatch"/> timestamp), for measurements from outside the run.</summary>
+    public long? PrioritySearchableAt { get; set; }
+
+    /// <summary>Gets or sets the saved files stored before all their chunks had vectors (the save budget ran out).</summary>
+    public int PartialFiles { get; set; }
+
+    /// <summary>Gets or sets, for the last saved file, how many chunks it has.</summary>
+    public int SavedChunks { get; set; }
+
+    /// <summary>Gets or sets, for the last saved file, how many of its chunks had vectors when it became searchable (reused or embedded within the budget).</summary>
+    public int SavedChunksWithVectors { get; set; }
+
+    /// <summary>Gets or sets, for the last saved file, the time from the save's arrival to every chunk having its vector.</summary>
+    public TimeSpan? SavedAllVectorsAfter { get; set; }
+
+    private long _chunksReused;
+
+    /// <summary>Gets the chunks of changed files whose text was unchanged, so their stored vectors were kept instead of embedding them again.</summary>
+    public long ChunksReused => Interlocked.Read(ref _chunksReused);
+
+    /// <summary>Counts reused chunks (from several pipeline threads).</summary>
+    /// <param name="count">The chunks.</param>
+    public void AddChunksReused(int count) => Interlocked.Add(ref _chunksReused, count);
 }
 
 /// <summary>
@@ -160,6 +193,10 @@ internal sealed partial class IndexPass
     private long _lastRefresh;
     private TimeSpan _lastRefreshCost;
     private bool _symbolWritesFailed;
+    private bool _incremental;
+    private int _priorityTotal;
+    private int _priorityStored;
+    private TimeSpan _lastEmbedDuration;
 
     /// <summary>Initializes a new instance of the <see cref="IndexPass"/> class.</summary>
     /// <param name="root">The root; this host must own its index.</param>
@@ -204,12 +241,23 @@ internal sealed partial class IndexPass
     /// <summary>Gets what the run did.</summary>
     public PassStatistics Statistics { get; } = new();
 
+    /// <summary>Gets an action run when the sweep is about to start (after any pause): the watcher's queued paths are dropped, the sweep sees them.</summary>
+    public Action? BeforeSweep { get; init; }
+
+    /// <summary>
+    /// Gets the paths (relative to the root) of the documents open in Visual Studio (work item 2.10): a run indexes them
+    /// before every other added or changed file, and refreshes the vectors and the graph as soon as they are stored, so after
+    /// a branch switch what the developer is looking at is searchable first.
+    /// </summary>
+    public IReadOnlySet<string> PriorityPaths { get; init; } = new HashSet<string>();
+
     /// <summary>Runs the pass to the end.</summary>
     /// <param name="cancellationToken">Stops the run (files already stored stay stored).</param>
     /// <returns>A task that completes when the index is up to date with the tree.</returns>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         await _pause.WaitWhilePausedAsync(cancellationToken).ConfigureAwait(false);
+        BeforeSweep?.Invoke();
         Advance(IndexPhase.Discovering);
 
         // 1 and 2. Discover and hash (one walk: unchanged files are neither opened nor hashed).
@@ -243,6 +291,14 @@ internal sealed partial class IndexPass
             ? [.. sweep.Unchanged, .. sweep.Touched]
             : new List<FileRecord>();
         var work = sweep.Added.Concat(sweep.Changed).ToList();
+        if (PriorityPaths.Count > 0)
+        {
+            // Open documents first (a stable partition keeps the sweep's order within each part).
+            work = [.. work.Where(f => PriorityPaths.Contains(f.Path)), .. work.Where(f => !PriorityPaths.Contains(f.Path))];
+            _priorityTotal = work.Count(f => PriorityPaths.Contains(f.Path));
+            Statistics.PriorityFiles = _priorityTotal;
+        }
+
         Progress.FilesTotal = work.Count + symbolsOnly.Count;
         Progress.SetBytesTotal(work.Sum(f => f.Size));
         Advance(IndexPhase.Chunking);
@@ -251,10 +307,16 @@ internal sealed partial class IndexPass
         await ExtractSymbolsOnlyAsync(symbolsOnly, storeSymbols: !symbolsCurrent, cancellationToken).ConfigureAwait(false);
         _root.SymbolsLoaded = true;
 
-        // 3 to 6 for the added and changed files.
-        if (work.Count > 0)
+        // 3 to 6 for the added and changed files: the open documents on their own first, then searchable, then the rest.
+        if (_priorityTotal > 0)
         {
-            await IndexFilesAsync(work, cancellationToken).ConfigureAwait(false);
+            await IndexFilesAsync(work.GetRange(0, _priorityTotal), cancellationToken).ConfigureAwait(false);
+            await RefreshAsync(force: true, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (work.Count > _priorityTotal)
+        {
+            await IndexFilesAsync(work.GetRange(_priorityTotal, work.Count - _priorityTotal), cancellationToken).ConfigureAwait(false);
         }
 
         Advance(IndexPhase.Storing);
@@ -522,8 +584,10 @@ internal sealed partial class IndexPass
                 new ParallelOptions { MaxDegreeOfParallelism = _options.MaxDegreeOfParallelism, TaskScheduler = _scheduler, CancellationToken = cancellationToken },
                 async (record, token) =>
                 {
-                    await _pause.WaitWhilePausedAsync(token).ConfigureAwait(false);
-                    var file = Prepare(record);
+                    // Stay on the pipeline's below-normal threads (the scheduler is captured): chunking follows.
+                    await _pause.WaitWhilePausedAsync(token).ConfigureAwait(true);
+                    var reusable = await ReusableVectorsAsync(record, token).ConfigureAwait(true);
+                    var file = Prepare(record, reusable);
                     await writer.WriteAsync(file, token).ConfigureAwait(false);
                 }).ConfigureAwait(false);
             writer.TryComplete();
@@ -535,7 +599,8 @@ internal sealed partial class IndexPass
         }
     }
 
-    private PreparedFile Prepare(FileRecord record)
+    /// <summary>Reads, chunks and extracts a file; chunks whose text the file already had keep their stored vectors.</summary>
+    private PreparedFile Prepare(FileRecord record, Dictionary<string, sbyte[]>? reusable = null)
     {
         var text = ReadText(record);
         if (text is null)
@@ -546,7 +611,56 @@ internal sealed partial class IndexPass
         var chunks = Chunker.Chunk(record.Path, text, _chunkOptions);
         var symbols = Extractor.Extract(record.Path, text);
         _options.OnFilePrepared?.Invoke(record.Path);
-        return new PreparedFile(record, chunks, symbols, CountLines(text));
+        var file = new PreparedFile(record, chunks, symbols, CountLines(text));
+        if (reusable is { Count: > 0 })
+        {
+            var reused = 0;
+            for (var i = 0; i < chunks.Count; i++)
+            {
+                if (reusable.TryGetValue(chunks[i].EmbeddingText, out var vector))
+                {
+                    file.Vectors[i] = new EmbeddedVector(vector, 0, null);
+                    file.Pending--;
+                    reused++;
+                }
+            }
+
+            Statistics.AddChunksReused(reused);
+        }
+
+        return file;
+    }
+
+    /// <summary>
+    /// The vectors of a changed file's stored chunks, by embedding text (breadcrumb and text): the model and the text are the
+    /// same, so the vector is too (work item 2.10). A branch switch or an edit usually changes a few members of a file, and
+    /// only those are embedded again.
+    /// </summary>
+    private Task<Dictionary<string, sbyte[]>?> ReusableVectorsAsync(FileRecord record, CancellationToken cancellationToken)
+    {
+        if (record.Id == 0)
+        {
+            return Task.FromResult<Dictionary<string, sbyte[]>?>(null);
+        }
+
+        return _root.Storage.Database.ReadAsync<Dictionary<string, sbyte[]>?>(
+            (connection, token) =>
+            {
+                using var command = connection.CreateCommand();
+                command.CommandText = "SELECT c.breadcrumb, c.text, e.embedding FROM chunks c JOIN chunk_embeddings e ON e.chunk_id = c.id WHERE c.file_id = $file";
+                command.Parameters.AddWithValue("$file", record.Id);
+                using var reader = command.ExecuteReader();
+                var vectors = new Dictionary<string, sbyte[]>(StringComparer.Ordinal);
+                while (reader.Read())
+                {
+                    token.ThrowIfCancellationRequested();
+                    var bytes = (byte[])reader.GetValue(2);
+                    vectors.TryAdd(reader.GetString(0) + "\n" + reader.GetString(1), System.Runtime.InteropServices.MemoryMarshal.Cast<byte, sbyte>(bytes).ToArray());
+                }
+
+                return Task.FromResult<Dictionary<string, sbyte[]>?>(vectors);
+            },
+            cancellationToken);
     }
 
     private async Task ConsumeAsync(ChannelReader<PreparedFile> reader, CancellationToken cancellationToken)
@@ -558,6 +672,11 @@ internal sealed partial class IndexPass
             waiting.Enqueue(file);
             for (var i = 0; i < file.Chunks.Count; i++)
             {
+                if (file.Vectors[i] is not null)
+                {
+                    continue; // Reused from the stored chunk with the same text.
+                }
+
                 batch.Add((file, i));
                 if (batch.Count >= _memory.BatchSize * Math.Max(1, _options.EmbeddingSortWindow))
                 {
@@ -567,7 +686,7 @@ internal sealed partial class IndexPass
                 }
             }
 
-            if (file.Chunks.Count == 0)
+            if (file.Pending == 0)
             {
                 await StoreReadyAsync(waiting, cancellationToken).ConfigureAwait(false);
             }
@@ -649,39 +768,62 @@ internal sealed partial class IndexPass
         if (stored)
         {
             _changed();
-            await RefreshAsync(force: false, cancellationToken).ConfigureAwait(false);
+
+            // An incremental run's files are searchable once stored (their vectors go to the in-memory copy with the commit);
+            // its one refresh, for the symbol graph, comes at the end.
+            if (!_incremental)
+            {
+                await RefreshAsync(force: false, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
-    private async Task StoreAsync(PreparedFile file, CancellationToken cancellationToken)
+    /// <summary>
+    /// Stores a file's row, chunks (with the vectors it has) and symbols in one transaction. A file stored before all its
+    /// chunks have vectors (the save path's budget ran out) gets a modified time of 0 in its row until they do, so if the
+    /// rest never arrives (cancelled, failed) the next sweep sees the file as changed and indexes it again.
+    /// </summary>
+    /// <returns>The stored row and the new chunk ids, in order.</returns>
+    private async Task<(FileRecord Row, IReadOnlyList<long> ChunkIds)> StoreAsync(PreparedFile file, CancellationToken cancellationToken)
     {
         var chunks = new NewChunk[file.Chunks.Count];
         long tokens = 0;
+        var complete = true;
         for (var i = 0; i < chunks.Length; i++)
         {
             var chunk = file.Chunks[i];
             tokens += chunk.TokenCount;
+            var vector = file.Vectors[i];
+            complete &= vector is not null;
             chunks[i] = new NewChunk(chunk.StartLine, chunk.EndLine, KindName(chunk.Kind), chunk.Breadcrumb, chunk.Text, chunk.TokenCount)
             {
-                Embedding = file.Vectors[i]!.Quantized,
+                Embedding = vector is null ? ReadOnlyMemory<sbyte>.Empty : vector.Quantized,
             };
         }
 
+        var record = complete ? file.Record : file.Record with { ModifiedUnixMilliseconds = 0 };
         var symbols = ToSymbols(file.Symbols!);
         var files = _root.Store.Files;
-        var row = await _scheduler.RunAsync(
+        var incremental = _incremental;
+        var (row, ids) = await _scheduler.RunAsync(
             () => _root.Storage.WriteAsync(
                 (session, token) =>
                 {
-                    var stored = files.Upsert(session.Connection, session.Transaction, [file.Record], token)[0];
-                    session.ReplaceFileChunks(stored.Id, chunks);
+                    session.UpdateVectorCache = incremental;
+                    var stored = files.Upsert(session.Connection, session.Transaction, [record], token)[0];
+                    var chunkIds = session.ReplaceFileChunks(stored.Id, chunks);
                     session.ReplaceFileSymbols(stored.Id, symbols, token);
-                    return stored;
+                    return (stored, chunkIds);
                 },
                 cancellationToken),
             cancellationToken).ConfigureAwait(false);
 
         Track(row);
+        if (_priorityTotal > 0 && PriorityPaths.Contains(row.Path))
+        {
+            _priorityStored++;
+        }
+
         _root.Symbols.AddFile(file.Symbols!);
         _root.LastUpdatedUtc = DateTimeOffset.UtcNow;
         Statistics.FilesIndexed++;
@@ -689,6 +831,7 @@ internal sealed partial class IndexPass
         Statistics.Chunks += chunks.Length;
         Statistics.Tokens += tokens;
         Progress.ChunksDone += chunks.Length;
+        return (row, ids);
     }
 
     private bool IsRefreshDue()
@@ -805,6 +948,13 @@ internal sealed partial class IndexPass
         if (Statistics.FirstSearchable is null && Statistics.FilesIndexed > 0)
         {
             Statistics.FirstSearchable = Stopwatch.GetElapsedTime(_started);
+        }
+
+
+        if (Statistics.PrioritySearchable is null && _priorityTotal > 0 && _priorityStored >= _priorityTotal)
+        {
+            Statistics.PrioritySearchable = Stopwatch.GetElapsedTime(_started);
+            Statistics.PrioritySearchableAt = Stopwatch.GetTimestamp();
         }
 
         LogRefreshed(_logger, _root.Store.Identity.Id, writes.Count, graph.Edges.Count, _lastRefreshCost.TotalMilliseconds);

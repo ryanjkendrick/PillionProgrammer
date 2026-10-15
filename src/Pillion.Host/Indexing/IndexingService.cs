@@ -7,6 +7,7 @@ using Pillion.ContextEngine;
 using Pillion.Contracts;
 using Pillion.Host.Context;
 using Pillion.Host.Rpc;
+using Pillion.Indexing.Discovery;
 using Pillion.Indexing.Ownership;
 using Pillion.Indexing.Retention;
 using Pillion.Indexing.Roots;
@@ -40,6 +41,12 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         "DELETE FROM meta WHERE key IN ('symbols_version', 'vector_dimensions')",
     ];
 
+    /// <summary>The client-to-host notification for a document saved in Visual Studio (one positional argument, the full path; contract 1.3, work item 2.10).</summary>
+    public const string DocumentSavedNotification = "documentSaved";
+
+    /// <summary>The client-to-host notification with every document open in Visual Studio (one positional argument, a string array of full paths; contract 1.3, work item 2.10).</summary>
+    public const string OpenDocumentsChangedNotification = "openDocumentsChanged";
+
     /// <summary>How many reader connections are opened ahead of the first search (the Local Store keeps up to four).</summary>
     private const int WarmReaderConnections = 2;
 
@@ -55,6 +62,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     private readonly string _pipeName;
     private readonly TimeProvider _time;
     private readonly ILogger _logger;
+    private readonly ILogger _watcherLogger;
     private readonly IVsixConnection? _vsix;
     private readonly PauseGate _pause = new();
     private readonly MemoryGovernor _memory;
@@ -74,9 +82,13 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     private IndexPass? _currentPass;
     private RootIndex? _currentRoot;
     private string? _lastError;
+    private string[] _openDocuments = [];
     private bool _failed;
     private bool _started;
     private int _disposed;
+    private int _incrementalRuns;
+    private int _savesReceived;
+    private int _fullRuns;
 
     /// <summary>Initializes a new instance of the <see cref="IndexingService"/> class.</summary>
     /// <param name="factory">Opens indexes.</param>
@@ -123,12 +135,46 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         _vsix = vsix;
         loggerFactory ??= NullLoggerFactory.Instance;
         _logger = loggerFactory.CreateLogger<IndexingService>();
+        _watcherLogger = loggerFactory.CreateLogger<RootWatcher>();
         _memory = new MemoryGovernor(memory, _pause, MemoryCapBytes, options, _time, _logger, embedder.ReleaseMemory);
         _scheduler = new PipelineScheduler(options.MaxDegreeOfParallelism);
     }
 
     /// <summary>Gets the statistics of the last run that finished, for logs and tests.</summary>
     public PassStatistics? LastRunStatistics { get; private set; }
+
+    /// <summary>Gets the statistics of the last incremental run (work item 2.10: watched and saved files), for logs and tests.</summary>
+    public PassStatistics? LastIncrementalStatistics { get; private set; }
+
+    /// <summary>Gets what the last incremental run found, for logs and tests.</summary>
+    public IncrementalOutcome? LastIncrementalOutcome { get; private set; }
+
+    /// <summary>Gets the statistics of the last incremental run that indexed a save relayed from Visual Studio, for logs and tests.</summary>
+    public PassStatistics? LastSaveStatistics { get; private set; }
+
+    /// <summary>Gets the time from the last indexed save's arrival to its file being searchable (work item 2.10; Gate 2: 500 ms).</summary>
+    public TimeSpan? LastSaveToSearchable { get; private set; }
+
+    /// <summary>Gets how many incremental runs finished (tests wait for the next one).</summary>
+    public int IncrementalRuns => Volatile.Read(ref _incrementalRuns);
+
+    /// <summary>Gets how many saves Visual Studio relayed (tests of the notification).</summary>
+    internal int SavesReceived => Volatile.Read(ref _savesReceived);
+
+    /// <summary>Gets the documents Visual Studio last reported open (tests of the notification).</summary>
+    internal IReadOnlyList<string> OpenDocuments
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _openDocuments;
+            }
+        }
+    }
+
+    /// <summary>Gets how many full runs finished (tests wait for the next one).</summary>
+    public int FullRuns => Volatile.Read(ref _fullRuns);
 
     /// <summary>Gets the pipeline's scheduler (tests check its concurrency).</summary>
     internal PipelineScheduler Scheduler => _scheduler;
@@ -283,6 +329,87 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
 
         LogWorkspace(_logger, workspace.SolutionPath is not null ? "solution" : workspace.FolderPath is not null ? "folder" : "nothing", workspace.ProjectPaths.Length);
         Wake();
+    }
+
+    /// <summary>
+    /// Takes a document save relayed from Visual Studio (the <c>documentSaved</c> notification, work item 2.10): the file goes
+    /// to its root's incremental indexer at once, without the watcher's debounce, and is searchable within
+    /// <see cref="IndexingOptions.SaveSearchableBudget"/> of now. A file outside every root this host owns (another
+    /// repository, or an index another Visual Studio owns), or excluded by the discovery rules, is ignored.
+    /// </summary>
+    /// <param name="fullPath">The saved file's full path.</param>
+    public void NotifySaved(string? fullPath)
+    {
+        var savedAt = Stopwatch.GetTimestamp();
+        Interlocked.Increment(ref _savesReceived);
+        if (string.IsNullOrWhiteSpace(fullPath) || !_features.IsEnabled(FeatureNames.Indexing))
+        {
+            return;
+        }
+
+        string full;
+        try
+        {
+            full = Path.GetFullPath(fullPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return;
+        }
+
+        RootIndex? root = null;
+        lock (_gate)
+        {
+            foreach (var candidate in _roots.Values)
+            {
+                if (candidate.IsWriter
+                    && full.Length > candidate.Path.Length + 1
+                    && full.StartsWith(candidate.Path, StringComparison.OrdinalIgnoreCase)
+                    && full[candidate.Path.Length] is '\\' or '/'
+                    && (root is null || candidate.Path.Length > root.Path.Length))
+                {
+                    root = candidate;
+                }
+            }
+        }
+
+        if (root is null)
+        {
+            LogSaveIgnored(_logger);
+            return;
+        }
+
+        var relative = PathClassifier.Normalize(full[(root.Path.Length + 1)..]);
+        try
+        {
+            if (!root.Classifier.ClassifyByName(relative).IsIncluded)
+            {
+                return;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The root went away: its watcher (and the next workspace change) deal with that.
+            return;
+        }
+
+        root.Watcher?.Forget(relative);
+        root.AddPending([relative], savedAt);
+        Wake();
+    }
+
+    /// <summary>
+    /// Takes the documents open in Visual Studio (the <c>openDocumentsChanged</c> notification, work item 2.10): a run indexes
+    /// the open ones among its added and changed files first, so after a branch switch they are searchable before the rest.
+    /// </summary>
+    /// <param name="paths">The full paths of every open document; <see langword="null"/> or empty for none.</param>
+    public void SetOpenDocuments(string[]? paths)
+    {
+        var open = (paths ?? []).Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => p.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        lock (_gate)
+        {
+            _openDocuments = open;
+        }
     }
 
     /// <summary>Pauses or resumes indexing for the user (<see cref="IContextService.PauseIndexingAsync"/>).</summary>
@@ -522,15 +649,34 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
 
     private void OnActivityChanged(object? sender, EventArgs e) => ApplyActivity();
 
-    private void OnPauseChanged(object? sender, EventArgs e) => Publish();
+    private void OnPauseChanged(object? sender, EventArgs e)
+    {
+        Publish();
+
+        // Resumed: the changes queued while paused are applied now, coalesced.
+        if (!_pause.IsPaused)
+        {
+            Wake();
+        }
+    }
 
     private void OnSettingsChanged(object? sender, EventArgs e)
     {
         ApplyPower();
+        var exclude = _settings.GetCurrent().Exclude;
         lock (_gate)
         {
             // The exclusions or the flag may have changed: look at the roots again.
             _workspaceVersion++;
+
+            // New exclusions: the watcher's filter follows, and a sweep applies them to what is stored.
+            foreach (var root in _roots.Values)
+            {
+                if (root.SetExclusions(exclude) && root.IsWriter)
+                {
+                    root.NeedsRun = true;
+                }
+            }
         }
 
         Wake();
@@ -541,6 +687,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         if (_vsix is { IsConnected: false })
         {
             _activity.Set(IdeActivity.None);
+            SetOpenDocuments(null);
         }
     }
 
@@ -728,8 +875,14 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         {
             var store = await _factory.OpenAsync(new IndexRequest(repository.Path, model.ModelId, ContextEngineVersions.ChunkerVersion, _pipeName), stopping).ConfigureAwait(false);
             var root = new RootIndex(repository, store, model, projects);
+            root.SetExclusions(_settings.GetCurrent().Exclude);
             await root.RefreshCountsAsync(stopping).ConfigureAwait(false);
             LogOpened(_logger, store.Identity.Id, root.Path, root.IsWriter ? "writer" : "reader");
+            if (root.IsWriter && _options.WatchFileSystem)
+            {
+                StartWatcher(root);
+            }
+
             _ = WarmAsync(root, stopping);
             return root;
         }
@@ -774,28 +927,68 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         while (!stopping.IsCancellationRequested && _features.IsEnabled(FeatureNames.Indexing))
         {
             RootIndex? root;
-            bool rebuild;
+            bool rebuild = false;
+            bool incremental = false;
             lock (_gate)
             {
+                // A full run (opened, rebuilt, a branch switch, an overflow) first: its sweep covers every queued change.
                 root = _roots.Values.FirstOrDefault(r => r.IsWriter && (r.NeedsRun || _rebuild.Contains(Key(r.Path))));
+                if (root is null && !_pause.IsPaused)
+                {
+                    // Then the changes the watcher and Visual Studio's saves queued (work item 2.10). While paused they stay
+                    // queued and are applied, coalesced, on resume. The first full run of a session must have filled the
+                    // symbol builder first.
+                    root = _roots.Values.FirstOrDefault(r => r.IsWriter && r.SymbolsLoaded && r.HasPendingChanges);
+                    incremental = root is not null;
+                }
+
                 if (root is null)
                 {
                     return;
                 }
 
-                rebuild = _rebuild.Remove(Key(root.Path));
-                root.NeedsRun = false;
+                if (!incremental)
+                {
+                    rebuild = _rebuild.Remove(Key(root.Path));
+                    root.NeedsRun = false;
+                }
+
                 _runCancellation = CancellationTokenSource.CreateLinkedTokenSource(stopping);
                 _currentRoot = root;
             }
 
+            // Only the owner of writer.lock writes: a host whose lock was taken from it stops writing and watching.
+            if (!root.Store.HoldsWriterLock())
+            {
+                lock (_gate)
+                {
+                    _currentRoot = null;
+                    _runCancellation?.Dispose();
+                    _runCancellation = null;
+                }
+
+                await LoseWriterAsync(root, stopping).ConfigureAwait(false);
+                continue;
+            }
+
             var token = _runCancellation.Token;
-            var pass = new IndexPass(root, _embedder, _options, _scheduler, _pause, _memory, _settings.GetCurrent().Exclude, Publish, _logger);
+            var pass = new IndexPass(root, _embedder, _options, _scheduler, _pause, _memory, _settings.GetCurrent().Exclude, Publish, _logger)
+            {
+                BeforeSweep = root.ClearPending,
+                PriorityPaths = OpenDocumentsUnder(root),
+            };
+            Dictionary<string, long?>? pending = null;
             try
             {
                 if (rebuild)
                 {
                     await WipeAsync(root, token).ConfigureAwait(false);
+                }
+
+                // An incremental run is reported as Storing with its file count from the start (it has no sweep).
+                if (incremental)
+                {
+                    pass.Progress.Advance(IndexPhase.Storing);
                 }
 
                 lock (_gate)
@@ -806,8 +999,39 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
                 ClearFailure();
 
                 Publish();
-                await pass.RunAsync(token).ConfigureAwait(false);
-                LastRunStatistics = pass.Statistics;
+                if (incremental)
+                {
+                    pending = root.TakePending();
+                    var outcome = await pass.RunIncrementalAsync(pending, token).ConfigureAwait(false);
+                    LastIncrementalStatistics = pass.Statistics;
+                    LastIncrementalOutcome = outcome;
+                    Interlocked.Increment(ref _incrementalRuns);
+                    if (outcome.SaveToSearchable is { } searchable)
+                    {
+                        LastSaveStatistics = pass.Statistics;
+                        LastSaveToSearchable = searchable;
+                        LogSaveSearchable(_logger, searchable.TotalMilliseconds);
+                    }
+
+                    if (outcome.SweepNeeded)
+                    {
+                        lock (_gate)
+                        {
+                            root.NeedsRun = true;
+                        }
+                    }
+
+                    if (outcome.Retry.Count > 0)
+                    {
+                        _ = RetryLaterAsync(root, outcome.Retry, stopping);
+                    }
+                }
+                else
+                {
+                    await pass.RunAsync(token).ConfigureAwait(false);
+                    LastRunStatistics = pass.Statistics;
+                    Interlocked.Increment(ref _fullRuns);
+                }
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested && !stopping.IsCancellationRequested)
             {
@@ -816,7 +1040,14 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
                 {
                     if (_roots.ContainsValue(root) && !_rebuild.Contains(Key(root.Path)))
                     {
-                        root.NeedsRun = true;
+                        if (incremental)
+                        {
+                            Requeue(root, pending);
+                        }
+                        else
+                        {
+                            root.NeedsRun = true;
+                        }
                     }
                 }
             }
@@ -843,6 +1074,127 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             if (_workspaceVersion != _appliedWorkspaceVersion)
             {
                 return;
+            }
+        }
+    }
+
+    /// <summary>The open documents under a root, relative to it.</summary>
+    private HashSet<string> OpenDocumentsUnder(RootIndex root)
+    {
+        string[] open;
+        lock (_gate)
+        {
+            open = _openDocuments;
+        }
+
+        var under = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in open)
+        {
+            try
+            {
+                var full = Path.GetFullPath(path);
+                if (full.Length > root.Path.Length + 1 && full.StartsWith(root.Path, StringComparison.OrdinalIgnoreCase) && full[root.Path.Length] is '\\' or '/')
+                {
+                    under.Add(PathClassifier.Normalize(full[(root.Path.Length + 1)..]));
+                }
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                // Not a usable path: not prioritised.
+            }
+        }
+
+        return under;
+    }
+
+    private static void Requeue(RootIndex root, Dictionary<string, long?>? pending)
+    {
+        if (pending is null)
+        {
+            return;
+        }
+
+        foreach (var (path, savedAt) in pending)
+        {
+            root.AddPending([path], savedAt);
+        }
+    }
+
+    /// <summary>Starts the watcher of a root this host owns (work item 2.10).</summary>
+    private void StartWatcher(RootIndex root)
+    {
+        var watcher = new RootWatcher(
+            root.Path,
+            root.Root.GitDirectory,
+            () => root.Classifier,
+            _options,
+            _time,
+            _watcherLogger,
+            paths =>
+            {
+                root.AddPending(paths);
+                Wake();
+            },
+            reason =>
+            {
+                LogSweepRequested(_logger, root.Store.Identity.Id, reason);
+                lock (_gate)
+                {
+                    root.NeedsRun = true;
+                }
+
+                Wake();
+            });
+        root.Watcher = watcher;
+        watcher.Start();
+    }
+
+    /// <summary>A file that was locked when the incremental run read it is queued again a moment later.</summary>
+    private async Task RetryLaterAsync(RootIndex root, List<string> paths, CancellationToken stopping)
+    {
+        try
+        {
+            await Task.Delay(_options.WatcherDebounce, _time, stopping).ConfigureAwait(false);
+            root.AddPending(paths);
+            Wake();
+        }
+        catch (OperationCanceledException)
+        {
+            // Stopping.
+        }
+    }
+
+    /// <summary>
+    /// This host no longer holds the root's <c>writer.lock</c> (deleted, or reclaimed by a host that wrongly took this one
+    /// for dead): the watcher stops with the root, and the index is opened again, as a reader when another live host owns it.
+    /// </summary>
+    private async Task LoseWriterAsync(RootIndex root, CancellationToken stopping)
+    {
+        LogLostLock(_logger, root.Store.Identity.Id, root.Path);
+        var key = Key(root.Path);
+        lock (_gate)
+        {
+            if (!_roots.TryGetValue(key, out var current) || !ReferenceEquals(current, root))
+            {
+                return;
+            }
+
+            _roots.Remove(key);
+        }
+
+        await root.DisposeAsync().ConfigureAwait(false);
+        WorkspaceDescription? workspace;
+        lock (_gate)
+        {
+            workspace = _workspace;
+        }
+
+        var reopened = await OpenAsync(root.Root, root.Model, workspace is null ? [] : Projects(workspace), stopping).ConfigureAwait(false);
+        if (reopened is not null)
+        {
+            lock (_gate)
+            {
+                _roots[key] = reopened;
             }
         }
     }
@@ -1045,6 +1397,18 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
 
     [LoggerMessage(EventId = 2916, Level = LogLevel.Debug, Message = "Warming an index for search failed; the first search pays for it.")]
     private static partial void LogWarmFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(EventId = 2917, Level = LogLevel.Information, Message = "Index {IndexId} is swept: {Reason}.")]
+    private static partial void LogSweepRequested(ILogger logger, string indexId, string reason);
+
+    [LoggerMessage(EventId = 2918, Level = LogLevel.Warning, Message = "This host no longer holds the writer lock of index {IndexId} for {Root}; it stops writing and watching, and opens the index again.")]
+    private static partial void LogLostLock(ILogger logger, string indexId, string root);
+
+    [LoggerMessage(EventId = 2919, Level = LogLevel.Debug, Message = "A saved file was searchable {Milliseconds:0} ms after the save arrived.")]
+    private static partial void LogSaveSearchable(ILogger logger, double milliseconds);
+
+    [LoggerMessage(EventId = 2969, Level = LogLevel.Debug, Message = "A saved document is outside every repository root this host indexes; it is not indexed here.")]
+    private static partial void LogSaveIgnored(ILogger logger);
 
     [LoggerMessage(EventId = 2914, Level = LogLevel.Debug, Message = "The battery saver state could not be read; indexing is not paused for it.")]
     private static partial void LogPowerFailed(ILogger logger, Exception exception);

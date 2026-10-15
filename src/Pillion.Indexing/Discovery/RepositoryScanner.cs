@@ -157,7 +157,7 @@ public sealed class RepositoryScanner
                 }
 
                 var fullPath = Path.Combine(full, entry.Name);
-                var fileDecision = ClassifyFile(entry, childRelative, git, pillion, user);
+                var fileDecision = ClassifyFile(entry, childRelative, git, pillion, user, _options.MaxFileBytes);
                 var language = Languages.Detect(entry.Name);
                 var scanEntry = new ScanEntry(childRelative, false, fileDecision, language, entry.Length, entry.ModifiedUnixMilliseconds);
                 if (!fileDecision.IsIncluded)
@@ -197,7 +197,7 @@ public sealed class RepositoryScanner
         return full;
     }
 
-    private static FileDecision ClassifyDirectory(RawEntry entry, string relative, string full, IgnoreChain git, IgnoreRules? pillion, IgnoreRules? user)
+    internal static FileDecision ClassifyDirectory(RawEntry entry, string relative, string full, IgnoreChain git, IgnoreRules? pillion, IgnoreRules? user)
     {
         if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
         {
@@ -227,7 +227,7 @@ public sealed class RepositoryScanner
         return FileDecision.Included;
     }
 
-    private FileDecision ClassifyFile(RawEntry entry, string relative, IgnoreChain git, IgnoreRules? pillion, IgnoreRules? user)
+    internal static FileDecision ClassifyFile(RawEntry entry, string relative, IgnoreChain git, IgnoreRules? pillion, IgnoreRules? user, long maxFileBytes)
     {
         if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
         {
@@ -259,9 +259,9 @@ public sealed class RepositoryScanner
             return new FileDecision(generated.Reason, generated.Detail);
         }
 
-        if (entry.Length > _options.MaxFileBytes)
+        if (entry.Length > maxFileBytes)
         {
-            return new FileDecision(ExclusionReason.TooLarge, $"{entry.Length} bytes, cap {_options.MaxFileBytes}");
+            return new FileDecision(ExclusionReason.TooLarge, $"{entry.Length} bytes, cap {maxFileBytes}");
         }
 
         return FileDecision.Included;
@@ -273,7 +273,7 @@ public sealed class RepositoryScanner
     /// opts back in to any built-in name except <c>.git</c>; <c>indexing.exclude</c> and the secret list cannot be opted
     /// back in to.
     /// </summary>
-    private static string? MatchBuiltIn(RawEntry entry, string relative, string full, IgnoreRules? pillion, bool isDirectory)
+    internal static string? MatchBuiltIn(RawEntry entry, string relative, string full, IgnoreRules? pillion, bool isDirectory)
     {
         var name = NameRules.MatchBuiltIn(entry.Name);
         if (name is null
@@ -297,7 +297,7 @@ public sealed class RepositoryScanner
     /// Combines the <c>.gitignore</c> stack with <c>.pillionignore</c>: a pillion rule that ignores wins, and a pillion
     /// negation re-includes what <c>.gitignore</c> ignored.
     /// </summary>
-    private static FileDecision? MatchIgnore(IgnoreChain git, IgnoreRules? pillion, string relative, bool isDirectory)
+    internal static FileDecision? MatchIgnore(IgnoreChain git, IgnoreRules? pillion, string relative, bool isDirectory)
     {
         var fromPillion = pillion?.Match(relative, isDirectory) ?? IgnoreMatch.None;
         if (fromPillion.IsIgnored)
@@ -314,7 +314,7 @@ public sealed class RepositoryScanner
         return fromGit.IsIgnored ? new FileDecision(ExclusionReason.GitIgnore, fromGit.Describe()) : null;
     }
 
-    private static string? TryReadText(string path)
+    internal static string? TryReadText(string path)
     {
         try
         {
@@ -352,7 +352,7 @@ public sealed class RepositoryScanner
     }
 
     /// <summary>A directory entry as the file system reports it.</summary>
-    private readonly record struct RawEntry(string Name, bool IsDirectory, FileAttributes Attributes, long Length, long ModifiedUnixMilliseconds);
+    internal readonly record struct RawEntry(string Name, bool IsDirectory, FileAttributes Attributes, long Length, long ModifiedUnixMilliseconds);
 
     /// <summary>A file that passed every rule that needs no content, or an entry that is already final.</summary>
     internal sealed record Candidate(ScanEntry Entry, string? FullPath)

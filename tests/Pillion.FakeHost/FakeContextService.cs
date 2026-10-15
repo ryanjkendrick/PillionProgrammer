@@ -254,6 +254,28 @@ internal sealed class FakeContextService : IContextService, IDisposable
         return Task.CompletedTask;
     }
 
+    /// <summary>Gets how many <c>documentSaved</c> notifications the client sent (contract 1.3, work item 2.10).</summary>
+    public int SavedDocuments { get; private set; }
+
+    /// <summary>Records a <c>documentSaved</c> notification (registered by Program.cs); the path is not logged.</summary>
+    /// <param name="path">The saved document's full path.</param>
+    public void OnDocumentSaved(string path)
+    {
+        SavedDocuments++;
+        Console.Error.WriteLine("fakehost: document saved (" + (string.IsNullOrEmpty(path) ? "no path" : "a path") + ")");
+    }
+
+    /// <summary>Gets how many documents the client last reported open through <c>openDocumentsChanged</c> (contract 1.3, work item 2.10).</summary>
+    public int OpenDocuments { get; private set; }
+
+    /// <summary>Records an <c>openDocumentsChanged</c> notification (registered by Program.cs); only the count is logged.</summary>
+    /// <param name="paths">The open documents' full paths.</param>
+    public void OnOpenDocumentsChanged(string[] paths)
+    {
+        OpenDocuments = paths?.Length ?? 0;
+        Console.Error.WriteLine("fakehost: " + OpenDocuments + " open documents");
+    }
+
     /// <summary>Records an <c>ideActivityChanged</c> notification (registered by Program.cs).</summary>
     /// <param name="activity">The activities in progress.</param>
     public void OnIdeActivityChanged(IdeActivity activity)
