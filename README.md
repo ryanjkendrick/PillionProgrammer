@@ -203,7 +203,8 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
     "autocomplete": true,
     "inlineChat": true,
     "mentions": true,
-    "outboundLogView": true
+    "outboundLogView": true,
+    "embeddings": true
   }
 }
 ```
@@ -224,6 +225,7 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
 | `inlineChat` | `IInlineEditService.EditAsync` (inline chat edits, `/doc`, `/test`, `/fix`, `/explain`) fails with `PolicyDenied` and a message that names the flag, and **Pillion: Inline Chat** is disabled (an open adornment says "Inline chat is disabled by settings or policy" and cannot send). Chat, autocomplete and model listing are unaffected. |
 | `mentions` | The Chat window hides the `@` picker, the pins and **Include current file**, and sends no pins and no current file with a message (pins already made stay with their conversation and come back when the flag does). Pillion Host's `ResolveMentionAsync` is not gated; chat itself is unaffected. |
 | `outboundLogView` | The Chat window hides **Inspect** and the **Outbound log**, and `IDiagnosticsService.GetOutboundRecordsAsync` and `PreviewContextAsync` fail with `PolicyDenied` and a message that names the flag. The Outbound log itself is still kept by Pillion Host. |
+| `embeddings` | The embedding gateway (`IModelGateway.EmbedAsync`, work item 2.6) fails with `PolicyDenied` and a message that names the flag; it also needs `modelGateway`. Chat, autocomplete and model listing are unaffected. Embeddings never leave the machine unless `cloudSwitches.embedding` is turned on as well (it is off by default; Local-only always wins). |
 
 A repository can switch flags off for everyone who opens it with `disabledFeatures` in `.pillion/policy.json`, next to
 `localOnly`, `disabledTools`, `exclude` and `denyCommands`:

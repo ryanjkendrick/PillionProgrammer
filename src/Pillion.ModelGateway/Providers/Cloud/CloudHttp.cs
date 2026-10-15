@@ -100,6 +100,27 @@ internal sealed partial class CloudHttp
         return await ParseAsync(stream, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Sends a POST with a JSON body and parses the JSON response (embeddings; chat streams through <see cref="PostStreamAsync"/>).</summary>
+    public async Task<JsonDocument> PostJsonAsync(string relativeUri, JsonObject body, string modelId, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(BaseUri, relativeUri))
+        {
+            Content = new StringContent(body.ToJsonString(), Encoding.UTF8, new MediaTypeHeaderValue("application/json")),
+        };
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        using var response = await SendAsync(request, modelId, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
+        await using var stream = await ReadStreamAsync(response, cancellationToken).ConfigureAwait(false);
+        var document = await ParseAsync(stream, cancellationToken).ConfigureAwait(false);
+        if (HasError(document.RootElement))
+        {
+            var text = document.RootElement.GetRawText();
+            document.Dispose();
+            throw MapMidStream(text, modelId);
+        }
+
+        return document;
+    }
+
     /// <summary>Sends a GET for the probe and reports the response without throwing for an HTTP error status.</summary>
     public async Task<CloudProbeResponse> ProbeAsync(string relativeUri, CancellationToken cancellationToken)
     {

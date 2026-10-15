@@ -61,7 +61,7 @@ public sealed class ModelRouter : IModelRouter
     /// <summary>Gets the per-task-class cloud switch.</summary>
     /// <param name="switches">The switches.</param>
     /// <param name="taskClass">The task class.</param>
-    /// <returns>Whether the task class may use a cloud provider. Embedding never may.</returns>
+    /// <returns>Whether the task class may use a cloud provider. Embedding may only when <c>cloudSwitches.embedding</c> is on, which it is not by default.</returns>
     public static bool IsCloudAllowed(CloudSwitchSettings switches, TaskClass taskClass)
     {
         ArgumentNullException.ThrowIfNull(switches);
@@ -73,6 +73,7 @@ public sealed class ModelRouter : IModelRouter
             TaskClass.Summarise => switches.Chat,
             TaskClass.Agent => switches.Agent,
             TaskClass.Vision => switches.Vision,
+            TaskClass.Embedding => switches.Embedding,
             _ => false,
         };
     }
@@ -182,11 +183,6 @@ public sealed class ModelRouter : IModelRouter
             return "Local-only mode is on";
         }
 
-        if (taskClass == TaskClass.Embedding)
-        {
-            return "embeddings are always computed locally";
-        }
-
         return IsCloudAllowed(settings.Settings.CloudSwitches, taskClass)
             ? null
             : $"the cloud switch for {taskClass} is off";
@@ -227,7 +223,9 @@ public sealed class ModelRouter : IModelRouter
                 return online ? (Profile.Frontier, "Auto: Frontier (online)") : (Profile.LocalStrong, $"Auto: LocalStrong ({state})");
 
             case TaskClass.Embedding:
-                return (Profile.LocalFast, "Auto: local (embeddings are always local)");
+                // Embeddings stay local under Auto even when the cloud switch is on: the switch only allows a cloud
+                // embedding model that routing.tasks.embedding, a requested profile or an explicit model id names.
+                return (Profile.LocalFast, "Auto: local (embeddings stay local unless a cloud model is requested and the Embedding cloud switch is on)");
 
             case TaskClass.Summarise:
                 return online ? (Profile.Fast, "Auto: Fast (online)") : (Profile.LocalFast, $"Auto: LocalFast ({state})");
@@ -272,13 +270,18 @@ public sealed class ModelRouter : IModelRouter
             var providerSettings = snapshot.FindSettings(provider.Id)!;
             string? model;
             string how;
-            if (configuredTarget is { } target &&
+            // routing.profiles names chat and completion models, so it does not apply to embeddings unless it names an embedding model.
+            var configuredApplies = configuredTarget is { } named &&
+                (taskClass != TaskClass.Embedding ||
+                    ((named.ProviderId is null || string.Equals(named.ProviderId, provider.Id, StringComparison.OrdinalIgnoreCase)) &&
+                        Capabilities(provider.Id, named.ModelId, provider.IsLocal).Embeddings));
+            if (configuredApplies && configuredTarget is { } target &&
                 (target.ProviderId is null || string.Equals(target.ProviderId, provider.Id, StringComparison.OrdinalIgnoreCase)))
             {
                 model = target.ModelId;
                 how = "routing.profiles";
             }
-            else if (configuredTarget is { ProviderId: not null })
+            else if (configuredApplies && configuredTarget is { ProviderId: not null })
             {
                 continue; // The profile is pinned to another provider.
             }
@@ -298,8 +301,21 @@ public sealed class ModelRouter : IModelRouter
 
     private (string? Model, string How) DefaultModel(IModelProvider provider, ProviderSettings settings, Profile profile, TaskClass taskClass)
     {
-        var catalogModel = _catalog.GetDefaultModel(provider.Kind, profile);
         var allowed = settings.Models;
+        string? catalogModel;
+        if (taskClass == TaskClass.Embedding)
+        {
+            // The catalog lists the preferred embedding models per provider kind; the first one that is allowed and installed wins.
+            var preferred = _catalog.GetDefaultEmbeddingModels(provider.Kind);
+            catalogModel = preferred.FirstOrDefault(m =>
+                    (allowed.Count == 0 || allowed.Any(a => ModelInventory.ModelIdsEqual(a, m))) && IsInstalled(provider.Id, m) != false)
+                ?? (preferred.Count > 0 ? preferred[0] : null);
+        }
+        else
+        {
+            catalogModel = _catalog.GetDefaultModel(provider.Kind, profile);
+        }
+
         if (catalogModel is not null &&
             (allowed.Count == 0 || allowed.Any(m => ModelInventory.ModelIdsEqual(m, catalogModel))) &&
             IsInstalled(provider.Id, catalogModel) != false &&

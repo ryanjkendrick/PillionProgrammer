@@ -45,6 +45,9 @@ public static class FeatureNames
     /// <summary>The chat window's Context Inspector and Outbound log view (work item 1.13).</summary>
     public const string OutboundLogView = "outboundLogView";
 
+    /// <summary>The embedding gateway: <c>IModelGateway.EmbedAsync</c> and the embedding adapters (work item 2.6). It also needs <see cref="ModelGateway"/>.</summary>
+    public const string Embeddings = "embeddings";
+
     /// <summary>Gets every feature flag name, in the order they are written to <c>settings.json</c>.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
@@ -62,6 +65,7 @@ public static class FeatureNames
         InlineChat,
         Mentions,
         OutboundLogView,
+        Embeddings,
     ];
 }
 
@@ -127,6 +131,7 @@ public sealed class FeatureSettings : SettingsNode
             "inlinechat" => InlineChat,
             "mentions" => Mentions,
             "outboundlogview" => OutboundLogView,
+            "embeddings" => Embeddings,
             _ => true,
         };
     }
@@ -181,6 +186,9 @@ public sealed class FeatureSettings : SettingsNode
             case "outboundlogview":
                 OutboundLogView = false;
                 break;
+            case "embeddings":
+                Embeddings = false;
+                break;
         }
     }
 
@@ -192,4 +200,7 @@ public sealed class FeatureSettings : SettingsNode
 
     /// <summary>Gets or sets a value indicating whether the chat window shows the Context Inspector and the Outbound log, and the host answers their read methods.</summary>
     public bool OutboundLogView { get; set; } = true;
+
+    /// <summary>Gets or sets a value indicating whether the embedding gateway answers requests. When off, <c>EmbedAsync</c> fails with a policy error. It also needs <see cref="ModelGateway"/>.</summary>
+    public bool Embeddings { get; set; } = true;
 }

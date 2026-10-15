@@ -39,6 +39,19 @@ public interface IModelGateway
     /// <exception cref="PillionRpcException">No model could serve the request.</exception>
     IAsyncEnumerable<CompletionChunk> CompleteAsync(CompletionRequest request, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Embeds texts for the index and for search: routes the Embedding task class, sends the texts in batches (32 by default), and returns
+    /// unit-length int8 vectors with their scales, in input order. Nothing is sent to a cloud provider under Local-only mode or while
+    /// <c>cloudSwitches.embedding</c> is off (the default); every batch is recorded in the Outbound log. A batch that fails is reported
+    /// in <see cref="EmbeddingResult.Failures"/> and the others still return their vectors.
+    /// </summary>
+    /// <param name="request">The request.</param>
+    /// <param name="cancellationToken">A token that cancels the call.</param>
+    /// <returns>The vectors, the model that produced them and any failed batches.</returns>
+    /// <exception cref="PillionRpcException">The feature is off, no model could serve the request, or every batch failed.</exception>
+    /// <exception cref="ArgumentException">An input is empty.</exception>
+    Task<EmbeddingResult> EmbedAsync(EmbeddingRequest request, CancellationToken cancellationToken);
+
     /// <summary>Lists the models of every configured provider, marking which can be used now.</summary>
     /// <param name="cancellationToken">A token that cancels the call.</param>
     /// <returns>The models.</returns>

@@ -19,7 +19,7 @@ internal sealed class FakeSettingsService : ISettingsService
             { "id": "ollama", "kind": "ollama", "displayName": "Ollama (fake)", "endpoint": "http://localhost:11434", "models": [ "fake-local-coder" ], "enabled": true },
             { "id": "fake-cloud", "kind": "openai-compatible", "displayName": "Fake Cloud", "endpoint": "https://fake-cloud.invalid/v1", "models": [ "fake-cloud-chat" ], "enabled": true }
           ],
-          "cloudSwitches": { "chat": true, "inlineEdit": true, "autocomplete": false, "agent": false, "selfHealing": false, "vision": true },
+          "cloudSwitches": { "chat": true, "inlineEdit": true, "autocomplete": false, "agent": false, "selfHealing": false, "vision": true, "embedding": false },
           "privacy": { "localOnly": false, "telemetryOptIn": false, "redactForLocalProviders": false }
         }
         """;

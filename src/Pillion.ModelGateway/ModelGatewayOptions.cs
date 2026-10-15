@@ -52,6 +52,15 @@ public sealed class ModelGatewayOptions
     /// <summary>Gets or sets the agent requests in flight per provider. Default 1.</summary>
     public int AgentConcurrency { get; set; } = 1;
 
+    /// <summary>Gets or sets the number of texts sent to a provider in one embedding request. Default 32 (design section 7, Embed).</summary>
+    public int EmbeddingBatchSize { get; set; } = 32;
+
+    /// <summary>
+    /// Gets or sets how many embedding batches in a row may fail before the rest of the call is skipped, so a provider that is
+    /// down is not asked a thousand times. 0 never skips. Default 3, the circuit breaker's threshold.
+    /// </summary>
+    public int EmbeddingMaxConsecutiveFailures { get; set; } = 3;
+
     /// <summary>Gets or sets the number of entries in the autocomplete cache. Default 256.</summary>
     public int AutocompleteCacheCapacity { get; set; } = 256;
 
