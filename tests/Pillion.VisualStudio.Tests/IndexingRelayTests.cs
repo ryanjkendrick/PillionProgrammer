@@ -202,6 +202,53 @@ public sealed class IndexingRelayTests : IDisposable
     }
 
     [Fact]
+    public async Task ASavedDocument_IsSentAtOnce_AsDocumentSavedWithItsPath()
+    {
+        _relay.Start();
+        await ConnectAsync();
+
+        _hub.NotifyDocumentSaved(@"C:\src\App\App\Program.cs");
+        await Wait.UntilAsync(() => Saved.Length == 1, "the relay sent the save");
+
+        Assert.Equal([@"C:\src\App\App\Program.cs"], Saved);
+
+        // Each save is sent, even the same document again (the host decides whether the content changed).
+        _hub.NotifyDocumentSaved(@"C:\src\App\App\Program.cs");
+        await Wait.UntilAsync(() => Saved.Length == 2, "the relay sent the second save");
+    }
+
+    [Fact]
+    public async Task ASaveWhileTheHostIsNotConnected_IsNotSent()
+    {
+        _relay.Start();
+        _hub.NotifyDocumentSaved(@"C:\src\App\App\Program.cs");
+        await SettleAsync();
+        Assert.Empty(Saved);
+
+        await ConnectAsync();
+        await SettleAsync();
+        Assert.Empty(Saved); // The host's watcher and its sweep on open cover a save it never heard of.
+    }
+
+    [Fact]
+    public async Task AfterDispose_SavesAreNoLongerSent()
+    {
+        _relay.Start();
+        await ConnectAsync();
+        _relay.Dispose();
+
+        _hub.NotifyDocumentSaved(@"C:\src\App\App\Program.cs");
+        await _hub.WhenIdleAsync();
+        await Task.Delay(30);
+        Assert.Empty(Saved);
+    }
+
+    private string[] Saved => _connection.Notifications
+        .Where(n => n.Method == IndexingRelay.DocumentSavedMethod)
+        .Select(n => (string)n.Argument!)
+        .ToArray();
+
+    [Fact]
     public async Task TheDebugger_IsCombinedWithTheBuild_IntoOneSet()
     {
         _relay.Start();
