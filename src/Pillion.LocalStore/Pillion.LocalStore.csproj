@@ -5,6 +5,9 @@
     Ciphers (SQLitePCLRaw.bundle_e_sqlite3mc) under Microsoft.Data.Sqlite.Core, one DPAPI-protected key per database,
     WAL, a meta table with schema versions, migrations that back the file up first, and the conversations database.
     A separate library so the phase 2 index can share it. See README.md.
+
+    The index storage (work item 2.8, Index\) adds FTS5 lexical search and sqlite-vec vector search. sqlite-vec is a
+    pinned run-time extension (vec0.dll), downloaded at build time and verified by hash; see the target below.
   -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -27,5 +30,92 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Pillion.LocalStore.Tests" />
   </ItemGroup>
+
+  <!--
+    sqlite-vec (design section 7, Storage; phase 2 decision of 2026-10-15): a pinned run-time extension verified by hash.
+    The binary is never committed. sqlite-vec.manifest.json records the release (version, URL, licence) and two SHA-256
+    hashes: the release archive and the vec0.dll inside it. The manifest is also embedded in the assembly, so the host
+    checks the DLL against the same hash before loading it (Index\SqliteVec\SqliteVecExtension.cs).
+
+    PillionAcquireSqliteVec runs before AssignTargetPaths (so also when a referencing project asks this one for its
+    files to copy). When vec0.dll is not in the cache it downloads the archive, checks the archive hash, extracts it with
+    Windows' own tar.exe, checks the DLL hash and moves the DLL into the cache. Every build checks the cached DLL's hash
+    again. Any mismatch deletes the file and fails the build. The cache is <NuGet packages folder>\pillion-native\
+    sqlite-vec\<version>\win-x64\ (or obj\pillion-native\ before restore has set NuGetPackageRoot), so repeated builds
+    and other worktrees do not download again.
+
+    The DLL is then a None item copied to the output and publish folders of this project and of every project that
+    references it: Pillion.Host (its self-contained publish, which the VSIX packages under Host\) and the tests.
+
+    Build with -p:PillionSkipSqliteVec=true to leave the extension out (offline machines without the cache); the index
+    then uses its brute-force vector backend.
+  -->
+  <PropertyGroup>
+    <PillionSqliteVecManifest>$(MSBuildThisFileDirectory)sqlite-vec.manifest.json</PillionSqliteVecManifest>
+    <PillionSkipSqliteVec Condition="'$(PillionSkipSqliteVec)' == ''">false</PillionSkipSqliteVec>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Remove="sqlite-vec.manifest.json" />
+    <EmbeddedResource Include="sqlite-vec.manifest.json" LogicalName="Pillion.LocalStore.sqlite-vec.manifest.json" />
+  </ItemGroup>
+
+  <Target Name="PillionAcquireSqliteVec"
+          BeforeTargets="AssignTargetPaths"
+          Condition="'$(PillionSkipSqliteVec)' != 'true' and '$(DesignTimeBuild)' != 'true' and '$(OS)' == 'Windows_NT'">
+    <PropertyGroup>
+      <_PillionSvJson>$([System.IO.File]::ReadAllText('$(PillionSqliteVecManifest)'))</_PillionSvJson>
+      <_PillionSvVersion>$([System.Text.RegularExpressions.Regex]::Replace('$(_PillionSvJson)', '(?s)^.*?"version"\s*:\s*"([0-9A-Za-z.\-]+)".*$', '$1'))</_PillionSvVersion>
+      <_PillionSvUrl>$([System.Text.RegularExpressions.Regex]::Replace('$(_PillionSvJson)', '(?s)^.*?"url"\s*:\s*"(https://[^"]+)".*$', '$1'))</_PillionSvUrl>
+      <_PillionSvArchiveSha256>$([System.Text.RegularExpressions.Regex]::Replace('$(_PillionSvJson)', '(?s)^.*?"archiveSha256"\s*:\s*"([0-9A-Fa-f]{64})".*$', '$1'))</_PillionSvArchiveSha256>
+      <_PillionSvFile>$([System.Text.RegularExpressions.Regex]::Replace('$(_PillionSvJson)', '(?s)^.*?"file"\s*:\s*"([0-9A-Za-z_.\-]+)".*$', '$1'))</_PillionSvFile>
+      <_PillionSvSha256>$([System.Text.RegularExpressions.Regex]::Replace('$(_PillionSvJson)', '(?s)^.*?"sha256"\s*:\s*"([0-9A-Fa-f]{64})".*$', '$1'))</_PillionSvSha256>
+
+      <_PillionSvCacheRoot Condition="'$(NuGetPackageRoot)' != ''">$([MSBuild]::NormalizeDirectory('$(NuGetPackageRoot)', 'pillion-native'))</_PillionSvCacheRoot>
+      <_PillionSvCacheRoot Condition="'$(_PillionSvCacheRoot)' == ''">$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)', 'pillion-native'))</_PillionSvCacheRoot>
+      <_PillionSvDir>$([MSBuild]::NormalizeDirectory('$(_PillionSvCacheRoot)', 'sqlite-vec', '$(_PillionSvVersion)', 'win-x64'))</_PillionSvDir>
+      <_PillionSvDll>$(_PillionSvDir)$(_PillionSvFile)</_PillionSvDll>
+      <_PillionSvNeedsDownload>false</_PillionSvNeedsDownload>
+      <_PillionSvNeedsDownload Condition="!Exists('$(_PillionSvDll)')">true</_PillionSvNeedsDownload>
+      <_PillionSvStaging>$(_PillionSvDir)staging-$([System.Guid]::NewGuid().ToString('N'))</_PillionSvStaging>
+      <_PillionSvTar>$(SystemRoot)\System32\tar.exe</_PillionSvTar>
+    </PropertyGroup>
+
+    <Error Condition="$(_PillionSvArchiveSha256.Length) != 64 or $(_PillionSvSha256.Length) != 64 or $(_PillionSvVersion.Length) &gt; 32 or !$(_PillionSvUrl.StartsWith('https://')) or $(_PillionSvFile.Length) &gt; 64"
+           Text="$(PillionSqliteVecManifest) could not be read: it needs version, url, archiveSha256, file and sha256 entries." />
+
+    <!-- Not cached yet: download, check the archive, extract, check the DLL, then move it into the cache. -->
+    <Message Condition="$(_PillionSvNeedsDownload)" Importance="high" Text="Downloading sqlite-vec $(_PillionSvVersion) from $(_PillionSvUrl)" />
+    <DownloadFile Condition="$(_PillionSvNeedsDownload)" SourceUrl="$(_PillionSvUrl)" DestinationFolder="$(_PillionSvStaging)" Retries="3" RetryDelayMilliseconds="2000">
+      <Output TaskParameter="DownloadedFile" PropertyName="_PillionSvArchive" />
+    </DownloadFile>
+    <GetFileHash Condition="$(_PillionSvNeedsDownload)" Files="$(_PillionSvArchive)" Algorithm="SHA256">
+      <Output TaskParameter="Hash" PropertyName="_PillionSvArchiveActual" />
+    </GetFileHash>
+    <RemoveDir Condition="$(_PillionSvNeedsDownload) and '$(_PillionSvArchiveActual)' != '$(_PillionSvArchiveSha256)'" Directories="$(_PillionSvStaging)" />
+    <Error Condition="$(_PillionSvNeedsDownload) and '$(_PillionSvArchiveActual)' != '$(_PillionSvArchiveSha256)'"
+           Text="sqlite-vec $(_PillionSvVersion): the downloaded archive $(_PillionSvUrl) has SHA-256 $(_PillionSvArchiveActual), but sqlite-vec.manifest.json expects $(_PillionSvArchiveSha256). The file was deleted and nothing was installed. If the release really changed, review it and update the manifest; otherwise check the download (proxy, captive portal)." />
+    <Exec Condition="$(_PillionSvNeedsDownload)" Command="&quot;$(_PillionSvTar)&quot; -xzf &quot;$(_PillionSvArchive)&quot; -C &quot;$(_PillionSvStaging)&quot; $(_PillionSvFile)" StandardOutputImportance="low" />
+    <GetFileHash Condition="$(_PillionSvNeedsDownload)" Files="$(_PillionSvStaging)\$(_PillionSvFile)" Algorithm="SHA256">
+      <Output TaskParameter="Hash" PropertyName="_PillionSvExtractedActual" />
+    </GetFileHash>
+    <RemoveDir Condition="$(_PillionSvNeedsDownload) and '$(_PillionSvExtractedActual)' != '$(_PillionSvSha256)'" Directories="$(_PillionSvStaging)" />
+    <Error Condition="$(_PillionSvNeedsDownload) and '$(_PillionSvExtractedActual)' != '$(_PillionSvSha256)'"
+           Text="sqlite-vec $(_PillionSvVersion): $(_PillionSvFile) in the verified archive has SHA-256 $(_PillionSvExtractedActual), but sqlite-vec.manifest.json expects $(_PillionSvSha256). Nothing was installed." />
+    <Copy Condition="$(_PillionSvNeedsDownload)" SourceFiles="$(_PillionSvStaging)\$(_PillionSvFile)" DestinationFolder="$(_PillionSvDir)" Retries="5" RetryDelayMilliseconds="500" />
+    <RemoveDir Condition="$(_PillionSvNeedsDownload)" Directories="$(_PillionSvStaging)" ContinueOnError="true" />
+
+    <!-- Every build: the cached DLL must still have the manifest's hash. -->
+    <GetFileHash Files="$(_PillionSvDll)" Algorithm="SHA256">
+      <Output TaskParameter="Hash" PropertyName="_PillionSvCachedActual" />
+    </GetFileHash>
+    <Delete Condition="'$(_PillionSvCachedActual)' != '$(_PillionSvSha256)'" Files="$(_PillionSvDll)" ContinueOnError="true" />
+    <Error Condition="'$(_PillionSvCachedActual)' != '$(_PillionSvSha256)'"
+           Text="sqlite-vec $(_PillionSvVersion): the cached $(_PillionSvDll) has SHA-256 $(_PillionSvCachedActual), but sqlite-vec.manifest.json expects $(_PillionSvSha256). It was deleted; build again to download it afresh." />
+
+    <ItemGroup>
+      <None Include="$(_PillionSvDll)" Link="$(_PillionSvFile)" Visible="false" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
 
 </Project>

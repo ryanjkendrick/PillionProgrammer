@@ -1,0 +1,15 @@
+{
+  "name": "sqlite-vec",
+  "version": "0.1.9",
+  "license": "MIT OR Apache-2.0",
+  "licenseUsed": "MIT",
+  "project": "https://github.com/asg017/sqlite-vec",
+  "released": "2026-03-31",
+  "runtime": "win-x64",
+  "url": "https://github.com/asg017/sqlite-vec/releases/download/v0.1.9/sqlite-vec-0.1.9-loadable-windows-x86_64.tar.gz",
+  "archiveSha256": "51581189d52066b4dfc6631f6d7a3eab7dedc2260656ab09ca97ab3fb8165983",
+  "file": "vec0.dll",
+  "sha256": "fcf98662a7ad9dce394b96a88f91032047823831b951c76636787c312a6476e6",
+  "entryPoint": "sqlite3_vec_init",
+  "notes": "Latest stable release on 2026-10-15. The archive hash matches the digest published with the release and checksums.txt. The release has no Windows Arm64 build (only windows-x86_64); Arm64 waits for the in-house build planned for phase 5."
+}
