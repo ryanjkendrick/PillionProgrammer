@@ -11,6 +11,7 @@ using Pillion.Host.Logging;
 using Pillion.Host.Models;
 using Pillion.Host.Rpc;
 using Pillion.Host.Settings;
+using Pillion.LocalStore;
 using Pillion.ModelGateway;
 
 namespace Pillion.Host;
@@ -96,6 +97,10 @@ internal static class PillionHostBuilderExtensions
 
         // Mentions and context (work item 1.10): IContextService resolves @-mentions; search and indexing arrive in phase 2.
         builder.Services.AddRpcTarget<IContextService, ContextRpcService>();
+
+        // Local Store (work item 2.1): the encrypted conversations.db, opened lazily behind the localStore flag. No RPC
+        // service uses it yet; work item 2.2 persists conversations and the Outbound log through it.
+        builder.Services.AddPillionLocalStore();
 
         // RPC targets for the agent service are registered here by a later work item.
         return builder;
