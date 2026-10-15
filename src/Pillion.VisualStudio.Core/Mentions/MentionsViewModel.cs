@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading;
@@ -242,6 +243,88 @@ public sealed class MentionsViewModel : ObservableObject, IDisposable
         PendingApproval = null;
         Notice = string.Empty;
         OnPropertyChanged(nameof(Pins));
+    }
+
+    /// <summary>
+    /// Puts back the pins a saved conversation had (work item 2.2). Each shows at once as a stale chip with its saved name and
+    /// token badge; file and folder pins are then resolved again, off the UI thread, and the ones that still resolve replace
+    /// their chip with a fresh pin. A pin whose file moved, that needs approval, or that holds client-only text (selection,
+    /// clipboard, errors) stays stale: nothing is sent for it. Saving is paused while this runs. Call on the UI thread.
+    /// </summary>
+    /// <param name="conversation">The conversation the pins belong to.</param>
+    /// <param name="saved">What the host stored.</param>
+    /// <returns>A task that completes when the pins that could be read again have been refreshed.</returns>
+    public async Task RestorePinsAsync(ChatConversation conversation, IReadOnlyList<ConversationPin> saved)
+    {
+        if (conversation is null || saved is null || _disposed)
+        {
+            return;
+        }
+
+        conversation.IsRestoringPins = true;
+        var placeholders = new List<(MentionPin Pin, ConversationPin Saved)>();
+        try
+        {
+            conversation.Pins.Clear();
+            foreach (var pin in saved.Where(p => p is not null))
+            {
+                var placeholder = MentionPin.FromSaved(pin);
+                placeholders.Add((placeholder, pin));
+                conversation.Pins.Add(placeholder);
+            }
+
+            var rereadable = placeholders.Where(p => IsEnabled && p.Saved.Kind is MentionKinds.File or MentionKinds.Folder && !string.IsNullOrEmpty(p.Saved.Target)).ToList();
+            if (rereadable.Count == 0)
+            {
+                return;
+            }
+
+            var fresh = new List<(MentionPin Placeholder, MentionResolution Result)>();
+            await TaskScheduler.Default;
+            foreach (var (placeholder, pin) in rereadable)
+            {
+                try
+                {
+                    var request = new MentionRequest { Mention = "@" + pin.Kind + ":" + pin.Target, Kind = pin.Kind };
+                    await CompleteRequestAsync(request, _disposal.Token).ConfigureAwait(false);
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_disposal.Token);
+                    timeout.CancelAfter(ResolveTimeout);
+                    var result = await _connection.GetProxy<IContextService>().ResolveMentionAsync(request, timeout.Token).ConfigureAwait(false);
+                    if (result is { IsResolved: true })
+                    {
+                        fresh.Add((placeholder, result));
+                    }
+                }
+                catch (OperationCanceledException) when (_disposal.IsCancellationRequested)
+                {
+                    return;
+                }
+#pragma warning disable CA1031 // A pin that cannot be read again stays stale.
+                catch (Exception ex)
+#pragma warning restore CA1031
+                {
+                    _log?.Debug("chat.pins.restore.failed", "Reading a restored pin again failed.", ("kind", pin.Kind), ("error", ex.GetType().Name));
+                }
+            }
+
+            await _joinableTaskFactory.SwitchToMainThreadAsync(_disposal.Token);
+            foreach (var (placeholder, result) in fresh)
+            {
+                var at = conversation.Pins.IndexOf(placeholder);
+                if (at >= 0)
+                {
+                    conversation.Pins[at] = new MentionPin(result);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (_disposal.IsCancellationRequested)
+        {
+            // The window is closing.
+        }
+        finally
+        {
+            conversation.IsRestoringPins = false;
+        }
     }
 
     /// <summary>Follows the input: opens, filters or closes the picker. Call on every text or caret change.</summary>

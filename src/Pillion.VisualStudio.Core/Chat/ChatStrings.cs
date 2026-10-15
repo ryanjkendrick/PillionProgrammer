@@ -383,6 +383,45 @@ public static class ChatStrings
     /// <summary>Gets the string: Outbound log column.</summary>
     public static string OutboundColumnOutcome => Get(nameof(OutboundColumnOutcome));
 
+    /// <summary>Gets the line the tooltip of a restored pin that could not be read again ends with.</summary>
+    public static string PinStale => Get(nameof(PinStale));
+
+    /// <summary>Gets the word a screen reader adds for a restored pin that could not be read again.</summary>
+    public static string PinStaleShort => Get(nameof(PinStaleShort));
+
+    /// <summary>Gets the screen-reader name of a citation link, with the link text.</summary>
+    public static string CitationNameFormat => Get(nameof(CitationNameFormat));
+
+    /// <summary>Gets the label before the cited spans under a reply.</summary>
+    public static string CitationsLabel => Get(nameof(CitationsLabel));
+
+    /// <summary>Gets the notice shown while saved conversations are turned off (the localStore feature).</summary>
+    public static string ConversationsNotSavedOff => Get(nameof(ConversationsNotSavedOff));
+
+    /// <summary>Gets the notice shown while the host cannot save conversations, with the reason.</summary>
+    public static string ConversationsNotSavedFormat => Get(nameof(ConversationsNotSavedFormat));
+
+    /// <summary>Gets the line shown while a saved conversation is being read.</summary>
+    public static string ConversationLoadingText => Get(nameof(ConversationLoadingText));
+
+    /// <summary>Gets the line shown when a saved conversation could not be read, with the reason.</summary>
+    public static string ConversationLoadFailedFormat => Get(nameof(ConversationLoadFailedFormat));
+
+    /// <summary>Gets the button that reads a saved conversation again.</summary>
+    public static string ConversationRetryLoadButton => Get(nameof(ConversationRetryLoadButton));
+
+    /// <summary>Gets the notice shown when a rename or delete could not reach the host, with the reason.</summary>
+    public static string ConversationSaveFailedFormat => Get(nameof(ConversationSaveFailedFormat));
+
+    /// <summary>Gets the conversation list menu item that renames a conversation.</summary>
+    public static string ConversationMenuRename => Get(nameof(ConversationMenuRename));
+
+    /// <summary>Gets the conversation list menu item that deletes a conversation.</summary>
+    public static string ConversationMenuDelete => Get(nameof(ConversationMenuDelete));
+
+    /// <summary>Gets the header of a saved reply that does not name its model.</summary>
+    public static string SavedReplyHeader => Get(nameof(SavedReplyHeader));
+
     /// <summary>Formats a string from this file with the current culture.</summary>
     /// <param name="format">The format (one of the <c>...Format</c> properties).</param>
     /// <param name="args">The arguments.</param>
