@@ -43,6 +43,7 @@ public class SettingsStoreTests
         Assert.False(settings.CloudSwitches.Agent);
         Assert.False(settings.CloudSwitches.SelfHealing);
         Assert.True(settings.CloudSwitches.Vision);
+        Assert.False(settings.CloudSwitches.Embedding);
         Assert.False(settings.Privacy.LocalOnly);
         Assert.False(settings.Privacy.TelemetryOptIn);
         Assert.False(settings.Privacy.RedactForLocalProviders);
@@ -71,6 +72,7 @@ public class SettingsStoreTests
         Assert.Equal("1536", store.GetJson("indexing.maxMemoryMb"));
         Assert.Equal("30", store.GetJson("indexing.retentionDays"));
         Assert.Equal("false", store.GetJson("cloudSwitches.selfHealing"));
+        Assert.Equal("false", store.GetJson("cloudSwitches.embedding"));
         Assert.Equal("false", store.GetJson("routing.thinkHarder"));
     }
 
@@ -124,7 +126,7 @@ public class SettingsStoreTests
                 Tasks = new Dictionary<TaskClass, Profile> { [TaskClass.Chat] = Profile.Frontier, [TaskClass.Autocomplete] = Profile.LocalFast },
                 Profiles = new Dictionary<Profile, string> { [Profile.Fast] = "fast-model", [Profile.LocalStrong] = "qwen" },
             });
-            store.Set(SettingsSections.CloudSwitches, new CloudSwitchSettings { Chat = false, InlineEdit = false, Autocomplete = true, Agent = true, SelfHealing = true, Vision = false });
+            store.Set(SettingsSections.CloudSwitches, new CloudSwitchSettings { Chat = false, InlineEdit = false, Autocomplete = true, Agent = true, SelfHealing = true, Vision = false, Embedding = true });
             store.Set(SettingsSections.Privacy, new PrivacySettings { LocalOnly = true, TelemetryOptIn = true, RedactForLocalProviders = true });
             store.Set(SettingsSections.Approvals, new ApprovalSettings { Mode = ApprovalMode.AutoSafe });
             store.Set(SettingsSections.CostCaps, new Dictionary<string, CostCap> { ["openai"] = new() { DailyUsd = 5m, MonthlyUsd = 50.5m }, ["azure"] = new() { DailyUsd = 1m } });
@@ -147,6 +149,7 @@ public class SettingsStoreTests
         Assert.False(s.CloudSwitches.Chat);
         Assert.True(s.CloudSwitches.Agent);
         Assert.True(s.CloudSwitches.SelfHealing);
+        Assert.True(s.CloudSwitches.Embedding);
         Assert.True(s.Privacy.LocalOnly);
         Assert.True(s.Privacy.TelemetryOptIn);
         Assert.True(s.Privacy.RedactForLocalProviders);

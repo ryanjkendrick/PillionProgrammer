@@ -41,6 +41,20 @@ public sealed class OllamaOptions
     public string AutocompleteKeepAlive { get; set; } = "-1";
 
     /// <summary>
+    /// Gets or sets the residency of embedding models (<c>keep_alive</c>; <c>"embeddingKeepAlive"</c> in the provider entry). Default
+    /// 5 minutes: an index run sends batches back to back, and the model should give its memory back soon after, so that it does not
+    /// stand between the completion model and the GPU.
+    /// </summary>
+    public string EmbeddingKeepAlive { get; set; } = "5m";
+
+    /// <summary>
+    /// Gets or sets the context size (<c>num_ctx</c>) an embedding model is loaded with when the catalog names none for the GPU
+    /// tier. Default 2,048: an embedding model reads each text on its own, chunks are a few hundred tokens, and Ollama would
+    /// otherwise load the model's whole window (qwen3-embedding:0.6b takes 5.8 GB at 32,768 against 2.2 GB at 2,048).
+    /// </summary>
+    public int EmbeddingContextSize { get; set; } = 2048;
+
+    /// <summary>
     /// Gets or sets how long a load of a model may take before the request fails with a message instead of waiting on. Default
     /// 120 seconds; set <c>"loadTimeoutSeconds"</c> in the provider entry to change it. A cold load of a 7B model from an SSD takes
     /// about ten seconds, from a hard disk about a minute.
@@ -96,6 +110,13 @@ public sealed class OllamaOptions
                     options.ContextSizes[profile] = size;
                 }
             }
+        }
+
+        if (settings.ExtensionData?.TryGetValue("embeddingKeepAlive", out var embeddingKeepAlive) == true &&
+            embeddingKeepAlive.ValueKind == JsonValueKind.String &&
+            embeddingKeepAlive.GetString() is { Length: > 0 } keepAliveText)
+        {
+            options.EmbeddingKeepAlive = keepAliveText.Trim();
         }
 
         options.LoadTimeout = ReadSeconds(settings, "loadTimeoutSeconds", options.LoadTimeout);
@@ -299,6 +320,18 @@ public sealed partial class OllamaProvider : IModelProvider
         }
 
         return new OllamaFimClient(this, modelId);
+    }
+
+    /// <inheritdoc/>
+    public IEmbeddingGenerator<string, Embedding<float>>? GetEmbeddingGenerator(string modelId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+        if (_shown.TryGetValue(modelId, out var known) && !known.Capabilities.Embeddings)
+        {
+            return null;
+        }
+
+        return new OllamaEmbeddingGenerator(this, modelId);
     }
 
     /// <inheritdoc/>

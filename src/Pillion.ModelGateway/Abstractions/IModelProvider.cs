@@ -39,6 +39,15 @@ public interface IModelProvider : IDisposable
     /// <returns>The client, or <see langword="null"/> when the provider or the model does not support FIM.</returns>
     IFimClient? GetFimClient(string modelId);
 
+    /// <summary>Gets an embedding generator for one model.</summary>
+    /// <param name="modelId">The provider's model id.</param>
+    /// <returns>
+    /// The generator, or <see langword="null"/> when the provider or the model does not embed (Anthropic has no embeddings
+    /// endpoint). Callers do not dispose it; the provider owns it. A provider written before embeddings existed returns
+    /// <see langword="null"/> without overriding this.
+    /// </returns>
+    IEmbeddingGenerator<string, Embedding<float>>? GetEmbeddingGenerator(string modelId) => null;
+
     /// <summary>Checks that the provider can be reached (for Test connection). Never throws for an unreachable provider.</summary>
     /// <param name="cancellationToken">A token that cancels the probe.</param>
     /// <returns>The result.</returns>

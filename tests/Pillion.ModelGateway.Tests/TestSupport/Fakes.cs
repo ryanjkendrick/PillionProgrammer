@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Extensions.AI;
 using Pillion.Common.Settings;
 using Pillion.Contracts;
@@ -40,6 +42,24 @@ internal sealed class FakeProvider : IModelProvider
 
     /// <summary>Gets or sets a value indicating whether <see cref="GetFimClient"/> returns a client.</summary>
     public bool SupportsFim { get; set; } = true;
+
+    /// <summary>Gets or sets a value indicating whether <see cref="GetEmbeddingGenerator"/> returns a generator.</summary>
+    public bool SupportsEmbeddings { get; set; } = true;
+
+    /// <summary>Gets or sets the embedding behaviour: the texts and options in, one vector per text out. The default is <see cref="DefaultVector"/>.</summary>
+    public Func<IReadOnlyList<string>, EmbeddingGenerationOptions?, CancellationToken, Task<float[][]>> Embed { get; set; } =
+        (texts, _, _) => Task.FromResult(texts.Select(t => DefaultVector(t)).ToArray());
+
+    public ConcurrentQueue<(IReadOnlyList<string> Texts, EmbeddingGenerationOptions? Options)> ReceivedEmbeds { get; } = new();
+
+    public int EmbedCalls;
+
+    /// <summary>A deterministic, positive, non-unit vector for a text, so a test can tell which text a vector came from.</summary>
+    public static float[] DefaultVector(string text, int dimensions = 4)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(text));
+        return [.. Enumerable.Range(0, dimensions).Select(i => (hash[i % hash.Length] / 255f) + 0.05f)];
+    }
 
     public ConcurrentQueue<IReadOnlyList<AiChatMessage>> ReceivedChats { get; } = new();
 
@@ -91,6 +111,8 @@ internal sealed class FakeProvider : IModelProvider
     public IChatClient GetChatClient(string modelId) => new Client(this, modelId);
 
     public IFimClient? GetFimClient(string modelId) => SupportsFim ? new FimClient(this) : null;
+
+    public IEmbeddingGenerator<string, Embedding<float>>? GetEmbeddingGenerator(string modelId) => SupportsEmbeddings ? new EmbeddingClient(this, modelId) : null;
 
     public Task<ProviderProbeResult> ProbeAsync(CancellationToken cancellationToken)
     {
@@ -145,6 +167,39 @@ internal sealed class FakeProvider : IModelProvider
             await foreach (var piece in owner.Track(owner.Chat(list, options, cancellationToken), cancellationToken))
             {
                 yield return new ChatResponseUpdate(AiChatRole.Assistant, piece) { ModelId = modelId };
+            }
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class EmbeddingClient(FakeProvider owner, string modelId) : IEmbeddingGenerator<string, Embedding<float>>
+    {
+        public async Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(IEnumerable<string> values, EmbeddingGenerationOptions? options = null, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref owner.EmbedCalls);
+            var texts = values.ToList();
+            owner.ReceivedEmbeds.Enqueue((texts, options));
+            var now = Interlocked.Increment(ref owner.InFlight);
+            int max;
+            do
+            {
+                max = owner.MaxInFlight;
+            }
+            while (now > max && Interlocked.CompareExchange(ref owner.MaxInFlight, now, max) != max);
+
+            try
+            {
+                var vectors = await owner.Embed(texts, options, cancellationToken);
+                return new GeneratedEmbeddings<Embedding<float>>(vectors.Select(v => new Embedding<float>(v) { ModelId = modelId }));
+            }
+            finally
+            {
+                Interlocked.Decrement(ref owner.InFlight);
             }
         }
 

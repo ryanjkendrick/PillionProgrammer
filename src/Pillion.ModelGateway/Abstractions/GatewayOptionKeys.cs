@@ -3,8 +3,8 @@ using Microsoft.Extensions.AI;
 namespace Pillion.ModelGateway;
 
 /// <summary>
-/// Keys the gateway puts in <see cref="ChatOptions.AdditionalProperties"/> for provider adapters. Adapters that do not
-/// understand a key ignore it.
+/// Keys the gateway puts in <see cref="ChatOptions.AdditionalProperties"/> (and <see cref="EmbeddingGenerationOptions.AdditionalProperties"/>)
+/// for provider adapters. Adapters that do not understand a key ignore it.
 /// </summary>
 public static class GatewayOptionKeys
 {
@@ -19,4 +19,7 @@ public static class GatewayOptionKeys
 
     /// <summary>The id of the gateway request, so a local runtime can attach its load and unload progress to it.</summary>
     public const string RequestId = "pillion.requestId";
+
+    /// <summary>The <see cref="EmbeddingPurpose"/> of an embedding request (Gemini switches its task type by it).</summary>
+    public const string EmbeddingPurpose = "pillion.embeddingPurpose";
 }

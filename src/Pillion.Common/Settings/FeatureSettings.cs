@@ -50,6 +50,8 @@ public static class FeatureNames
 
     /// <summary>The repository indexing pipeline: discovery and hashing of repository files and the index folder ownership (work items 2.3, 2.9).</summary>
     public const string Indexing = "indexing";
+    /// <summary>The embedding gateway: <c>IModelGateway.EmbedAsync</c> and the embedding adapters (work item 2.6). It also needs <see cref="ModelGateway"/>.</summary>
+    public const string Embeddings = "embeddings";
 
     /// <summary>Gets every feature flag name, in the order they are written to <c>settings.json</c>.</summary>
     public static IReadOnlyList<string> All { get; } =
@@ -70,6 +72,7 @@ public static class FeatureNames
         OutboundLogView,
         LocalStore,
         Indexing,
+        Embeddings,
     ];
 }
 
@@ -137,6 +140,7 @@ public sealed class FeatureSettings : SettingsNode
             "outboundlogview" => OutboundLogView,
             "localstore" => LocalStore,
             "indexing" => Indexing,
+            "embeddings" => Embeddings,
             _ => true,
         };
     }
@@ -196,6 +200,8 @@ public sealed class FeatureSettings : SettingsNode
                 break;
             case "indexing":
                 Indexing = false;
+            case "embeddings":
+                Embeddings = false;
                 break;
         }
     }
@@ -214,4 +220,6 @@ public sealed class FeatureSettings : SettingsNode
 
     /// <summary>Gets or sets a value indicating whether Pillion Host may discover, hash and index repository files and open index databases (<c>index\&lt;id&gt;\index.db</c>). When off, opening an index fails with a policy error and nothing is written to disk.</summary>
     public bool Indexing { get; set; } = true;
+    /// <summary>Gets or sets a value indicating whether the embedding gateway answers requests. When off, <c>EmbedAsync</c> fails with a policy error. It also needs <see cref="ModelGateway"/>.</summary>
+    public bool Embeddings { get; set; } = true;
 }
