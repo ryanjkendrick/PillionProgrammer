@@ -248,3 +248,109 @@ internal sealed class OllamaFimClient : IFimClient
         }
     }
 }
+
+/// <summary>
+/// Embeddings over Ollama's <c>/api/embed</c>, which takes a batch of texts and returns one vector per text. The request always
+/// carries a small <c>num_ctx</c> (see <see cref="OllamaResidency.PrepareEmbeddingAsync"/>): left to itself Ollama loads the
+/// model's whole window, which for qwen3-embedding:0.6b is 5.8 GB instead of 2.2 GB. A text longer than the context is
+/// truncated by Ollama (its default), so the chunk cap of the index decides what is read.
+/// </summary>
+internal sealed class OllamaEmbeddingGenerator : IEmbeddingGenerator<string, Embedding<float>>
+{
+    private readonly OllamaProvider _provider;
+    private readonly string _modelId;
+
+    public OllamaEmbeddingGenerator(OllamaProvider provider, string modelId)
+    {
+        _provider = provider;
+        _modelId = modelId;
+    }
+
+    public async Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(IEnumerable<string> values, EmbeddingGenerationOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        var inputs = values as IReadOnlyList<string> ?? values.ToList();
+        if (inputs.Count == 0)
+        {
+            return [];
+        }
+
+        await _provider.EnsureVersionAsync(cancellationToken).ConfigureAwait(false);
+
+        var model = string.IsNullOrWhiteSpace(options?.ModelId) ? _modelId : options.ModelId;
+        var properties = options?.AdditionalProperties;
+        var plan = await _provider.Residency.PrepareEmbeddingAsync(
+            new ResidencyRequest(
+                model,
+                IsFim: false,
+                Property(properties, GatewayOptionKeys.Profile) is Profile profile ? profile : null,
+                Property(properties, GatewayOptionKeys.ContextSize) is int context ? context : null,
+                inputs.Max(text => TokenEstimator.Estimate(text)),
+                Property(properties, GatewayOptionKeys.KeepAlive) is { } keepAlive ? Convert.ToString(keepAlive, CultureInfo.InvariantCulture) : null,
+                Property(properties, GatewayOptionKeys.RequestId) as string,
+                IsEmbedding: true),
+            cancellationToken).ConfigureAwait(false);
+
+        var runtime = new JsonObject { ["num_ctx"] = plan.NumCtx };
+        if (plan.CpuOnly)
+        {
+            runtime["num_gpu"] = 0;
+        }
+
+        var body = new JsonObject
+        {
+            ["model"] = model,
+            ["input"] = new JsonArray(inputs.Select(i => (JsonNode?)i).ToArray()),
+            ["options"] = runtime,
+        };
+        OllamaProvider.SetKeepAlive(body, plan.KeepAlive);
+        if (options?.Dimensions is { } dimensions and > 0)
+        {
+            body["dimensions"] = dimensions;
+        }
+
+        using var response = await _provider.Http.PostJsonAsync("api/embed", body, model, cancellationToken).ConfigureAwait(false);
+        var root = response.RootElement;
+        if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("embeddings", out var embeddings) || embeddings.ValueKind != JsonValueKind.Array)
+        {
+            throw new ProviderException(PillionErrorCode.ProviderUnavailable, "Ollama answered the embedding request without embeddings.");
+        }
+
+        var result = new GeneratedEmbeddings<Embedding<float>>(inputs.Count);
+        foreach (var vector in embeddings.EnumerateArray())
+        {
+            result.Add(new Embedding<float>(EmbeddingJson.ReadVector(vector, "Ollama")) { ModelId = model, CreatedAt = DateTimeOffset.UtcNow });
+        }
+
+        if (root.TryGetProperty("prompt_eval_count", out var promptTokens) && promptTokens.TryGetInt64(out var tokens))
+        {
+            result.Usage = new UsageDetails { InputTokenCount = tokens, TotalTokenCount = tokens };
+        }
+
+        return result;
+    }
+
+    public object? GetService(Type serviceType, object? serviceKey = null)
+    {
+        ArgumentNullException.ThrowIfNull(serviceType);
+        if (serviceKey is not null)
+        {
+            return null;
+        }
+
+        if (serviceType == typeof(EmbeddingGeneratorMetadata))
+        {
+            return new EmbeddingGeneratorMetadata("ollama", _provider.Options.Endpoint, _modelId);
+        }
+
+        return serviceType.IsInstanceOfType(this) ? this : null;
+    }
+
+    public void Dispose()
+    {
+        // The provider owns the HTTP client.
+    }
+
+    private static object? Property(AdditionalPropertiesDictionary? properties, string key) =>
+        properties is not null && properties.TryGetValue(key, out var value) ? value : null;
+}

@@ -63,6 +63,7 @@ internal sealed partial class InlineEditEngine
     private readonly ISyntaxValidator _validator;
     private readonly InlineEditConversations _conversations;
     private readonly InlineEditOptions _options;
+    private readonly Context.Retrieval.IInlineEditContext? _related;
     private readonly ILogger _logger;
 
     /// <summary>Initializes a new instance of the <see cref="InlineEditEngine"/> class.</summary>
@@ -72,13 +73,15 @@ internal sealed partial class InlineEditEngine
     /// <param name="conversations">The instructions of recent inline sessions.</param>
     /// <param name="logger">The logger.</param>
     /// <param name="options">The inline edit options; the defaults when <see langword="null"/>.</param>
+    /// <param name="related">Retrieves related code for the prompt (work item 2.12); none when <see langword="null"/>.</param>
     public InlineEditEngine(
         IModelGateway gateway,
         InlineEditPromptBuilder prompts,
         ISyntaxValidator validator,
         InlineEditConversations conversations,
         ILogger<InlineEditEngine>? logger = null,
-        InlineEditOptions? options = null)
+        InlineEditOptions? options = null,
+        Context.Retrieval.IInlineEditContext? related = null)
     {
         ArgumentNullException.ThrowIfNull(gateway);
         ArgumentNullException.ThrowIfNull(prompts);
@@ -89,6 +92,7 @@ internal sealed partial class InlineEditEngine
         _validator = validator;
         _conversations = conversations;
         _options = options ?? new InlineEditOptions();
+        _related = related;
         _logger = logger ?? NullLogger<InlineEditEngine>.Instance;
     }
 
@@ -114,6 +118,7 @@ internal sealed partial class InlineEditEngine
         var baseErrors = validate ? _validator.GetErrors(state.Compose(state.Scope), languageId, cancellationToken).Count : 0;
         var baseCode = state.Previous ?? state.Scope;
         var history = _conversations.Get(request.ConversationId);
+        var related = await GetRelatedAsync(request, cancellationToken).ConfigureAwait(false);
         List<ChatMessage> BuildMessages(bool wholeScope) => [.. _prompts.Build(new InlineEditPromptInput(
             languageId,
             FileName(request.FilePath),
@@ -126,7 +131,8 @@ internal sealed partial class InlineEditEngine
             state.After,
             request.Diagnostics ?? [],
             history,
-            wholeScope))];
+            wholeScope,
+            related))];
 
         // Whole-scope mode for a small scope, blocks for a large one; /test and /explain never edit the scope.
         var wholeLimit = _options.WholeScopeMaxLines;
@@ -331,6 +337,25 @@ internal sealed partial class InlineEditEngine
         LogFinished(_logger, request.RequestId, finalMode, state.RejectedBlocks, elapsedMs);
 
         yield return state.Final(outcome.Explanation, outcome.Warning);
+    }
+
+    /// <summary>Retrieved code for the prompt (work item 2.12); none without a retriever or when it fails.</summary>
+    private async Task<IReadOnlyList<ContextChunk>> GetRelatedAsync(InlineEditRequest request, CancellationToken cancellationToken)
+    {
+        if (_related is null)
+        {
+            return [];
+        }
+
+        try
+        {
+            return await _related.GetRelatedAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            LogNoRelated(_logger, request.RequestId, ex.Message);
+            return [];
+        }
     }
 
     /// <summary>The early preview: the result's complete lines that later output can no longer change.</summary>
@@ -574,6 +599,9 @@ internal sealed partial class InlineEditEngine
 
     [LoggerMessage(EventId = 604, Level = LogLevel.Information, Message = "Inline edit {RequestId}: whole-scope reply {Attempt} unusable after a retry ({Reason}); falling back to edit blocks")]
     private static partial void LogFellBack(ILogger logger, string requestId, int attempt, string reason);
+
+    [LoggerMessage(EventId = 605, Level = LogLevel.Debug, Message = "Inline edit {RequestId}: no related code ({Reason})")]
+    private static partial void LogNoRelated(ILogger logger, string requestId, string reason);
 
     [LoggerMessage(EventId = 602, Level = LogLevel.Warning, Message = "Inline edit {RequestId} failed ({Code}): {Message}")]
     private static partial void LogFailed(ILogger logger, string requestId, PillionErrorCode code, string message);

@@ -29,6 +29,21 @@ internal static class RpcErrors
         RetryHint = "Retry once Visual Studio has reconnected.",
     });
 
+    /// <summary>
+    /// Creates the error for a contract method this build of the host does not implement yet (contract 1.3 stubs whose
+    /// behaviour a later work item adds).
+    /// </summary>
+    /// <param name="feature">What is missing, for the user, for example "Rebuilding an index".</param>
+    /// <param name="workItem">The work item that implements it, for example "2.15".</param>
+    /// <returns>A <see cref="PillionErrorCode.NotImplemented"/> exception.</returns>
+    public static PillionRpcException NotImplemented(string feature, string workItem) => new(new PillionError
+    {
+        Code = PillionErrorCode.NotImplemented,
+        Message = $"{feature} is not available in this version of Pillion Host.",
+        RetryHint = "Update Pillion Programmer.",
+        Details = "work item " + workItem,
+    });
+
     /// <summary>Creates the structured error sent for a cancelled operation.</summary>
     /// <returns>A <see cref="PillionErrorCode.Cancelled"/> error.</returns>
     public static PillionError Cancelled() => new()

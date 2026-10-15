@@ -26,6 +26,14 @@ public sealed record HostReadyReport(TimeSpan Elapsed, string State, string Serv
 /// <param name="KilledAt">When the kill happened on the caller's timeline (see <c>timeline</c> of <see cref="PillionHostChecks.KillHostAndWaitForReadyAsync"/>); zero without one.</param>
 public sealed record HostRestartReport(int KilledProcessId, int NewProcessId, TimeSpan LeftReadyAfter, TimeSpan ReadyAgainAfter, string[] Transitions, TimeSpan KilledAt = default);
 
+/// <summary>What <see cref="PillionHostChecks.ConversationSurvivesHostRestartAsync"/> saw.</summary>
+/// <param name="ConversationId">The id of the conversation the check created.</param>
+/// <param name="Restart">The host restart in between.</param>
+/// <param name="TitleAfter">The conversation's title after the restart, or <see langword="null"/> when the new host did not have it.</param>
+/// <param name="PinNamesAfter">The names of its pins after the restart.</param>
+/// <param name="ListedAfter">Whether the new host listed it.</param>
+public sealed record ConversationRestartReport(string ConversationId, HostRestartReport Restart, string? TitleAfter, string[] PinNamesAfter, bool ListedAfter);
+
 /// <summary>
 /// Checks that use the extension's <see cref="IHostConnection"/> service. Kept out of the test classes so that test
 /// discovery, which runs outside Visual Studio, never needs Pillion.VisualStudio.Core; call these only after the
@@ -185,6 +193,52 @@ public static class PillionHostChecks
         {
             OffThread = elsewhere,
         };
+    }
+
+    /// <summary>
+    /// Saves a conversation through the host's <see cref="IConversationService"/> (the shipped host, with the Local Store in the
+    /// user's data folder), kills the host, and reads the conversation from the new host. The conversation is deleted again (only
+    /// that one: never Delete all) whatever the outcome.
+    /// </summary>
+    /// <param name="readyTimeout">How long, from the kill, the host gets to be Ready again.</param>
+    /// <param name="cancellationToken">Cancels the check.</param>
+    /// <returns>What was seen.</returns>
+    public static async Task<ConversationRestartReport> ConversationSurvivesHostRestartAsync(TimeSpan readyTimeout, CancellationToken cancellationToken)
+    {
+        var connection = await GetConnectionAsync().ConfigureAwait(false);
+        await WaitForStateAsync(connection, HostState.Ready, TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+
+        var id = "ide-test-" + Guid.NewGuid().ToString("N");
+        var before = connection.GetProxy<IConversationService>();
+        try
+        {
+            await before.CreateConversationAsync(new ConversationCreateRequest { Id = id, Title = "Integration test conversation" }, cancellationToken).ConfigureAwait(false);
+            await before.SetPinsAsync(id, [new ConversationPin { Kind = MentionKinds.File, Target = @"C:\integration\Test.cs", DisplayName = "Test.cs", TokenCount = 42 }], cancellationToken).ConfigureAwait(false);
+
+            var restart = await KillHostAndWaitForReadyAsync(readyTimeout, cancellationToken).ConfigureAwait(false);
+
+            var after = connection.GetProxy<IConversationService>();
+            var detail = await after.GetConversationAsync(id, cancellationToken).ConfigureAwait(false);
+            var page = await after.ListConversationsAsync(new ConversationListRequest { Limit = 500 }, cancellationToken).ConfigureAwait(false);
+            return new ConversationRestartReport(
+                id,
+                restart,
+                detail?.Conversation.Title,
+                detail is null ? [] : [.. detail.Pins.Select(p => p.DisplayName)],
+                page.Items.Any(c => c.Id == id));
+        }
+        finally
+        {
+            try
+            {
+                await connection.GetProxy<IConversationService>().DeleteConversationAsync(id, CancellationToken.None).ConfigureAwait(false);
+            }
+#pragma warning disable CA1031 // Clean-up must not hide the check's own result.
+            catch (Exception)
+#pragma warning restore CA1031
+            {
+            }
+        }
     }
 
     private static async Task<IHostConnection> GetConnectionAsync()

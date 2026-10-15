@@ -26,8 +26,14 @@ public sealed class ContextInspectorItem
     /// <summary>Gets the pin the line shows (the remove button unpins it), or <see langword="null"/>.</summary>
     public MentionPin? Pin { get; }
 
-    /// <summary>Gets a value indicating whether the line has a remove button (it is a pin).</summary>
-    public bool CanRemove => Pin is not null;
+    /// <summary>
+    /// Gets the key that leaves the item out of the message (a retrieved chunk or the repository map; the remove button sends
+    /// it back in <see cref="ChatRequest.ExcludedContextKeys"/>), or empty.
+    /// </summary>
+    public string ContextKey => Item.ContextKey ?? string.Empty;
+
+    /// <summary>Gets a value indicating whether the line has a remove button (it is a pin, a retrieved chunk or the repository map).</summary>
+    public bool CanRemove => Pin is not null || ContextKey.Length > 0;
 
     /// <summary>Gets the name to show.</summary>
     public string Name => Item.Name;
@@ -76,7 +82,7 @@ public sealed class ContextInspectorItem
     public bool HasRedaction => Item.RedactionCount > 0;
 
     /// <summary>Gets the remove button's screen-reader name.</summary>
-    public string RemoveAutomationName => ChatStrings.Format(ChatStrings.RemovePinNameFormat, Name);
+    public string RemoveAutomationName => ChatStrings.Format(Pin is not null ? ChatStrings.RemovePinNameFormat : ChatStrings.RemoveContextItemNameFormat, Name);
 
     /// <summary>Gets the name a screen reader announces for the line.</summary>
     public string AutomationName =>
@@ -86,11 +92,13 @@ public sealed class ContextInspectorItem
 /// <summary>
 /// The Context Inspector (work item 1.13; design sections 7 and 12): the context a chat request would be assembled into,
 /// shown before it is sent, with every item's token count, whether it would be cut or left out, the secrets that would be
-/// replaced for a cloud model, and a remove button per pin. Filled by <see cref="ChatViewModel"/>; call on the UI thread.
+/// replaced for a cloud model, and a remove button per pin, retrieved chunk and repository map (work item 2.12). Filled by
+/// <see cref="ChatViewModel"/>; call on the UI thread.
 /// </summary>
 public sealed class ContextInspectorViewModel : ObservableObject
 {
     private readonly Action<MentionPin> _unpin;
+    private readonly Action<string>? _exclude;
     private readonly Action _send;
     private readonly Func<bool> _canSend;
     private bool _isOpen;
@@ -104,12 +112,14 @@ public sealed class ContextInspectorViewModel : ObservableObject
     /// <param name="unpin">Unpins a pin (and previews again).</param>
     /// <param name="send">Sends the message (and closes the inspector).</param>
     /// <param name="canSend">Whether the message can be sent now (the window's Send rules); always when <see langword="null"/>.</param>
-    public ContextInspectorViewModel(Action<MentionPin> unpin, Action send, Func<bool>? canSend = null)
+    /// <param name="exclude">Leaves a retrieved chunk or the repository map out of the message by its key (and previews again); without it only pins can be removed.</param>
+    public ContextInspectorViewModel(Action<MentionPin> unpin, Action send, Func<bool>? canSend = null, Action<string>? exclude = null)
     {
         _unpin = unpin ?? throw new ArgumentNullException(nameof(unpin));
+        _exclude = exclude;
         _send = send ?? throw new ArgumentNullException(nameof(send));
         _canSend = canSend ?? (() => true);
-        RemoveCommand = new DelegateCommand(p => Remove(p as ContextInspectorItem), p => p is ContextInspectorItem { CanRemove: true });
+        RemoveCommand = new DelegateCommand(p => Remove(p as ContextInspectorItem), p => p is ContextInspectorItem { CanRemove: true } item && (item.Pin is not null || _exclude is not null));
         SendCommand = new DelegateCommand(() => _send(), () => IsOpen && !IsLoading && _canSend());
         CloseCommand = new DelegateCommand(Close, () => IsOpen);
     }
@@ -292,6 +302,10 @@ public sealed class ContextInspectorViewModel : ObservableObject
         if (item?.Pin is { } pin)
         {
             _unpin(pin);
+        }
+        else if (item is { ContextKey.Length: > 0 } && _exclude is not null)
+        {
+            _exclude(item.ContextKey);
         }
     }
 }

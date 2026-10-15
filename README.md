@@ -8,15 +8,18 @@ Studio 2026.
 The design document is here:
 [Pillion Programmer design document](https://claude.ai/code/artifact/02f3ee51-8712-47d2-89af-3c7f6f1559fb).
 
-> Status: early scaffolding (phase 0). The extension supervises Pillion Host and has a Chat window and Options pages;
-> chat works end to end with a local Ollama model. The OpenAI-compatible cloud adapter is still being built.
+> Status: phase 2 (Context) is built and its evidence is collected ([docs/gate-2-report.md](docs/gate-2-report.md)); the gate
+> decision is the product owner's. The extension supervises Pillion Host and has a Chat window with saved conversations,
+> `@`-mentions and cited answers, inline chat, ghost-text autocomplete, an Index window and Options pages. Chat, inline
+> edits and autocomplete work end to end with local Ollama models and with the cloud providers you configure, and the Context
+> Engine indexes your repository on your machine. The agent, terminal and browser features come in phases 3 and 4.
 
 ## Architecture in one paragraph
 
 Two processes. **Pillion.VisualStudio** is a classic in-process VSSDK extension (.NET Framework 4.8, built
 against the 17.14 VS SDK) that background-loads with a solution or folder. **Pillion Host** is a .NET 10 console
-process, published self-contained, that will run the models, indexing and agent and talk to the extension over a
-named pipe. **Pillion.Contracts** (`netstandard2.0`) defines the RPC interfaces and DTOs and is compiled into both.
+process, published self-contained, that runs the models, the indexing and the retrieval (the agent comes in phase 3) and
+talks to the extension over a named pipe. **Pillion.Contracts** (`netstandard2.0`) defines the RPC interfaces and DTOs and is compiled into both.
 
 ## Repository layout
 
@@ -25,28 +28,53 @@ PillionProgrammer.sln            Full solution (needs Visual Studio's MSBuild be
 PillionProgrammer.NoVsix.slnf    Solution filter without the VSIX, for dotnet build / dotnet test
 global.json                      .NET SDK version (10.0.401, roll forward to latest feature band)
 Directory.Build.props            Shared build settings (nullable, warnings as errors, analyzers, versioning)
-Directory.Packages.props         Central package versions (all pinned)
+Directory.Packages.props         Central package versions (all pinned, with the reason for each native dependency)
 nuget.config                     Package sources: nuget.org, plus Microsoft's vssdk feed for the VS test framework only
+THIRD-PARTY-NOTICES.txt          Licences of every third-party component that ships (native libraries and models included)
+CONTRIBUTING.md                  Branches, pull requests and the rules that keep the build healthy
 .github/workflows/ci.yml         CI: build the full solution, run tests, upload the .vsix, VS integration tests on 18.x and 17.14
-tools/vs-tests/                  Deploy the VSIX to an Experimental Instance and run the VS integration tests
-docs/                            Project documents
+docs/                            Design document export, phase plans, gate reports; see "Documentation" below
+eval/                            Retrieval golden sets built from this repository's own code; see eval/README.md
+spikes/                          Throw-away spikes (the Proposals API spike and its findings)
+tools/
+  vs-tests/                      Deploy the VSIX to an Experimental Instance and run the VS integration tests
+  gate0/, gate1/, gate2/         Gate evidence scripts (gate2 also builds the generated repositories and the Gate 2 report)
+  eval/Pillion.Eval/             The evaluation harness runner (retrieval slice); never shipped
 src/
-  Pillion.Contracts/             RPC interfaces and DTOs (netstandard2.0); see its README for the versioning rule
-  Pillion.Common/                Host-side settings, secrets, redaction, connectivity (net10.0, placeholder)
-  Pillion.ModelGateway/          Model providers and routing (net10.0, placeholder)
-  Pillion.Host/                  Pillion Host console process (net10.0); see its README for the launch protocol
+  Pillion.Contracts/             RPC interfaces and DTOs (netstandard2.0), contract 1.3; see its README for the versioning rule
+  Pillion.Common/                Host-side settings, feature flags, secrets, redaction, connectivity (net10.0)
+  Pillion.ModelGateway/          Model providers, routing, embeddings (Ollama, OpenAI-compatible, cloud, bundled ONNX), context assembly
+  Pillion.LocalStore/            Encrypted SQLite (conversations.db and the index storage: chunks, FTS5, vectors, symbols); see its README
+  Pillion.Indexing/              Repository discovery, ignore rules, hashing, index identity, writer election and retention; see its README
+  Pillion.ContextEngine/         Chunkers (Roslyn, tree-sitter, Razor, SQL, window), symbols and repo map, hybrid retrieval; see its README
+  Pillion.Host/                  Pillion Host console process (net10.0): RPC, indexing pipeline, watcher, mentions, conversations; see its README
   Pillion.VisualStudio/          The Visual Studio extension (net48, produces Pillion.VisualStudio.vsix)
-  Pillion.VisualStudio.Core/     Host supervisor, RPC client and logger for the extension (net48, no VS SDK)
+  Pillion.VisualStudio.Core/     Host supervisor, RPC client, view models and logger for the extension (net48, no VS SDK)
 tests/
   Pillion.Contracts.Tests/       Contract shape tests and MessagePack round trips for every DTO
   Pillion.Common.Tests/
   Pillion.ModelGateway.Tests/
-  Pillion.Host.Tests/
-  Pillion.VisualStudio.Tests/    Supervisor, launch protocol and signature policy tests (net48)
+  Pillion.Host.Tests/            Includes the generated-repository indexing and watcher benchmarks (Category=Benchmark and Model)
+  Pillion.LocalStore.Tests/      Encryption, keys, WAL, writer queue, migrations, conversations repository, index storage
+  Pillion.Indexing.Tests/        Exclusion rules, gitignore matching, hashing and sweeps, writer lock election, retention
+  Pillion.ContextEngine.Tests/   Chunker, symbol and retrieval tests on fixtures, property-based tests (CsCheck), benchmarks
+  Pillion.Eval.Tests/            Harness metrics, query parsing, the checked-in golden sets, a model smoke test
+  Pillion.VisualStudio.Tests/    Supervisor, launch protocol, view models and signature policy tests (net48)
   Pillion.VisualStudio.IntegrationTests/         Tests inside the Visual Studio 2026 Experimental Instance; see its README
   Pillion.VisualStudio.IntegrationTests.VS2022/  The same tests built for Visual Studio 2022 17.14
   Pillion.FakeHost/              Stand-in host process used by Pillion.VisualStudio.Tests (not a test project)
 ```
+
+### Documentation
+
+| Page | What it covers |
+| --- | --- |
+| [docs/design-document.md](docs/design-document.md) | Export of the design document (the Claude Doc is the source of truth); phase 2 notes mark what changed |
+| [docs/phase-2-plan.md](docs/phase-2-plan.md), [docs/gate-2-report.md](docs/gate-2-report.md) | The phase 2 plan, its decision log and the Gate 2 evidence |
+| [docs/eval-retrieval-baseline.md](docs/eval-retrieval-baseline.md), [eval/README.md](eval/README.md) | The retrieval evaluation baseline and the golden-set format |
+| [docs/index-window.md](docs/index-window.md) | The Index window, the status bar indicator and the Indexing options |
+| [docs/pillionignore.md](docs/pillionignore.md) | What is indexed, `.pillionignore` syntax, built-ins, re-inclusion and secret files |
+| [docs/mentions.md](docs/mentions.md) | The `@`-mention grammar and every kind |
 
 ## Building and testing locally
 
@@ -102,12 +130,12 @@ emphasis use Visual Studio's theme colours; images are never downloaded (their a
 default browser only after a confirmation that shows its address. Each fenced code block is a read-only editor view
 coloured for the language in its fence tag (`csharp`, `ts`, `json`, `powershell` and so on), with **Copy** and **Insert at
 cursor**, which inserts into the active document at the caret (replacing any selection) as one undo step. Typing `@` in
-the message box opens a picker at the caret: the kinds first (`@file`, `@folder`, `@selection`, `@errors`, `@clipboard`),
-then up to 20 files of the solution or folder matching what you type, ranked by file name and then by path (`@kind:value`
-picks the kind, as in `@folder:src/Api`; Up and Down move, Enter or Tab pins, Esc closes). The file list comes from the
-loaded projects of the solution, or from the open folder, without `bin`, `obj`, `.git`, `node_modules` and `.vs`; it is
-refreshed when a solution, project or folder opens or closes, and every two minutes at most when the picker opens (the index
-replaces it in phase 2). A pinned item becomes a chip above the message box with its token count and a remove button; pins
+the message box opens a picker at the caret (the kinds are listed under [Mentions](#mentions)), then up to 20 files of the
+solution or folder matching what you type, ranked by file name and then by path (`@kind:value` picks the kind, as in
+`@folder:src/Api`; Up and Down move, Enter or Tab pins, Esc closes). The picker's file list comes from the loaded projects of
+the solution, or from the open folder, without `bin`, `obj`, `.git`, `node_modules` and `.vs`; it is refreshed when a
+solution, project or folder opens or closes, and every two minutes at most when the picker opens (when you pick a name, the
+host resolves it against the index). A pinned item becomes a chip above the message box with its token count and a remove button; pins
 belong to the conversation and go with every message of it (`@errors` sends the Error List's entries as the developer's
 filters show them). An ambiguous name lists its matches to pick from, an excluded or secret-looking file asks "This file
 looks like it holds secrets. Pin it anyway?" (an approved one shows a lock and never goes to a cloud model), and a mention
@@ -119,12 +147,13 @@ how many secrets would be replaced by placeholders for a cloud model, and a remo
 The **Outbound log** expander at the bottom lists the last 200 requests Pillion Host sent to any model from any task class,
 newest first (time, task, provider and model, local or cloud, tokens, redactions, duration, outcome), refreshed after
 each reply and with **Refresh**; **Copy** copies it as tab-separated text. Neither shows any prompt text. The
-**Conversation** list at the top keeps every conversation of the session (**New**, **Rename**, **Delete**, and switching
-in the list); conversations are kept in memory until Visual Studio closes, and persistence arrives in phase 2. **Tools >
-Options > Pillion Programmer** has the **Providers and keys** page (API keys go to the Windows Credential Manager under
-`PillionProgrammer/<provider id>`, never to settings files) and the **Privacy** page (Local-only mode and the cloud
-switch per task class) and the **Models and routing** page (a profile and a cloud switch per task class, an optional
-model id per profile, the "Think harder by default" placeholder and the GPU tier override). The pages are a view
+**Conversation** list at the top lists your saved conversations, newest first (**New**, **Rename**, **Delete**, and switching
+in the list); they are saved by Pillion Host and survive a restart (see [Persistence](#persistence)). **Tools > Options >
+Pillion Programmer** has the **Providers and keys** page (API keys go to the Windows Credential Manager under
+`PillionProgrammer/<provider id>`, never to settings files), the **Privacy** page (Local-only mode, the cloud
+switch per task class and **Delete all conversations**), the **Models and routing** page (a profile and a cloud switch per task class, an optional
+model id per profile, the "Think harder by default" placeholder and the GPU tier override), the **Autocomplete** page and the
+**Indexing** page (see [Context Engine](#context-engine)). The pages are a view
 over Pillion Host's `settings.json` and say "Host not ready" until the host is running; the host tells the extension
 when settings change (`settingsChanged`), so the chat model picker, open pages and autocomplete follow a save or an edit
 of the file without a Refresh press. `tests/Pillion.FakeHost` serves canned models, in-memory settings, canned mention resolutions (a name with `ambiguous`
@@ -184,8 +213,9 @@ Logs for both processes are in `%LOCALAPPDATA%\PillionProgrammer\logs` (**Tools 
 
 ## Feature flags
 
-Every capability sits behind a feature flag, so a user or a repository policy can switch it off. All flags default to
-on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgrammer\settings.json`:
+Every capability sits behind a feature flag, so a user or a repository policy can switch it off. All 22 flags default to
+on except `reranker`, which waits on a licence review. They are listed below in the order Pillion Host writes them
+(`FeatureNames.All`). The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgrammer\settings.json`:
 
 ```json
 {
@@ -203,7 +233,15 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
     "autocomplete": true,
     "inlineChat": true,
     "mentions": true,
-    "outboundLogView": true
+    "outboundLogView": true,
+    "localStore": true,
+    "indexing": true,
+    "embeddings": true,
+    "bundledEmbeddings": true,
+    "workspaceQueries": true,
+    "indexWindow": true,
+    "retrieval": true,
+    "reranker": false
   }
 }
 ```
@@ -222,8 +260,16 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
 | `azureOpenAIProvider` | Providers of kind `azure-openai` are not built or routed to. |
 | `autocomplete` | `IModelService.CompleteAsync` (ghost-text autocomplete) fails with `PolicyDenied` and a message that names the flag; chat and model listing are unaffected. The extension stops asking for suggestions (it reads the flag when Pillion Host becomes ready and when the Tools menu opens; an absent flag means on). |
 | `inlineChat` | `IInlineEditService.EditAsync` (inline chat edits, `/doc`, `/test`, `/fix`, `/explain`) fails with `PolicyDenied` and a message that names the flag, and **Pillion: Inline Chat** is disabled (an open adornment says "Inline chat is disabled by settings or policy" and cannot send). Chat, autocomplete and model listing are unaffected. |
-| `mentions` | The Chat window hides the `@` picker, the pins and **Include current file**, and sends no pins and no current file with a message (pins already made stay with their conversation and come back when the flag does). Pillion Host's `ResolveMentionAsync` is not gated; chat itself is unaffected. |
+| `mentions` | The Chat window hides the `@` picker, the pins and **Include current file**, and sends no pins and no current file with a message (pins already made stay with their conversation and come back when the flag does). Pillion Host's `ResolveMentionAsync` is not gated; chat itself is unaffected. The twelve kinds are under [Mentions](#mentions). |
 | `outboundLogView` | The Chat window hides **Inspect** and the **Outbound log**, and `IDiagnosticsService.GetOutboundRecordsAsync` and `PreviewContextAsync` fail with `PolicyDenied` and a message that names the flag. The Outbound log itself is still kept by Pillion Host. |
+| `localStore` | Pillion Host does not create or open its encrypted Local Store (`conversations.db`, see `src/Pillion.LocalStore/README.md`): opening it fails with `PolicyDenied` and a message that names the flag, and nothing is written to disk. The conversation service (`IConversationService`) then fails with `PolicyDenied` naming the flag, and the Chat window keeps conversations in memory until Visual Studio closes with a one-line notice; the Outbound log is kept in memory only. Conversations, pins and the Outbound log are stored through it (see [Persistence](#persistence)). |
+| `indexing` | Pillion Host does not discover, hash or index repository files and does not create or open index databases (`index\<id>\index.db`, see `src/Pillion.Indexing/README.md`): opening an index fails with `PolicyDenied` and a message that names the flag, nothing is written to disk and the retention sweep does nothing. An index needs `localStore` as well, because it is a Local Store database. With the flag on, the host indexes the roots of the solution or folder the extension reports (`IContextService.SetWorkspaceAsync`, work item 2.9; see the host README, Indexing pipeline); with it off the index status is Idle with no roots and the index controls are refused with `PolicyDenied`. The same flag covers the file watcher, the git `HEAD` watch and the incremental updates of work item 2.10 (saves relayed from Visual Studio, open documents first): off, nothing is watched and the `documentSaved` and `openDocumentsChanged` notifications have no effect. |
+| `embeddings` | The embedding gateway (`IModelGateway.EmbedAsync`, work item 2.6) fails with `PolicyDenied` and a message that names the flag; it also needs `modelGateway`. Chat, autocomplete and model listing are unaffected. Embeddings never leave the machine unless `cloudSwitches.embedding` is turned on as well (it is off by default; Local-only always wins). |
+| `bundledEmbeddings` | The bundled embedding provider (`bundled`, work item 2.7) is not built or routed to: the ONNX model shipped with the extension (`bge-small-en-v1.5`) and the models downloaded on request stop being offered, and the Embedding task class uses Ollama or another configured local embedding model instead (or fails with `ModelNotInstalled` when there is none). Nothing else changes. |
+| `workspaceQueries` | Visual Studio refuses Pillion Host's `FindReferencesAsync` and `CallersOfAsync` calls with `PolicyDenied` and a message that names the flag, and Pillion Host stops asking: `find_references` and `callers_of` (for `@symbol` and chat) are answered from the index's approximate reference edges only, marked approximate (work item 2.14). Nothing else changes. |
+| `indexWindow` | **View > Other Windows > Pillion Index** and **Tools > Pillion: Open Index** are hidden, the status bar shows no indexing indicator, and the **Indexing** Options page (`indexing.exclude`, `maxMemoryMb`, `pauseOnBattery`, `retentionDays`) says it is disabled by settings or policy. Pillion Host indexes either way (that is the `indexing` flag); the setting values stay in `settings.json`. The extension reads the flag when Pillion Host becomes ready and when the Tools menu opens (an absent flag means on). |
+| `retrieval` | `IContextService.SearchAsync` and `SearchDetailedAsync` (hybrid retrieval, work item 2.11: lexical, vector and symbol candidates fused with Reciprocal Rank Fusion, see `src/Pillion.ContextEngine/README.md`) fail with `PolicyDenied` and a message that names the flag. Searching also needs `indexing` and `localStore` to open an index, and the vector candidates need `embeddings`; without them the search answers from what it can open (no index: no hits; no embeddings: lexical and symbol hits only, marked `Degraded`). |
+| `reranker` | **Off by default.** The cross-encoder reranker of hybrid retrieval waits on the licence review in design section 18, so no reranker ships yet: this version keeps the fused order whether the flag is on or off. A policy can keep it off; nothing turns it on but the user. |
 
 A repository can switch flags off for everyone who opens it with `disabledFeatures` in `.pillion/policy.json`, next to
 `localOnly`, `disabledTools`, `exclude` and `denyCommands`:
@@ -344,6 +390,151 @@ in place. A warning from the host (for example "no change proposed") is shown ab
 closes when you apply or discard, when the document closes, or when the caret moves further from the scope than the
 editor shows lines. Every control is in the tab order with a screen-reader name; while the prompt has focus, keys the
 editor would otherwise take (typing, Backspace, arrows, Ctrl+A/C/V/X/Z, Enter, Esc, Tab) go to the prompt.
+
+## Context Engine
+
+The Context Engine answers one question for every feature: which few thousand tokens of this repository should the model see?
+It indexes your repository on your machine, searches it, and feeds chat, `@`-mentions, ghost-text autocomplete and inline edits.
+It runs in Pillion Host behind the `indexing`, `retrieval` and `localStore` flags (design document section 7).
+
+**What is indexed.** The files of the repository roots of the open solution or folder: the git top-level folder of each project
+(a linked worktree or submodule is followed to its real git directory), or the opened folder when there is no git repository. A
+solution that spans two repositories has two roots; a nested repository is indexed under its own root. Each file is split into
+*chunks*, one syntactic unit each (a member with its doc comment, or a type header) with a breadcrumb such as
+`path > namespace > type > member`: C# and Visual Basic through Roslyn (no compilation needed), Razor split into its C# and markup
+parts, TypeScript, TSX, JavaScript, Python, C, C++, Go, Rust, Java, HTML and CSS through tree-sitter, SQL through a statement
+lexer, and anything else in 60-line windows. Beside the chunk text the index keeps a lexical index (BM25, with camelCase and
+snake_case identifiers split so `getOrderTotal` matches "order total"), an embedding of every chunk, and a table of definitions
+and name-based references (marked approximate) from which the repo map and the fallback for `find_references` and `callers_of`
+are built. Precise answers for C# and VB come from the live Roslyn workspace in Visual Studio. Search fuses the lexical,
+vector and symbol results (Reciprocal Rank Fusion) and expands a hit to its whole member.
+
+**Embeddings stay on the machine.** The default model is `bge-small-en-v1.5`, bundled in the extension and run in Pillion Host with
+ONNX Runtime on the CPU (or DirectML when a GPU is present), so indexing works offline with nothing installed. Two more models
+download on request (`jina-embeddings-v2-base-code`, `multilingual-e5-small`), and Ollama or OpenAI-compatible embedding models
+can be routed to. Nothing is sent to a cloud provider for embedding unless you turn `cloudSwitches.embedding` on (off by default;
+Local-only always wins). The retrieval baseline is in [docs/eval-retrieval-baseline.md](docs/eval-retrieval-baseline.md).
+
+**Where the index lives.** `%LOCALAPPDATA%\PillionProgrammer\index\<index-id>\`, one folder per repository root, embedding model
+and chunker version: `index.db` (encrypted with SQLite3 Multiple Ciphers; the database key is DPAPI-protected for your Windows
+user in `key.bin`, user-only ACL), `writer.lock` and `state.json` (paths and versions, never code). Several Visual Studio
+instances share one index: the first takes the lock and indexes and watches, the others search it, and one takes over when the
+owner goes away. Changing the embedding model builds a new index beside the old one. Nothing is written inside your repository
+except a `.pillionignore` you create.
+
+**Staying current.** The first run indexes the repository in the background and partial results are searchable after the first
+batch. After that a file watcher (500 ms debounce), the save event Visual Studio relays and a watch on git's `HEAD` keep it up to
+date: a saved file is searchable within about 0.5 s, and a branch switch is a hash sweep of what changed, not a rebuild. Indexing
+runs at below-normal priority on at most half the cores, pauses by itself during builds and debugging and while Windows battery
+saver is on (`indexing.pauseOnBattery`), and stays under `indexing.maxMemoryMb` (1,536 MB by default) by halving its embedding
+batch and then pausing.
+
+**What is left out, and `.pillionignore`.** Pillion skips `bin`, `obj`, `node_modules`, `.git` and `.vs`, what `.gitignore` ignores,
+generated and minified files, lock files, binary files, files over 1 MB, links, and a root `packages` folder that looks like a
+NuGet packages folder. To leave out more, put a `.pillionignore` at the repository root in `.gitignore` syntax:
+
+```
+# Pillion does not index paths listed here.
+testdata/
+*.snap
+/third_party/
+```
+
+A `!` rule re-includes: it takes back in what `.gitignore` ignored, and any built-in name except `.git`:
+
+```
+# index our own packages\ folder and a checked-in tools\bin, and what .gitignore hides
+!packages/
+!tools/bin/
+!src/generated/
+```
+
+`indexing.exclude` (Options > Pillion Programmer > Indexing, or a repository policy's `exclude`) adds patterns that a
+`.pillionignore` rule cannot undo. Full syntax, the order the rules apply in, and examples are in
+[docs/pillionignore.md](docs/pillionignore.md).
+
+**Secret-bearing files** (`.env`, `.env.*`, `*.pfx`, `*.pem`, `*.key`, `*.p12`, `secrets.json`, `appsettings.*.json`,
+`*.publishsettings`, SSH private keys, `*.ppk`, `*.jks`, `*.keystore`, `.netrc`, `.pgpass`) are never opened, hashed or stored,
+whatever `.gitignore` or `.pillionignore` says. The Index window lists them first with a shield. `@file` on one asks for your
+approval, and an approved one is never sent to a cloud model. A secret written inside an ordinary source file is not detected by
+name: it sits in the encrypted index and is redacted by the scanner when text goes to a cloud model.
+
+**The Index window** (**View > Other Windows > Pillion Index**, **Tools > Pillion: Open Index**, or a click on the status bar
+indicator) shows the status and progress, one row per repository root with **Rebuild** and **Delete**, the excluded files with
+the reason for each, every index folder on the machine, and **Pause** and **Resume**. The status bar shows
+`↻ Indexing 42%`, `‖ Index paused: build` or `⚠ Index error` while there is something to say. See
+[docs/index-window.md](docs/index-window.md). Behind the `indexWindow` flag.
+
+**The Indexing options** (Tools > Options > Pillion Programmer > Indexing, or the `indexing` section of `settings.json`):
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `indexing.exclude` | none | Patterns in `.gitignore` syntax that are never indexed |
+| `indexing.maxMemoryMb` | 1,536 | Indexing pauses at this working set (256 to 65,536) |
+| `indexing.pauseOnBattery` | on | Pause while Windows battery saver is on |
+| `indexing.retentionDays` | 30 | An index unused for this many days, or whose folder no longer exists, may be deleted; 0 turns the age rule off |
+
+**Retention.** The rule above is implemented, but the host does not run the sweep on a schedule yet: stale indexes are listed in
+the Index window (**Indexes** tab, "Root is gone") and deleted there on request, and **Delete** frees the disk at once. Disk use is
+about 1.2 to 1.3 KB a chunk for generated code and about 2.2 KB a chunk for real code
+([docs/gate-2-report.md](docs/gate-2-report.md)).
+
+## Mentions
+
+Type `@` in the Chat window's input to pin context to the conversation (behind the `mentions` flag). The picker groups its
+entries under headings (kinds, files, folders, symbols, docs, and the options of `@git` and `@output`), each with its kind's
+icon and a hint line, and is driven from the keyboard: Up and Down move, Enter or Tab pick, Esc closes. Every pin shows its
+token count; `@kind:value` names the kind explicitly. Twelve kinds resolve (reference: [docs/mentions.md](docs/mentions.md)):
+
+| Mention | What is pinned | Where it comes from |
+| --- | --- | --- |
+| `@file` | A file's text (`@Customer.cs`, `@file:src/Program.cs`) | The open index's file list, fuzzy matched; the solution's file list when there is no index |
+| `@folder` | A folder outline: each file's first-chunk summary and its top definitions | The index; the folder on disk otherwise |
+| `@symbol` | A definition's code and a summary of its references (`@symbol:OrderService`) | The index's symbols; references from Roslyn for C# and VB, the index otherwise |
+| `@docs` | A Markdown or text document, chunk by chunk up to the limit; bare `@docs` lists them | The index, plus the folders in `mentions.docsFolders` |
+| `@solution` | The repo map, focused on the open documents | The index |
+| `@git` | The working-tree diff (`@git`), the staged changes (`@git:staged`) or the last commits (`@git:log:5`), with secrets redacted | The repository of the open folder (LibGit2Sharp) |
+| `@output` | An Output pane's tail (`@output:build`, `debug` or `tests`) | Visual Studio |
+| `@build` | The last build's outcome and output | Visual Studio |
+| `@tests` | The Tests pane's text: failing tests with their stack traces | Visual Studio |
+| `@selection` | The editor selection | Visual Studio |
+| `@clipboard` | The clipboard text | Visual Studio |
+| `@errors` | The Error List, as your filters show it, errors first | Visual Studio |
+
+`@terminal` is part of the design and arrives with the command runner in phase 3. A bare `@name` tries a file, then a symbol,
+then a folder. A file the exclusion globs or the secret-file rules refuse needs your approval before it is pinned, and an
+approved one never goes to a cloud model; `@git` lists such files without their changes, and `@symbol` shows no reference snippet
+from them. To let `@docs` search documentation outside the repository, list the folders in `settings.json` (full paths, or
+relative to the first open folder; empty by default):
+
+```json
+{ "mentions": { "docsFolders": ["C:\\docs\\handbook", "docs/adr"] } }
+```
+
+Replies that used retrieved code **cite** it: a `path:line` the reply names becomes a link that opens the file and selects the
+span, and when it names none the chunks sent are listed under a collapsed **Sources** line. **Inspect** shows the retrieved
+chunks and the repo map before sending, each with a remove button.
+
+## Persistence
+
+Pillion Host saves what you would be sorry to lose, on your machine, encrypted (behind the `localStore` flag):
+
+- **Conversations** with their messages and **pins** (what to resolve again, never the content) live in
+  `%LOCALAPPDATA%\PillionProgrammer\conversations.db`, an encrypted SQLite database (SQLite3 Multiple Ciphers, ChaCha20-Poly1305).
+  Its key is DPAPI-protected for your Windows user in `conversations.key.bin` beside it with a user-only ACL. The Chat window's
+  conversation list reads them, so they survive a Pillion Host restart and a Visual Studio restart, and two Visual Studio
+  instances share the file. A reply is saved when it ends, with the model, provider, tokens, cost and citations. A reply you
+  stopped is saved with what had arrived and marked stopped; a reply that failed is not saved (your message is, so Retry does
+  not repeat it). Inline edits are not saved. Before an upgrade changes the file's schema, a byte copy of the still encrypted
+  file is kept beside it as `conversations.db.v<n>.bak`.
+- **The Outbound log**, the record of every request sent to any model from any task class (time, task, provider and model, local
+  or cloud, tokens, redactions, duration, outcome; never prompt text), is kept in the same database, so the Chat window's view
+  survives a restart. Autocomplete answers served from the host's cache never reached a model and are kept for the session only.
+- **Delete all.** **Tools > Options > Pillion Programmer > Privacy > Delete all conversations** (after a confirmation) removes
+  every conversation, message, pin and Outbound record, compacts the file so the freed pages go too, and deletes the migration
+  backups. Settings and the code index are not touched. A single conversation is deleted from the Chat window's list.
+
+Conversations and the Outbound log are kept until you delete them; the code index has its own retention (above).
 
 ## IDE signals
 

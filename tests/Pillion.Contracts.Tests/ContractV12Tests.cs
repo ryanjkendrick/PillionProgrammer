@@ -35,11 +35,11 @@ public class ContractV12Tests
     };
 
     [Fact]
-    public void Version_IsOnePointTwo()
+    public void Version_IsAtLeastOnePointTwo()
     {
+        // The version itself is pinned by the newest ContractV*Tests class (ContractV13Tests); 1.2 only needs to still be covered.
         Assert.Equal(1, ContractVersion.Major);
-        Assert.Equal(2, ContractVersion.Minor);
-        Assert.Equal("1.2", ContractVersion.Text);
+        Assert.True(ContractVersion.Minor >= 2);
     }
 
     [Theory]

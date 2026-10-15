@@ -7,6 +7,7 @@ using Pillion.Common.Settings;
 using Pillion.Contracts;
 using Pillion.ModelGateway.Providers.Anthropic;
 using Pillion.ModelGateway.Providers.AzureOpenAI;
+using Pillion.ModelGateway.Providers.Bundled;
 using Pillion.ModelGateway.Providers.Gemini;
 using Pillion.ModelGateway.Providers.Mistral;
 using Pillion.ModelGateway.Providers.Ollama;
@@ -36,7 +37,7 @@ public sealed class GatewayProviderTester : IProviderTester
 public static class ModelGatewayServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the Model Gateway: the catalog, prompt templates, token counter, GPU tier detector, autocomplete counters, the local residency map, provider registry (with the Ollama, OpenAI-compatible, OpenAI, Anthropic, Gemini, Mistral and Azure OpenAI factories; the Azure factory uses an <see cref="ITokenCredentialProvider"/> if the host registers one), router,
+    /// Registers the Model Gateway: the catalog, prompt templates, token counter, GPU tier detector, autocomplete counters, the local residency map, provider registry (with the Ollama, OpenAI-compatible, OpenAI, Anthropic, Gemini, Mistral, Azure OpenAI and bundled factories; the Azure factory uses an <see cref="ITokenCredentialProvider"/> if the host registers one), the bundled model runtime, manifest and <see cref="ModelDownloadService"/>, router,
     /// circuit breakers, concurrency limiter, autocomplete cache, Outbound log and <see cref="IModelGateway"/>. The
     /// default <see cref="IProviderTester"/> is replaced by <see cref="GatewayProviderTester"/>. Extension points that
     /// later work items supply (<see cref="IProviderReachability"/>, <see cref="IProviderHealthSink"/>,
@@ -83,6 +84,28 @@ public static class ModelGatewayServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IModelProviderFactory, GeminiProviderFactory>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IModelProviderFactory, MistralProviderFactory>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IModelProviderFactory, AzureOpenAIProviderFactory>());
+
+        // The bundled embedding models (work item 2.7): one runtime per host, shared by the provider the registry adds on its own.
+        services.TryAddSingleton(ModelManifest.Default);
+        services.TryAddSingleton(new BundledModelOptions());
+        services.TryAddSingleton(sp => new BundledModelRuntime(
+            sp.GetRequiredService<ModelManifest>(),
+            sp.GetRequiredService<BundledModelOptions>(),
+            () => GpuTiers.Resolve(sp.GetRequiredService<IGatewaySettingsSource>().GetCurrent().Settings.Models.GpuTier, sp.GetRequiredService<IGpuTierDetector>()).Tier,
+            sp.GetService<ILogger<BundledModelRuntime>>(),
+            sp.GetRequiredService<TimeProvider>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IModelProviderFactory, BundledProviderFactory>());
+        services.TryAddSingleton(sp =>
+        {
+            var options = sp.GetRequiredService<BundledModelOptions>();
+            return new ModelDownloadService(
+                sp.GetRequiredService<ModelManifest>(),
+                options.UserModelsDirectory ?? new Common.PillionPaths().ModelsDirectory,
+                sp.GetRequiredService<BundledModelRuntime>(),
+                sp.GetRequiredService<IGatewaySettingsSource>(),
+                handlerFactory: null,
+                sp.GetService<ILogger<ModelDownloadService>>());
+        });
         services.TryAddSingleton(sp => new ProviderRegistry(
             sp.GetRequiredService<IGatewaySettingsSource>(),
             sp.GetRequiredService<ISecretStore>(),
@@ -105,7 +128,8 @@ public static class ModelGatewayServiceCollectionExtensions
         services.TryAddSingleton<AutocompleteCache>();
         services.TryAddSingleton<IOutboundLog>(sp => new InMemoryOutboundLog(
             sp.GetRequiredService<ModelGatewayOptions>(),
-            sp.GetService<ILogger<InMemoryOutboundLog>>()));
+            sp.GetService<ILogger<InMemoryOutboundLog>>(),
+            sp.GetServices<IOutboundSink>()));
         services.TryAddSingleton<IModelRouter, ModelRouter>();
         services.TryAddSingleton<IModelGateway>(sp => new ModelGateway(
             sp.GetRequiredService<IProviderRegistry>(),
@@ -128,7 +152,8 @@ public static class ModelGatewayServiceCollectionExtensions
             sp.GetRequiredService<AutocompleteCounters>(),
             sp.GetRequiredService<PromptEvaluationRates>(),
             sp.GetRequiredService<ContextAssembler>(),
-            sp.GetRequiredService<LocalResidencyMap>()));
+            sp.GetRequiredService<LocalResidencyMap>(),
+            sp.GetService<IAutocompleteSnippetSource>()));
 
         // Test connection probes the named provider through the gateway (replacing the settings' NoProviderTester).
         services.Replace(ServiceDescriptor.Singleton<IProviderTester, GatewayProviderTester>());

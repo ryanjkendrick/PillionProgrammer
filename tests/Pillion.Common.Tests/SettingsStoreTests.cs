@@ -43,6 +43,7 @@ public class SettingsStoreTests
         Assert.False(settings.CloudSwitches.Agent);
         Assert.False(settings.CloudSwitches.SelfHealing);
         Assert.True(settings.CloudSwitches.Vision);
+        Assert.False(settings.CloudSwitches.Embedding);
         Assert.False(settings.Privacy.LocalOnly);
         Assert.False(settings.Privacy.TelemetryOptIn);
         Assert.False(settings.Privacy.RedactForLocalProviders);
@@ -51,6 +52,8 @@ public class SettingsStoreTests
         Assert.Empty(settings.Indexing.Exclude);
         Assert.Equal(1536, settings.Indexing.MaxMemoryMb);
         Assert.True(settings.Indexing.PauseOnBattery);
+        Assert.Equal(30, settings.Indexing.RetentionDays);
+        Assert.Empty(settings.Mentions.DocsFolders);
         Assert.Equal(LogLevel.Information, settings.Logging.Level);
         Assert.False(settings.Logging.RpcTrace);
     }
@@ -68,7 +71,9 @@ public class SettingsStoreTests
         Assert.Equal("\"ask\"", store.GetJson("approvals.mode"));
         Assert.Equal("\"information\"", store.GetJson("logging.level"));
         Assert.Equal("1536", store.GetJson("indexing.maxMemoryMb"));
+        Assert.Equal("30", store.GetJson("indexing.retentionDays"));
         Assert.Equal("false", store.GetJson("cloudSwitches.selfHealing"));
+        Assert.Equal("false", store.GetJson("cloudSwitches.embedding"));
         Assert.Equal("false", store.GetJson("routing.thinkHarder"));
     }
 
@@ -122,11 +127,12 @@ public class SettingsStoreTests
                 Tasks = new Dictionary<TaskClass, Profile> { [TaskClass.Chat] = Profile.Frontier, [TaskClass.Autocomplete] = Profile.LocalFast },
                 Profiles = new Dictionary<Profile, string> { [Profile.Fast] = "fast-model", [Profile.LocalStrong] = "qwen" },
             });
-            store.Set(SettingsSections.CloudSwitches, new CloudSwitchSettings { Chat = false, InlineEdit = false, Autocomplete = true, Agent = true, SelfHealing = true, Vision = false });
+            store.Set(SettingsSections.CloudSwitches, new CloudSwitchSettings { Chat = false, InlineEdit = false, Autocomplete = true, Agent = true, SelfHealing = true, Vision = false, Embedding = true });
             store.Set(SettingsSections.Privacy, new PrivacySettings { LocalOnly = true, TelemetryOptIn = true, RedactForLocalProviders = true });
             store.Set(SettingsSections.Approvals, new ApprovalSettings { Mode = ApprovalMode.AutoSafe });
             store.Set(SettingsSections.CostCaps, new Dictionary<string, CostCap> { ["openai"] = new() { DailyUsd = 5m, MonthlyUsd = 50.5m }, ["azure"] = new() { DailyUsd = 1m } });
-            store.Set(SettingsSections.Indexing, new IndexingSettings { Exclude = ["**/bin/**", "*.log"], MaxMemoryMb = 2048, PauseOnBattery = false });
+            store.Set(SettingsSections.Indexing, new IndexingSettings { Exclude = ["**/bin/**", "*.log"], MaxMemoryMb = 2048, PauseOnBattery = false, RetentionDays = 7 });
+            store.Set(SettingsSections.Mentions, new MentionsSettings { DocsFolders = [@"C:\docs\handbook", "docs/adr"] });
             store.Set(SettingsSections.Logging, new LoggingSettings { Level = LogLevel.Debug, RpcTrace = true });
         }
 
@@ -145,6 +151,7 @@ public class SettingsStoreTests
         Assert.False(s.CloudSwitches.Chat);
         Assert.True(s.CloudSwitches.Agent);
         Assert.True(s.CloudSwitches.SelfHealing);
+        Assert.True(s.CloudSwitches.Embedding);
         Assert.True(s.Privacy.LocalOnly);
         Assert.True(s.Privacy.TelemetryOptIn);
         Assert.True(s.Privacy.RedactForLocalProviders);
@@ -155,6 +162,9 @@ public class SettingsStoreTests
         Assert.Equal(["**/bin/**", "*.log"], s.Indexing.Exclude);
         Assert.Equal(2048, s.Indexing.MaxMemoryMb);
         Assert.False(s.Indexing.PauseOnBattery);
+        Assert.Equal(7, s.Indexing.RetentionDays);
+        Assert.Equal([@"C:\docs\handbook", "docs/adr"], s.Mentions.DocsFolders);
+        Assert.Contains("\"docs/adr\"", reloaded.GetJson("mentions.docsFolders"), StringComparison.Ordinal); // camelCase on disk
         Assert.Equal(LogLevel.Debug, s.Logging.Level);
         Assert.True(s.Logging.RpcTrace);
 
@@ -232,7 +242,7 @@ public class SettingsStoreTests
         Assert.Equal(first, third);
         Assert.Contains("\n  \"version\": 1,", first, StringComparison.Ordinal);
         Assert.Equal(
-            ["version", "providers", "routing", "models", "cloudSwitches", "privacy", "approvals", "costCaps", "indexing", "logging", "features"],
+            ["version", "providers", "routing", "models", "cloudSwitches", "privacy", "approvals", "costCaps", "indexing", "mentions", "logging", "features"],
             ReadFile(store).Select(p => p.Key));
     }
 

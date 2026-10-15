@@ -669,6 +669,14 @@ public static class GateScenarioChecks
                 ["promptTokensCounted"] = host.PromptTokensCounted - hostBefore.PromptTokensCounted,
                 ["promptTokensEstimated"] = host.PromptTokensEstimated - hostBefore.PromptTokensEstimated,
                 ["promptTokensMax"] = host.PromptTokensMax,
+
+                // Issue #47 option 1 (work item 2.12): model requests whose prompt prefix (snippets, header and the code before
+                // the caret) starts with the previous one sent for the same document and model, over this pass.
+                ["promptPrefixChecks"] = host.PromptPrefixChecks - hostBefore.PromptPrefixChecks,
+                ["promptPrefixReuses"] = host.PromptPrefixReuses - hostBefore.PromptPrefixReuses,
+                ["promptPrefixReuseRate"] = host.PromptPrefixChecks - hostBefore.PromptPrefixChecks == 0
+                    ? null
+                    : Math.Round((host.PromptPrefixReuses - hostBefore.PromptPrefixReuses) / (double)(host.PromptPrefixChecks - hostBefore.PromptPrefixChecks), 3),
                 ["windowSeconds"] = host.WindowSeconds,
                 ["windowFirstTokenP50Ms"] = host.FirstTokenP50Ms,
                 ["windowFirstTokenP95Ms"] = host.FirstTokenP95Ms,

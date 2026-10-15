@@ -3,6 +3,7 @@ using System.IO.Pipelines;
 using System.IO.Pipes;
 using System.Threading.Channels;
 using MessagePack;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Pillion.Contracts;
 using Pillion.Host.Lifecycle;
@@ -116,6 +117,11 @@ internal sealed partial class RpcConnection : IAsyncDisposable
         foreach (var target in _context.Targets)
         {
             _rpc.AddLocalRpcTarget(target.ContractType, target.GetTarget(_context.Services), targetOptions);
+        }
+
+        foreach (var notification in _context.Services.GetServices<IRpcNotificationTarget>())
+        {
+            _rpc.AddLocalRpcMethod(notification.Name, notification.GetHandler(_context.Services));
         }
 
         _rpc.StartListening();

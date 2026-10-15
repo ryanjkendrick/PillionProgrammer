@@ -161,6 +161,15 @@ public sealed class AnthropicProvider : IModelProvider
     }
 
     /// <inheritdoc/>
+    public IEmbeddingGenerator<string, Embedding<float>>? GetEmbeddingGenerator(string modelId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+
+        // Anthropic has no embeddings endpoint (Voyage AI is the provider it points to), and the capability reports none.
+        return null;
+    }
+
+    /// <inheritdoc/>
     public async Task<ProviderProbeResult> ProbeAsync(CancellationToken cancellationToken) =>
         (await ProbeDetailedAsync(cancellationToken).ConfigureAwait(false)).ToProbeResult();
 

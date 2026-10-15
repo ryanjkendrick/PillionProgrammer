@@ -182,6 +182,84 @@ public static class ChatStrings
     /// <summary>Gets the string: Description of @clipboard in the picker.</summary>
     public static string MentionKindClipboard => Get(nameof(MentionKindClipboard));
 
+    /// <summary>Gets the heading of the mention kinds in the picker.</summary>
+    public static string MentionGroupKinds => Get(nameof(MentionGroupKinds));
+
+    /// <summary>Gets the heading of the files in the picker.</summary>
+    public static string MentionGroupFiles => Get(nameof(MentionGroupFiles));
+
+    /// <summary>Gets the heading of the folders in the picker.</summary>
+    public static string MentionGroupFolders => Get(nameof(MentionGroupFolders));
+
+    /// <summary>Gets the heading of the symbols in the picker.</summary>
+    public static string MentionGroupSymbols => Get(nameof(MentionGroupSymbols));
+
+    /// <summary>Gets the heading of the documents in the picker.</summary>
+    public static string MentionGroupDocs => Get(nameof(MentionGroupDocs));
+
+    /// <summary>Gets the heading of the @git options in the picker.</summary>
+    public static string MentionGroupGit => Get(nameof(MentionGroupGit));
+
+    /// <summary>Gets the heading of the @output options in the picker.</summary>
+    public static string MentionGroupOutput => Get(nameof(MentionGroupOutput));
+
+    /// <summary>Gets the description of @symbol in the picker.</summary>
+    public static string MentionKindSymbol => Get(nameof(MentionKindSymbol));
+
+    /// <summary>Gets the description of @docs in the picker.</summary>
+    public static string MentionKindDocs => Get(nameof(MentionKindDocs));
+
+    /// <summary>Gets the description of @solution in the picker.</summary>
+    public static string MentionKindSolution => Get(nameof(MentionKindSolution));
+
+    /// <summary>Gets the description of @git in the picker.</summary>
+    public static string MentionKindGit => Get(nameof(MentionKindGit));
+
+    /// <summary>Gets the description of @output in the picker.</summary>
+    public static string MentionKindOutput => Get(nameof(MentionKindOutput));
+
+    /// <summary>Gets the description of @build in the picker.</summary>
+    public static string MentionKindBuild => Get(nameof(MentionKindBuild));
+
+    /// <summary>Gets the description of @tests in the picker.</summary>
+    public static string MentionKindTests => Get(nameof(MentionKindTests));
+
+    /// <summary>Gets the picker title after @symbol: is typed.</summary>
+    public static string MentionPickerSymbolHint => Get(nameof(MentionPickerSymbolHint));
+
+    /// <summary>Gets the picker title after @docs: is typed.</summary>
+    public static string MentionPickerDocsHint => Get(nameof(MentionPickerDocsHint));
+
+    /// <summary>Gets the picker title after @git: is typed.</summary>
+    public static string MentionPickerGitHint => Get(nameof(MentionPickerGitHint));
+
+    /// <summary>Gets the picker title after @output: is typed.</summary>
+    public static string MentionPickerOutputHint => Get(nameof(MentionPickerOutputHint));
+
+    /// <summary>Gets the detail of the entry that resolves the typed name as written; {0} is the name.</summary>
+    public static string MentionTypedValueFormat => Get(nameof(MentionTypedValueFormat));
+
+    /// <summary>Gets the title of the sub-picker for an ambiguous symbol; {0} is the mention.</summary>
+    public static string MentionSymbolCandidatesTitleFormat => Get(nameof(MentionSymbolCandidatesTitleFormat));
+
+    /// <summary>Gets the detail of the working-tree diff option.</summary>
+    public static string MentionGitDiff => Get(nameof(MentionGitDiff));
+
+    /// <summary>Gets the detail of the staged changes option.</summary>
+    public static string MentionGitStaged => Get(nameof(MentionGitStaged));
+
+    /// <summary>Gets the detail of the log option; {0} is the number of commits.</summary>
+    public static string MentionGitLogFormat => Get(nameof(MentionGitLogFormat));
+
+    /// <summary>Gets the detail of the Build pane option.</summary>
+    public static string MentionOutputBuild => Get(nameof(MentionOutputBuild));
+
+    /// <summary>Gets the detail of the Debug pane option.</summary>
+    public static string MentionOutputDebug => Get(nameof(MentionOutputDebug));
+
+    /// <summary>Gets the detail of the Tests pane option.</summary>
+    public static string MentionOutputTests => Get(nameof(MentionOutputTests));
+
     /// <summary>Gets the string: Shown under the input when resolving a mention failed without a reason.</summary>
     public static string MentionFailed => Get(nameof(MentionFailed));
 
@@ -382,6 +460,57 @@ public static class ChatStrings
 
     /// <summary>Gets the string: Outbound log column.</summary>
     public static string OutboundColumnOutcome => Get(nameof(OutboundColumnOutcome));
+
+    /// <summary>Gets the line the tooltip of a restored pin that could not be read again ends with.</summary>
+    public static string PinStale => Get(nameof(PinStale));
+
+    /// <summary>Gets the word a screen reader adds for a restored pin that could not be read again.</summary>
+    public static string PinStaleShort => Get(nameof(PinStaleShort));
+
+    /// <summary>Gets the screen-reader name of a citation link, with the link text.</summary>
+    public static string CitationNameFormat => Get(nameof(CitationNameFormat));
+
+    /// <summary>Gets the label before the spans a reply names itself (explicit citations).</summary>
+    public static string CitationsLabel => Get(nameof(CitationsLabel));
+
+    /// <summary>Gets the collapsed line under a reply listing its implicit sources; {0} is the count.</summary>
+    public static string SourcesFormat => Get(nameof(SourcesFormat));
+
+    /// <summary>Gets the screen-reader name of the collapsed Sources line; {0} is the count.</summary>
+    public static string SourcesCollapsedNameFormat => Get(nameof(SourcesCollapsedNameFormat));
+
+    /// <summary>Gets the screen-reader name of the expanded Sources line; {0} is the count.</summary>
+    public static string SourcesExpandedNameFormat => Get(nameof(SourcesExpandedNameFormat));
+
+    /// <summary>Gets the screen-reader name of the remove button of a retrieved chunk or the repository map; {0} is its name.</summary>
+    public static string RemoveContextItemNameFormat => Get(nameof(RemoveContextItemNameFormat));
+
+    /// <summary>Gets the notice shown while saved conversations are turned off (the localStore feature).</summary>
+    public static string ConversationsNotSavedOff => Get(nameof(ConversationsNotSavedOff));
+
+    /// <summary>Gets the notice shown while the host cannot save conversations, with the reason.</summary>
+    public static string ConversationsNotSavedFormat => Get(nameof(ConversationsNotSavedFormat));
+
+    /// <summary>Gets the line shown while a saved conversation is being read.</summary>
+    public static string ConversationLoadingText => Get(nameof(ConversationLoadingText));
+
+    /// <summary>Gets the line shown when a saved conversation could not be read, with the reason.</summary>
+    public static string ConversationLoadFailedFormat => Get(nameof(ConversationLoadFailedFormat));
+
+    /// <summary>Gets the button that reads a saved conversation again.</summary>
+    public static string ConversationRetryLoadButton => Get(nameof(ConversationRetryLoadButton));
+
+    /// <summary>Gets the notice shown when a rename or delete could not reach the host, with the reason.</summary>
+    public static string ConversationSaveFailedFormat => Get(nameof(ConversationSaveFailedFormat));
+
+    /// <summary>Gets the conversation list menu item that renames a conversation.</summary>
+    public static string ConversationMenuRename => Get(nameof(ConversationMenuRename));
+
+    /// <summary>Gets the conversation list menu item that deletes a conversation.</summary>
+    public static string ConversationMenuDelete => Get(nameof(ConversationMenuDelete));
+
+    /// <summary>Gets the header of a saved reply that does not name its model.</summary>
+    public static string SavedReplyHeader => Get(nameof(SavedReplyHeader));
 
     /// <summary>Formats a string from this file with the current culture.</summary>
     /// <param name="format">The format (one of the <c>...Format</c> properties).</param>

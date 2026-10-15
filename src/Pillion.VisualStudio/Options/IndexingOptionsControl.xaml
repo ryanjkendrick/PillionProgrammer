@@ -1,0 +1,111 @@
+<UserControl x:Class="Pillion.VisualStudio.Options.IndexingOptionsControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:ClassModifier="internal"
+             xmlns:core="clr-namespace:Pillion.VisualStudio.Core;assembly=Pillion.VisualStudio.Core"
+             xmlns:vsshell="clr-namespace:Microsoft.VisualStudio.Shell;assembly=Microsoft.VisualStudio.Shell.15.0"
+             Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"
+             Foreground="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"
+             FontFamily="{DynamicResource {x:Static vsshell:VsFonts.EnvironmentFontFamilyKey}}"
+             FontSize="{DynamicResource {x:Static vsshell:VsFonts.EnvironmentFontSizeKey}}"
+             AutomationProperties.Name="{x:Static core:IndexStrings.OptionsPageName}">
+
+    <!--
+      Tools > Options > Pillion Programmer > Indexing (work item 2.15). Like the other pages it is a view over the host's
+      settings file; Save writes only the keys that changed, each under its own dotted key (indexing.maxMemoryMb, ...), so it
+      never rewrites another section or a value another page changed meanwhile. Colours are the system colours that Visual
+      Studio's Options dialog themes, so the page follows the light, dark and high-contrast themes.
+    -->
+    <UserControl.Resources>
+        <Style x:Key="Note" TargetType="TextBlock">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="0,2,0,10" />
+            <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
+        </Style>
+    </UserControl.Resources>
+
+    <DockPanel Margin="4">
+        <TextBlock DockPanel.Dock="Top"
+                   Text="{Binding FeatureDisabledMessage}"
+                   FontWeight="SemiBold"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,6"
+                   AutomationProperties.Name="{Binding FeatureDisabledMessage}"
+                   AutomationProperties.LiveSetting="Polite">
+            <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                    <Setter Property="Visibility" Value="Visible" />
+                    <Style.Triggers>
+                        <Trigger Property="Text" Value="">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                        </Trigger>
+                    </Style.Triggers>
+                </Style>
+            </TextBlock.Style>
+        </TextBlock>
+
+        <TextBlock DockPanel.Dock="Top"
+                   Text="{Binding StatusMessage}"
+                   FontWeight="SemiBold"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,6"
+                   AutomationProperties.Name="{Binding StatusMessage, StringFormat='Status: {0}'}"
+                   AutomationProperties.LiveSetting="Polite" />
+
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,8,0,0">
+            <Button Content="{x:Static core:IndexStrings.OptionsSave}" Command="{Binding SaveCommand}" MinWidth="75"
+                    AutomationProperties.Name="{x:Static core:IndexStrings.OptionsSaveName}" />
+            <Button Content="{x:Static core:IndexStrings.OptionsReload}" Command="{Binding ReloadCommand}" MinWidth="75" Margin="6,0,0,0"
+                    AutomationProperties.Name="{x:Static core:IndexStrings.OptionsReloadName}" />
+        </StackPanel>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Focusable="False">
+            <StackPanel IsEnabled="{Binding IsLoaded}">
+                <Label Content="{x:Static core:IndexStrings.OptionsExcludeLabel}" Target="{Binding ElementName=ExcludeBox}" Padding="0" Margin="0,0,0,2" FontWeight="SemiBold" />
+                <TextBox x:Name="ExcludeBox"
+                         Text="{Binding ExcludeText, UpdateSourceTrigger=PropertyChanged}"
+                         AcceptsReturn="True"
+                         AcceptsTab="False"
+                         TextWrapping="NoWrap"
+                         HorizontalScrollBarVisibility="Auto"
+                         VerticalScrollBarVisibility="Auto"
+                         MinHeight="96"
+                         MaxHeight="220"
+                         AutomationProperties.Name="{x:Static core:IndexStrings.OptionsExcludeName}"
+                         AutomationProperties.HelpText="{x:Static core:IndexStrings.OptionsExcludeHelp}" />
+                <TextBlock Text="{x:Static core:IndexStrings.OptionsExcludeHelp}" Style="{StaticResource Note}" />
+
+                <Label Content="{x:Static core:IndexStrings.OptionsMaxMemoryLabel}" Target="{Binding ElementName=MaxMemoryBox}" Padding="0" Margin="0,0,0,2" FontWeight="SemiBold" />
+                <TextBox x:Name="MaxMemoryBox"
+                         Text="{Binding MaxMemoryText, UpdateSourceTrigger=PropertyChanged}"
+                         HorizontalAlignment="Left"
+                         MinWidth="90"
+                         AutomationProperties.Name="{x:Static core:IndexStrings.OptionsMaxMemoryName}"
+                         AutomationProperties.HelpText="{x:Static core:IndexStrings.OptionsMaxMemoryHelp}" />
+                <TextBlock Text="{x:Static core:IndexStrings.OptionsMaxMemoryHelp}" Style="{StaticResource Note}" />
+
+                <CheckBox Content="{x:Static core:IndexStrings.OptionsPauseOnBattery}"
+                          IsChecked="{Binding PauseOnBattery}"
+                          Margin="0,0,0,10"
+                          AutomationProperties.Name="{x:Static core:IndexStrings.OptionsPauseOnBatteryName}" />
+
+                <Label Content="{x:Static core:IndexStrings.OptionsRetentionLabel}" Target="{Binding ElementName=RetentionBox}" Padding="0" Margin="0,0,0,2" FontWeight="SemiBold" />
+                <TextBox x:Name="RetentionBox"
+                         Text="{Binding RetentionText, UpdateSourceTrigger=PropertyChanged}"
+                         HorizontalAlignment="Left"
+                         MinWidth="90"
+                         AutomationProperties.Name="{x:Static core:IndexStrings.OptionsRetentionName}"
+                         AutomationProperties.HelpText="{x:Static core:IndexStrings.OptionsRetentionHelp}" />
+                <TextBlock Text="{x:Static core:IndexStrings.OptionsRetentionHelp}" Style="{StaticResource Note}" />
+
+                <!-- Read only: the model the open index was built with. A read-only text box, so a screen reader user can reach it with Tab. -->
+                <TextBox Text="{Binding ModelText, Mode=OneWay}"
+                         IsReadOnly="True"
+                         BorderThickness="0"
+                         Background="Transparent"
+                         TextWrapping="Wrap"
+                         AutomationProperties.Name="{x:Static core:IndexStrings.OptionsModelName}" />
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</UserControl>

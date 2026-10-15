@@ -19,8 +19,9 @@ using Pillion.VisualStudio.Core.Signals;
 namespace Pillion.VisualStudio.ToolWindows;
 
 /// <summary>
-/// The editor side of the chat window's mentions (work item 1.9): the active editor's selection (<c>@selection</c>), the
-/// clipboard (<c>@clipboard</c>), the solution's diagnostics from <see cref="IIdeSignals"/> (<c>@errors</c>) and the current
+/// The editor side of the chat window's mentions (work items 1.9 and 2.13): the active editor's selection (<c>@selection</c>),
+/// the clipboard (<c>@clipboard</c>), the solution's diagnostics from <see cref="IIdeSignals"/> (<c>@errors</c>), the Output
+/// panes (<c>@output</c>), the last build (<c>@build</c>) and the Tests pane's failures (<c>@tests</c>), and the current
 /// file region sent with each message (the selection, else 60 lines around the caret). The active editor is the last text
 /// view that had focus, so it is found while the chat window has the keyboard.
 /// </summary>
@@ -120,6 +121,40 @@ internal sealed class EditorChatContext : IChatEditorContext
         await TaskScheduler.Default;
         var diagnostics = await signals.GetDiagnosticsAsync(DiagnosticScope.Solution, cancellationToken).ConfigureAwait(false);
         return ErrorsPayload.Format(diagnostics);
+    }
+
+    /// <inheritdoc/>
+    public async Task<string?> GetOutputPaneTextAsync(string pane, CancellationToken cancellationToken)
+    {
+        if (_signals() is not { } signals)
+        {
+            return null;
+        }
+
+        await TaskScheduler.Default;
+        var text = await signals.GetOutputPaneTextAsync(pane, IdeSignalsHub.MentionPaneChars, cancellationToken).ConfigureAwait(false);
+        return string.IsNullOrWhiteSpace(text) ? null : text;
+    }
+
+    /// <inheritdoc/>
+    public async Task<string?> GetLastBuildAsync(CancellationToken cancellationToken)
+    {
+        if (_signals() is not { } signals || signals.LastBuild is not { } build)
+        {
+            return null;
+        }
+
+        // The tail kept when the build finished; while it is still being read, the pane as it is now.
+        var output = build.Output ?? await GetOutputPaneTextAsync("Build", cancellationToken).ConfigureAwait(false) ?? string.Empty;
+        return build.Summary() + "\n" + output;
+    }
+
+    /// <inheritdoc/>
+    public async Task<string?> GetTestResultsAsync(CancellationToken cancellationToken)
+    {
+        // Test Explorer has no documented API for results (design section 5), so the Tests pane's failures stand in.
+        var text = await GetOutputPaneTextAsync("Tests", cancellationToken).ConfigureAwait(false);
+        return text is null ? null : TestOutput.FailuresOrTail(text);
     }
 
     private static string Cap(string text) => text.Length <= MaxRegionChars ? text : text.Substring(0, MaxRegionChars);

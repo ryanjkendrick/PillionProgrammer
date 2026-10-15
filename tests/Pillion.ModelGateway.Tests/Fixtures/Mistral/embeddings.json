@@ -1,0 +1,10 @@
+{
+  "id": "e7f3a1c0b2d44f6a9c1d5b7e3a8f0c21",
+  "object": "list",
+  "data": [
+    { "object": "embedding", "index": 0, "embedding": [0.0101, -0.0202, 0.0303, -0.0404, 0.0505, -0.0606] },
+    { "object": "embedding", "index": 1, "embedding": [-0.0707, 0.0808, -0.0909, 0.1010, -0.1111, 0.1212] }
+  ],
+  "model": "mistral-embed",
+  "usage": { "prompt_tokens": 12, "total_tokens": 12, "completion_tokens": 0 }
+}

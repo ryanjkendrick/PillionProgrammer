@@ -441,3 +441,5 @@ tools/gate0/out/
 
 # Gate 1 evidence run output (logs, TRX files, scenario JSON, settings backups)
 tools/gate1/out/
+# Evaluation harness output (results JSON and Markdown per run; the baseline figures are recorded in docs/eval-retrieval-baseline.md)
+tools/eval/out/

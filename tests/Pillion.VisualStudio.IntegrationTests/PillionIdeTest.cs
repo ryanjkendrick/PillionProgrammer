@@ -32,6 +32,9 @@ public abstract class PillionIdeTest : AbstractIdeIntegrationTest
     /// <summary>The Pillion Chat tool window GUID (PackageGuids.ChatToolWindowString).</summary>
     public static readonly Guid ChatToolWindowGuid = new("3a84b873-8bad-4568-b3af-36f887cf71e5");
 
+    /// <summary>The Pillion Index tool window GUID (PackageGuids.IndexToolWindowString).</summary>
+    public static readonly Guid IndexToolWindowGuid = new("b7c4e0a2-5d1f-4e3a-9a62-0c8f3d7e41b6");
+
     /// <summary>The oldest Visual Studio the extension supports.</summary>
     public static readonly Version MinimumVisualStudioVersion = new(17, 14);
 

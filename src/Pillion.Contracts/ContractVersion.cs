@@ -20,9 +20,15 @@ public static class ContractVersion
     /// caret, declaration, open-document and edit context on <see cref="CompletionRequest"/>, <see cref="IInlineEditService"/>
     /// and its DTOs, mentions, pins and project rules for context assembly, <see cref="TaskClass.Summarise"/>,
     /// <see cref="IDiagnosticsService"/> with <see cref="AutocompleteHostCounters"/> and the resident models, the Outbound log read and context preview
-    /// methods (<c>GetOutboundRecordsAsync</c>, <c>PreviewContextAsync</c>) and the <c>settingsChanged</c> notification (see the README).
+    /// methods (<c>GetOutboundRecordsAsync</c>, <c>PreviewContextAsync</c>) and the <c>settingsChanged</c> notification. 1.3
+    /// added <see cref="IConversationService"/>, the index phase, roots and progress on <see cref="IndexStatus"/> with the
+    /// index control methods and the <c>indexStatusChanged</c> notification, the search filters and
+    /// <see cref="SearchResponse"/>, <see cref="Citation"/>s on chat replies and mentions, the retrieval switch on
+    /// <see cref="ChatRequest"/>, the 1.3 <see cref="MentionKinds"/>, <c>CallersOfAsync</c> on
+    /// <see cref="IWorkspaceQueryService"/>, and <see cref="PillionErrorCode.StorageUnavailable"/> and
+    /// <see cref="PillionErrorCode.NotImplemented"/> (see the README).
     /// </summary>
-    public const int Minor = 2;
+    public const int Minor = 3;
 
     /// <summary>Gets the contract version formatted as <c>major.minor</c>.</summary>
     public static string Text => Major.ToString(System.Globalization.CultureInfo.InvariantCulture)

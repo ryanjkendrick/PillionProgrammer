@@ -40,6 +40,13 @@ public interface IHostConnection
     event EventHandler<HostSettingsChangedEventArgs>? SettingsChanged;
 
     /// <summary>
+    /// Raised on a background thread when the host reports a new state of the workspace index (its <c>indexStatusChanged</c>
+    /// notification, contract 1.3), at most twice a second. A 1.2 host never raises it; call
+    /// <see cref="IContextService.GetIndexStatusAsync"/> for the status when a window opens.
+    /// </summary>
+    event EventHandler<HostIndexStatusChangedEventArgs>? IndexStatusChanged;
+
+    /// <summary>
     /// Gets the RPC proxy for a host service interface (for example <see cref="IModelService"/>) on the live connection.
     /// </summary>
     /// <typeparam name="T">A host service interface from Pillion.Contracts.</typeparam>
@@ -50,6 +57,18 @@ public interface IHostConnection
     /// </exception>
     T GetProxy<T>()
         where T : class;
+
+    /// <summary>
+    /// Sends a JSON-RPC notification (no response) to the host on the live connection, for example <c>ideActivityChanged</c>
+    /// (contract 1.3). Call it off the UI thread.
+    /// </summary>
+    /// <param name="method">The notification's name.</param>
+    /// <param name="argument">The notification's one positional argument.</param>
+    /// <returns>
+    /// <see langword="true"/> when the notification was written; <see langword="false"/> when no handshaken connection exists
+    /// (the host is starting, restarting or failed) or the connection was lost meanwhile. Never throws for those cases.
+    /// </returns>
+    Task<bool> NotifyAsync(string method, object? argument);
 
     /// <summary>
     /// Waits until the host is <see cref="HostState.Ready"/> or <see cref="HostState.Degraded"/> with a live

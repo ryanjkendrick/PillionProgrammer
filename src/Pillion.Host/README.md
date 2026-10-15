@@ -8,8 +8,15 @@ editor, approval and workspace operations.
 Program.cs                          Parses the command line, composes the host, returns the exit code
 PillionHostBuilderExtensions.cs     AddPillionHost: logging + lifecycle + RPC server (used by Program and tests)
 Lifecycle/                          HostStateMachine, HostShutdown (exit code), ParentProcessWatcher
-Context/                            ContextRpcService (IContextService): @file, @folder, @selection, @clipboard, @errors
+Context/                            ContextRpcService (IContextService): @file, @folder, @selection, @clipboard, @errors;
+                                    IndexStatusNotifier (indexStatusChanged, contract 1.3)
+Conversations/                      ConversationRpcService (IConversationService, contract 1.3), ConversationRecorder (saves chat turns),
+                                    StoreOutboundSink (Outbound log to the store), ConversationRetentionService (see Saved conversations)
+Indexing/                           IndexingService (the indexing pipeline, work item 2.9), IndexPass, the pause and memory rules
 Rpc/                                RpcServer, RpcConnection, PillionJsonRpc, handshake, IRpcTarget, IVsixConnection
+WorkspaceQueries/                   IWorkspaceQueries (work item 2.14): find_references and callers_of for @symbol and chat,
+                                    from the VSIX's Roslyn workspace, falling back to the index's approximate edges
+                                    (ISymbolGraphProvider, empty until the index supplies graphs)
 Logging/                            Rolling JSON-lines file sink and retention
 ```
 
@@ -93,6 +100,10 @@ builder.Services.AddRpcTarget<ISettingsService>(sp => new SettingsService(/* ...
 - Streaming methods return `IAsyncEnumerable<T>`; mark the token `[EnumeratorCancellation]` in async iterators.
 - Registering the same contract twice, a non-interface, or `IHostLifecycleService` throws at start-up.
 
+A notification from the VSIX (client to host, no response) is registered the same way, with
+`AddRpcNotification(name, sp => handlerDelegate)`: the delegate's parameters are the notification's positional arguments,
+and like a request it is only dispatched after the handshake (`ideActivityChanged` is the first, see Indexing pipeline).
+
 To call the VSIX, inject `IVsixConnection` and ask for a proxy per operation:
 `vsix.GetEditorService()`, `GetApprovalService()`, `GetWorkspaceQueryService()`. They throw
 `PillionRpcException` with `HostRestarting` while no VSIX is connected. Never dispose a proxy (that closes the
@@ -120,9 +131,286 @@ the built-in secret rules (`.env`, `.env.*` except examples, `*.pfx`, `*.p12`, `
 `Password`) resolve as unresolved with `RequiresApproval`; the client asks the user and asks again with `ApprovedSensitive`.
 An approved file comes back with `IsSensitive`, and the gateway never sends such a pin to a cloud model.
 
-`SearchAsync` returns an empty array and `GetIndexStatusAsync` reports nothing indexed (the index arrives in phase 2);
-`PauseIndexingAsync` does nothing. The chat side of context (pins, current file, rules, history summary) is in the Model
+`SearchAsync` and `SearchDetailedAsync` answer with hybrid retrieval ([below](#retrieval-contextretrieval)).
+`GetIndexStatusAsync`, `PauseIndexingAsync`, `SetWorkspaceAsync`, `ListExcludedFilesAsync`, `RebuildIndexAsync`,
+`DeleteIndexAsync` and `ListIndexesAsync` are served by the indexing pipeline (below). The chat side of context (pins, current file, rules, history summary) is in the Model
 Gateway README, Context assembly.
+
+### Saved conversations (work item 2.2)
+
+`IConversationService` (contract 1.3) is served over the Local Store's `IConversationRepository` (the encrypted
+`conversations.db`; see the Local Store README). Every method needs the `localStore` feature: while it is off the call fails
+with `PolicyDenied` naming the flag. A store that cannot be opened or used fails with `StorageUnavailable` (a
+`LocalStoreException` is passed on as it is; any other storage exception is logged and reported with a generic message and its
+type name in `Details`).
+
+- **Saving as chat runs.** There is no append method. `ModelRpcService.ChatAsync` asks `ConversationRecorder` to begin a request
+  with a `ConversationId`: an unknown id creates the conversation, titled from the first line of the user's message cut to 60
+  characters (a conversation the Chat window created empty is named by its first message), and the user's message is
+  appended unless it is already the newest message (a failed reply that is retried sends the same history again). The reply is
+  written once, when the stream ends: model, provider, prompt and completion tokens (0 is stored as unknown), the cost (0 for a
+  local provider, the catalog's prices times the tokens for a cloud one, unknown when the catalog has no price) and the final
+  chunk's citations. A reply stopped by Stop, a lost connection or a cancelled call is written with what had arrived and a
+  `cancelled` flag (`ConversationMessage.Cancelled` on the wire), and is not written at all when nothing had arrived. A reply that failed (an exception, or a final chunk with
+  an `Error`) is not saved: the user's message stays, so the Retry that follows does not repeat it. A storage failure never
+  fails the chat; it is logged and the turn goes unsaved. Inline edits do not go through `ChatAsync` and are not saved.
+- **Lists and edits.** `ListConversationsAsync` pages newest first (`Limit` 0 is 50, at most 500; `HasMore` from one extra
+  row). `RenameConversationAsync` changes the title only (the conversation keeps its place in the list; an empty title leaves it as
+  it was). `CreateConversationAsync` returns an existing id unchanged. `SetPinsAsync` replaces the pins in the order given.
+  `DeleteAllConversationsAsync` first drops the Outbound records still queued for the store, then empties every table, compacts
+  the file and deletes the migration backups, then clears the in-memory Outbound log.
+- **The Outbound log.** `StoreOutboundSink` is an `IOutboundSink` that `InMemoryOutboundLog` hands every record to as it is
+  produced. It only queues the record (5,000 at most, the oldest dropped); one background task writes them, so a request never
+  waits for the disk, and it drains its queue when the host stops (up to 1.5 s). Autocomplete cache hits are not stored: they
+  never reached a model, so they stay in the in-memory log only. `GetOutboundRecordsAsync` reads from the store (after waiting
+  up to 2 s for the queue to catch up) while `localStore` is on, so the Outbound log view survives a restart, and adds this
+  session's cache hits from the in-memory log (after a restart the view has no cache hits); if the store is off or cannot be
+  read it answers from the in-memory ring buffer of this session.
+- **Retention.** Conversations and the Outbound log are kept until the user deletes them (design section 10), so
+  `ConversationRetentionService` opens nothing and removes nothing with the default `ConversationRetentionPolicy`; when a policy
+  with an age limit is registered it applies it once, 30 s after start-up, in the background.
+
+### Contract 1.3 stubs
+
+Every contract 1.3 method is implemented now (conversations by 2.2, search by 2.11, the index methods by 2.9). A later
+method that is not yet implemented answers honestly with a stub:
+
+`RpcErrors.NotImplemented(feature, workItem)` builds that error; a work item that implements a method removes its stub and
+its row here.
+
+## Retrieval (`Context/Retrieval/`)
+
+Work item 2.11, behind `features.retrieval` (off: both search methods fail with `PolicyDenied` naming the flag).
+`ContextRpcService.SearchDetailedAsync` and `SearchAsync` delegate to `IRetrievalService` (`RetrievalService`), which takes
+the open indexes from an `IIndexCatalog`, adapts each with `StorageRetrievalIndex` (reading the embedding model and vector
+size from the index `meta` per search) and runs `HybridRetriever` (Pillion.ContextEngine, see its README, Hybrid
+retrieval). Results use the contract's zero-based lines and the opaque chunk id `<index-id>:<row-id>`; `SearchAsync`
+returns the same hits as `SearchDetailedAsync` without the timings. `SearchRequest` has no budget field, so the budget is
+`RetrievalOptions.TimeBudget` (300 ms; register a `RetrievalOptions` singleton to change it).
+
+- `IIndexCatalog` gives the open `IndexStorage` (and `SymbolGraph`, when the host keeps one) per repository root, for the
+  request's `Roots` or, when there are none, the open workspace's roots, never every index on disk (issue #98).
+  `ReadOnlyIndexCatalog` serves only the roots it is asked for unless it is made with `servesEveryIndex: true`, which
+  retrieval never does (tools that read every index on purpose may). Registered with `TryAdd`, it finds index
+  folders by `state.json` under `index\`, picks the most recently opened one per root, opens it read-only (the reader path
+  of `IndexStoreFactory`: nothing created, migrated or locked), keeps it open until the host stops and warms its vector
+  cache in the background; it serves nothing while `indexing` or `localStore` is off. The indexing pipeline (work item 2.9)
+  registers its live catalog before `AddPillionRetrieval` to take its place.
+- `GatewayQueryEmbedder` embeds the question with `IModelGateway.EmbedAsync` (one input, purpose `Query`, the index's model
+  id and vector size), so the `embeddings` flag, routing, Local-only and the Outbound log apply as for any embedding. When
+  embedding fails or overruns the budget, the search answers from the lexical and symbol legs with `Degraded` set.
+- `features.reranker` (off by default) is read, but no cross-encoder ships yet (licence review, design section 18): the
+  fused order is kept and the host logs that once.
+
+### Context for prompts (work item 2.12)
+
+`CodeContextRetriever` is the part the prompt builders share: it honours `retrieval`, asks the catalog whether an index is
+open, runs `IRetrievalService.RetrieveAsync` (the retriever's own shape: 1-based lines, paths relative to the root) and maps
+hits to `ContextChunk`s; a failed search gives nothing. It resolves `IRetrievalService`, `IIndexCatalog` and
+`ISymbolGraphProvider` lazily: the question embedder and the indexing pipeline behind `LiveIndexCatalog` both go through the
+gateway, which takes the autocomplete snippet source. With the pipeline running, chunks and the repo map's graph come from
+the pipeline's own open index (`LiveIndexCatalog`); its read-only fallback skips the roots the pipeline has open, so no
+database gets a second opener.
+
+- **Chat, retrieved chunks** (`RetrievalContextSource`, an `IContextSource`): unless `RetrievalMode` is `Off`, the query is
+  the user's latest message plus the identifiers of pinned selections, the focus files are the current file and the pinned
+  files, and `MaxRetrievedChunks` results are asked for (default 8, at most 20). Chunks of a pinned file are left out. It
+  asks for assembly of a plain request when an index is open. The result is kept for 30 s per request id, so fallback
+  models and the preview do not search again.
+- **Chat, repo map** (`RepoMapContextSource`): `RepoMapRenderer` over the catalog's symbol graphs (else the
+  `ISymbolGraphProvider`'s), focused on the same files, within the assembler's repo map cap counted with the chat model's
+  tokenizer; key `repoMap`. The read-only catalog carries no graphs, so the map appears once the indexing pipeline (2.9)
+  supplies them.
+- **Autocomplete** (`AutocompleteSnippetProvider`, the gateway's `IAutocompleteSnippetSource`): the enclosing declaration
+  and the identifiers of the caret's lines, open documents as focus files, the lexical and symbol legs only
+  (`RetrievalSearchMode.LexicalAndSymbol`: no query embedding, which with the bundled model on the CPU takes longer than the
+  budget), a 100 ms budget, chunks of other files only, at most three; a degraded search gives none. The snippets are chosen once per document and enclosing member and reused for
+  every keystroke in it until the declaration changes or 30 s pass (one search in flight per member, detached from the
+  keystroke's cancellation), so the prompt prefix stays the same; the gateway caches completions per snippet set.
+- **Inline edits** (`InlineEditRetrieval`, `IInlineEditContext`): the instruction and the identifiers of the code to edit,
+  the document as focus file, at most four chunks, none overlapping the scope or the context sent around it.
+
+Measured on a generated 100,000-chunk encrypted index (`ContextAssemblyBenchmarkTests`, `Category=Benchmark`): whole chat
+assembly with 8 retrieved chunks and the repo map, p50 44 to 47 ms and p95 55 to 59 ms with a hashing embedder (budget 150
+and 400 ms); with the bundled bge-small model embedding each question on the CPU (`Category=Model`), p50 153 ms and p95
+169 ms, of which the query embedding is 134 ms on average.
+
+## Index status notification (`indexStatusChanged`)
+
+Host to client, a JSON-RPC notification with one positional argument, an `IndexStatus` (contract 1.3). `IndexStatusNotifier`
+(a singleton) sends it: the first status after a quiet spell at once, later ones at most once per 500 ms, coalesced so the
+latest status of the window is the one sent. It goes over the same path as `connectivityChanged` and `settingsChanged`
+(`INotificationSender`), only to a client whose handshake was accepted, and is not replayed to a client that connects later
+(the client calls `GetIndexStatusAsync`). The indexing pipeline publishes to it whenever its phase, progress or roots change
+(below). In the VSIX it surfaces as `IHostConnection.IndexStatusChanged`.
+
+## Indexing pipeline (`Indexing/`)
+
+Work item 2.9, design sections 7, 10 and 13, behind `features.indexing` (an index also needs `features.localStore`).
+`IndexingService` is a hosted singleton; `ContextRpcService` delegates the index methods of `IContextService` to it.
+
+1. **Workspace.** The extension calls `SetWorkspaceAsync` (contract 1.3) after every handshake and when the solution, its
+   projects or the opened folder change. The service resolves the repository roots (`RepositoryRoots.Resolve`: the git
+   top-level of each path, or the folder) and opens each root's index through `IndexStoreFactory` with the embedding model
+   the `Embedding` task class routes to (`GatewayIndexEmbedder`: the bundled `bge-small-en-v1.5` by default, its own WordPiece
+   tokenizer for the chunk cap) and `ContextEngineVersions.ChunkerVersion`. Roots that are no longer wanted are closed (the
+   writer releases `writer.lock`); the same roots sent again restart nothing. A changed embedding model opens another index.
+2. **Run.** For each root this host owns, one at a time, an `IndexPass`:
+   - *Discovering, Hashing*: `RepositorySweeper` with the effective `indexing.exclude` (one walk; unchanged files are neither
+     opened nor hashed). Rows of deleted files go in one transaction (chunks, vectors and symbols by cascade); touched files
+     get their new metadata. The sweep's excluded and secret-bearing entries are kept for `ListExcludedFilesAsync`.
+   - *Chunking*: added and changed files are read, chunked (`FileChunker`, cap `min(model input, 512)` tokens in the
+     model's tokenizer, breadcrumb included) and their symbols extracted (`FileSymbolExtractor`) on the pipeline threads.
+     On the first run of a session the unchanged files are read for their symbols only (the symbol graph needs every
+     file); when the stored `symbols_version` differs, their symbols are stored again (no re-chunking, no re-embedding).
+   - *Embedding*: chunks go to `IModelGateway.EmbedAsync` in batches of 32 (`EmbeddingPurpose.Document`, the model pinned by
+     id so an index never mixes models; Local-only and the cloud switch are the gateway's rules). A failed batch is
+     retried three times (1, 2, 4 s); then the run stops as `Failed` with the error, keeping every file already stored.
+   - *Storing*: each file's `files` row, chunks (with FTS5 rows and int8 vectors) and symbols (with `SymbolDefinition.Id`
+     as the stored id, so edges from other files survive edits) in **one transaction per file**
+     (`IndexStorage.WriteAsync`). After the first stored batch, and then at most every
+     `max(10 s, 10 x the last refresh)`, the symbol graph is rebuilt (`SymbolGraphBuilder`, which holds every file's
+     latest extraction), the reference edges of the files whose edges changed are written in one transaction, and the
+     in-memory vector copy is reloaded (`WarmVectorCacheAsync`), so partial results are searchable while the run goes on.
+   - At the end: a last refresh, `meta` rows `symbols_version`, `embedding_tokenizer`, `embedding_max_tokens` and
+     `chunk_max_tokens` (beside `embedding_model`, `chunker_version` and `vector_dimensions`, which the factory and the
+     storage write), and `state.json`'s last full sweep (`IndexStore.RecordFullSweep`).
+3. **Status.** `GetIndexStatusAsync` and `indexStatusChanged`: the phase only moves forward within a run (Discovering,
+   Hashing, Chunking, Embedding, Storing, then Idle; `Paused` with its reason on top, `Failed` with `LastError`), files
+   done of total, chunks stored, and an estimate from the bytes done since embedding started. Each root reports its id,
+   role, files indexed and found, excluded and secret-bearing counts, chunks, disk use (from `GetIndexStatusAsync`; the
+   notification leaves it 0 to stay cheap), last full sweep, model, chunker and schema versions.
+4. **Controls.** `PauseIndexingAsync` (pause reason `User`); `RebuildIndexAsync(root)` cancels a run on that root, deletes
+   every `files` row (cascading to everything else), clears `symbols_version` and `vector_dimensions`, vacuums and runs
+   again (for a workspace root whose index was deleted it opens a new one); `DeleteIndexAsync(id)` closes the index if
+   this host has it open, deletes the folder through `IndexRetention.Delete` (refused with `PolicyDenied` while another
+   live host owns it) and does not reopen that root until a rebuild or the next workspace change; `ListIndexesAsync` maps
+   `IndexRetention.GetUsage()`; `ListExcludedFilesAsync` pages the last sweep's list, secret-bearing first. With the flag
+   off the status is `Idle` with no roots, nothing is opened, and these controls are refused with `PolicyDenied`.
+5. **Retention** (issue #99). The pipeline loop runs `IndexRetention.SweepAsync` once the workspace the extension reported
+   is applied (its indexes open), then every `IndexingOptions.RetentionSweepInterval` (a day, on the host's `TimeProvider`),
+   with the current `indexing.retentionDays`. It deletes the indexes whose root is gone or that were not opened for that
+   many days, never one a live host holds (`writer.lock`) and never one of a root of the open workspace (open here, or of
+   another model or chunker version: `RetentionDecision.KeepProtected`). Each deletion is logged (event ids 2970-2973);
+   the last report is `IndexingService.LastRetentionReport`.
+
+### Serving search and the workspace queries
+
+`LiveIndexCatalog` is the `IIndexCatalog` of retrieval (work item 2.11) and the `ISymbolGraphProvider` of the workspace
+queries (2.14), registered before `AddPillionRetrieval` and the empty provider. Searches use the very `IndexStorage` the
+pipeline writes through (or reads, on a reader host), with the symbol graph of the last refresh, so a root this host has
+open is never opened a second time and new chunks are searchable as soon as a batch is stored. It serves only the indexes
+of the open workspace's roots (`IndexingService.WorkspaceRoots`, resolved from what the extension reported; issue #98):
+a request without roots means those roots, a named root outside them gets nothing, and with nothing open nothing is
+served, so chat assembles without retrieved chunks. A workspace root the pipeline has not opened yet is read through
+2.11's read-only catalog, asked for that root by name. Indexes of other folders are visible only in the Index window's
+Indexes tab (`ListIndexesAsync`, which lists folders without opening them). When an index opens, two reader connections are opened and the in-memory vector copy loaded in the
+background, so the first search pays for neither.
+
+### Resource rules (design section 13)
+
+- **Threads.** `PipelineScheduler`: `Environment.ProcessorCount / 2` dedicated threads at `ThreadPriority.BelowNormal`.
+  The sweep's hashing, reading, chunking, symbol extraction, the graph rebuild and the database writes run there. The
+  bundled model's ONNX Runtime intra-op threads are ONNX Runtime's own (normal priority, capped at half the logical
+  processors by `BundledModelOptions.IntraOpThreads`); the gateway runs one embedding batch at a time per provider.
+- **Memory.** `MemoryGovernor` samples `Environment.WorkingSet` before every batch. Over `indexing.maxMemoryMb` (1,536 by
+  default): a forced, compacting garbage collection first (once per episode), then the batch is halved (32, 16, 8, 4),
+  then indexing pauses with reason `Memory`, sampling every second and resuming below 90% of the cap; below 75% the batch
+  doubles back to 32.
+- **The bundled model's memory.** Measured with the pipeline on this repository's own source: with ONNX Runtime's memory
+  pattern on and 32 x 512 x 512 attention cells per run the host passed 2 GB and the memory pause never lifted (the CPU
+  arena does not shrink). The bundled runtime now runs with the memory pattern off on the CPU and 512 x 512 cells per run
+  (`BundledModelOptions.CpuMemoryPattern`, `MaxAttentionCells`): about 315 MB at peak and about 50% faster. The governor's
+  first step also releases the loaded model (`BundledModelRuntime.ReleaseUnused`, its arena with it), and it releases it
+  again when it pauses, so a pause can end.
+- **IDE activity.** The notification `ideActivityChanged` (client to host, contract 1.3, an `IdeActivity` set) feeds
+  `IdeActivityMonitor`: pause reasons `Build`, `Test`, `Debug` while the flags are set; the set is forgotten when the
+  extension disconnects, so a crashed Visual Studio cannot leave indexing paused.
+- **Battery.** `Win32PowerStatus` reads `GetSystemPowerStatus` (`SystemStatusFlag` 1 = battery saver) every 15 s and on a
+  settings change; with `indexing.pauseOnBattery` (default on) it pauses with reason `Battery`.
+- Pauses take effect at the next checkpoint: before each file is read and before each embedding batch. Reported in the
+  order User, Memory, Build, Test, Debug, Battery when several hold.
+
+### Watcher and incremental updates (work item 2.10)
+
+Design section 7 step 7 and section 10 (the writer runs the indexer and the watcher), behind `features.indexing` like the
+rest of the pipeline.
+
+- **`RootWatcher`**, one per root this host owns (never on a reader), started when the index opens as the writer and
+  disposed with the root (workspace closed, flag off, embedding model changed, or the writer lock lost). A recursive
+  `FileSystemWatcher` on the root with a 64 KiB buffer (`IndexingOptions.WatcherBufferBytes`, the Windows maximum) feeds a
+  `ChangeQueue`: a path is ready after 500 ms without events (`WatcherDebounce`), and the ready paths are handed over
+  together when every queued path is ready or the burst has lasted 1 s (`WatcherCoalescingWindow`), so a save-all or a
+  generator's 200 files become one batch. Every event is filtered first by the discovery rules (`PathClassifier.ClassifyByName`
+  of Pillion.Indexing: the scan's `.gitignore`, `.pillionignore`, built-in names, `indexing.exclude`, secret, generated,
+  minified and lock-file names, checked against every ancestor folder), so events under `bin`, `obj`, `.git`,
+  `node_modules` or an ignored folder cost a string check and queue nothing. A folder's own "changed" event is dropped; a
+  new folder is checked with the folder rules. A rename is a delete of the old path and an event on the new one. A change
+  to a `.gitignore` or `.pillionignore` forgets the cached rules and asks for a sweep.
+- **Branch switches.** A second watcher on the real git directory (`RepositoryRoot.GitDirectory`: `.git`, or where a
+  worktree's or submodule's `.git` file points) watches `HEAD` and `index.lock`. While git holds `index.lock` the file events
+  are held back; once it is gone and the directory has been quiet for 300 ms (`GitSettleDelay`), `GitHead.Read` compares the
+  checked-out ref and commit (through `commondir` and `packed-refs`) with the last reading: when it moved (checkout, pull,
+  reset, rebase, commit) the queue is dropped and the root gets a **hash sweep** (an ordinary run: unchanged files are not
+  even opened), never a rebuild; otherwise the held events go to the indexer. A lock left by a crashed git is waited for at
+  most 2 minutes (`GitBusyMaxWait`).
+- **Failures never take the host down.** An overflow drops the queue and asks for a sweep. Any other watcher error (the
+  root went away, the handle failed), or a watcher that cannot start, closes it, asks for a sweep, and every 5 minutes
+  (`WatcherFallbackInterval`) tries to start it again, sweeping once more while it cannot. Event handlers catch and log.
+- **Saves from Visual Studio.** The `documentSaved` notification (contract 1.3, see the Contracts README) calls
+  `IndexingService.NotifySaved`: the file goes to its root's queue at once, with the time it arrived, bypassing the debounce
+  (the watcher forgets the path so its own event does not repeat the work; when it arrives anyway the run finds the hash
+  unchanged). The save path chunks the file, keeps the stored vectors of chunks whose text did not change, embeds the new
+  ones in batches of 8 (`SaveEmbeddingBatchSize`) while the next batch still fits `SaveSearchableBudget` (500 ms) less
+  `SaveStoreReserve` (80 ms), and stores the file: searchable lexically at once and by vector for every chunk embedded so
+  far. When the budget ran out (a large or entirely new file on a slow CPU) the remaining chunks get their vectors right
+  after, in normal batches; until then the file's row carries a modified time of 0, so if that never completes the next
+  sweep indexes the file again.
+- **Incremental runs** (`IndexPass.RunIncrementalAsync`, between full runs on the same loop, never while a full run or a
+  pause is on): each queued path is decided with `PathClassifier.Classify` (the scan's rules, size cap and content checks
+  included) and hashed. Gone or newly excluded files lose their rows (and everything under a folder that went away); files
+  whose hash is unchanged are skipped; the others are chunked, embedded and stored, saved files first, the rest through
+  the batched pipeline. Every write sets `IndexWriteSession.UpdateVectorCache`, so the in-memory vector copy takes the
+  stored and deleted vectors with the commit instead of being reloaded (see the Local Store README). At the end the symbol
+  builder (`AddFile`/`RemoveFile` as files were stored or deleted) rebuilds the graph and the changed reference edges are
+  written, once. A folder that appeared with files the batch does not name (moved or copied in) asks for a sweep; a file
+  the editor still has locked is queued again 500 ms later. Status: `Storing` with the batch's file count, then `Idle`.
+- **Chunk-level reuse, every run.** A changed file's chunks whose breadcrumb and text match a stored chunk of that file keep
+  its vector (same model, same text), so an edit or a branch switch embeds only the members that changed.
+- **Open documents first.** The `openDocumentsChanged` notification (contract 1.3) gives the open documents; a full run
+  indexes the open ones among its added and changed files as a batch of their own and refreshes at once, so after a branch
+  switch what the developer is looking at is searchable first (`PassStatistics.PrioritySearchable`). Forgotten when the
+  extension disconnects.
+- **Pauses and ownership.** While indexing is paused (user, memory, build, test, debug, battery) the watcher keeps
+  queueing; nothing runs, and on resume the queued paths are applied as one coalesced batch. Before every run the service
+  checks that `writer.lock` still carries this host's token (`IndexStore.HoldsWriterLock`); when it does not (deleted, or
+  reclaimed by a host that took this one for dead) the root, its watcher with it, is closed and opened again, as a reader
+  if another live host owns it now.
+
+Measured on this machine (16 logical processors, CPU only, bundled `bge-small-en-v1.5` int8; shared with other agents'
+builds, so indicative): a 202-line C# file with one method edited is searchable 40 to 50 ms after the save arrives (median;
+outliers to 580 ms under load); the same file with every chunk new is searchable after 280 to 420 ms with 16 to 24 of its
+29 chunks embedded, and all its vectors are in place after about 500 to 600 ms. A branch switch touching 500 files of
+about 100 lines (two members changed in each) is indexed 17 to 21 s after `git checkout` starts, git's own 3.6 to 5.9 s
+included; 500 files rewritten whole (6,500 new chunks) take 87 to 107 s, over the 30 s budget, with the open documents
+searchable about 6.6 s after the checkout started. See `IndexingWatcherModelTests`.
+
+Event ids: watcher 2960-2969, incremental runs 2906-2907, sweeps requested and the lost lock 2917-2919.
+
+### Readers
+
+A host that opened an index read-only (another Visual Studio owns it) does not index it, does not watch it, and
+**forwards nothing**: forwarding
+"file changed" or "rebuild" requests to the owner's pipe needs a host-to-host handshake (the pipe and its token are bound
+to the owner's own extension), which is not cheap to add here. Instead the reader checks every 30 s whether the owner is
+still alive (`IndexStore.GetLiveWriter`); when it is gone the reader opens the index again, reclaiming the stale lock, and
+as the new writer runs a full sweep, which picks up whatever changed meanwhile. A reader still searches the index. A
+rebuild requested on a reader is refused with `PolicyDenied` naming the other instance. Work item 2.10 kept this: a save
+in a Visual Studio that only reads the index is not forwarded either; the owner's watcher sees the file change on disk
+(with its 500 ms debounce, not the save path), which covers every instance on the same machine. Forwarding can still come
+through the same `IndexWriterEndpoint`.
+
+Event ids 2900-2999 (the indexing libraries use 2300-2399).
 
 ## Diagnostics (`Models/DiagnosticsRpcService.cs`)
 
@@ -134,7 +422,9 @@ Gateway README, Context assembly.
   less means 200; the ring buffer keeps `ModelGatewayOptions.OutboundLogCapacity`). Each is time, request id, provider,
   model, task class, locality, prompt and completion tokens, redactions, context items and how many were trimmed,
   duration, outcome with its error code, and whether autocomplete served it from the cache. The Chat window's Outbound log
-  view reads it.
+  view reads it. With `localStore` on the records come from the Local Store (they survive a restart; work item 2.2), except
+  that autocomplete cache hits, which never reached a model, are kept in memory only: the view shows this session's and
+  none from before a restart (see Saved conversations).
 - `PreviewContextAsync(ChatRequest)` (work item 1.13): the Context Inspector. `ContextPreview` routes the request as the
   gateway would (the router sees only the size of the user's message), builds the same assembly target (the inventory's
   window, capped at the routed profile's `num_ctx` for Ollama, the chat system prompt, the effective exclusions) and runs a
@@ -241,7 +531,7 @@ deleted, then the oldest are deleted until the remaining ones total at most 100 
 never touched. The default minimum level is Information (Microsoft.* at Warning); set the environment variable
 `Logging__LogLevel__Default=Debug` for more. Never log tokens or request payloads at Information or above.
 
-Event id ranges: 100-199 lifecycle, 200-299 RPC, 600-609 inline edits.
+Event id ranges: 100-199 lifecycle, 200-299 RPC, 600-609 inline edits, 2900-2999 the indexing pipeline.
 
 ## Connectivity
 

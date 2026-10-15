@@ -27,7 +27,16 @@ public sealed class MentionSyntaxTests
     [InlineData("@clipboard", "clipboard", "", false)]
     [InlineData("@file", "", "file", false)]
     [InlineData(@"@C:\src\A.cs", "", @"C:\src\A.cs", false)]
-    [InlineData("@symbol:OrderService", "", "symbol:OrderService", false)]
+    [InlineData("@symbol:OrderService", "symbol", "OrderService", true)]
+    [InlineData("@docs:guide", "docs", "guide", true)]
+    [InlineData("@solution", "solution", "", false)]
+    [InlineData("@git", "git", "", false)]
+    [InlineData("@git:log:5", "git", "log:5", true)]
+    [InlineData("@output:debug", "output", "debug", true)]
+    [InlineData("@build", "build", "", false)]
+    [InlineData("@tests", "tests", "", false)]
+    [InlineData("@symbol", "", "symbol", false)]
+    [InlineData("@terminal:x", "", "terminal:x", false)]
     [InlineData("Customer.cs", "", "Customer.cs", false)]
     public void Parse_ReadsNameAndKindValue(string text, string kind, string value, bool separator)
     {
@@ -173,7 +182,11 @@ public sealed class MentionPickerTests
         picker.Update("@", 1, Files);
 
         Assert.True(picker.IsOpen);
-        Assert.Equal(["@file", "@folder", "@selection", "@errors", "@clipboard"], picker.Items.Select(i => i.Label));
+        Assert.Equal(["@file", "@folder", "@symbol", "@docs", "@selection", "@errors", "@clipboard", "@solution", "@git", "@output", "@build", "@tests"], picker.Items.Select(i => i.Label));
+        Assert.All(picker.Items, i => Assert.NotEqual(string.Empty, i.Detail)); // every kind has its hint line
+        Assert.True(picker.Items[0].IsFirstInGroup);
+        Assert.All(picker.Items.Skip(1), i => Assert.False(i.IsFirstInGroup));
+        Assert.Equal(ChatStrings.MentionGroupKinds + ": @file, " + ChatStrings.MentionKindFile, picker.Items[0].AutomationName);
         Assert.Equal(0, picker.SelectedIndex);
         Assert.True(picker.Items[0].IsSelected);
         Assert.Equal(ChatStrings.MentionPickerHint, picker.Title);
@@ -232,7 +245,7 @@ public sealed class MentionPickerTests
         picker.Update("@", 1, Files);
 
         picker.Move(-1);
-        Assert.Equal(4, picker.SelectedIndex);
+        Assert.Equal(MentionSyntax.Kinds.Count - 1, picker.SelectedIndex);
         picker.Move(1);
         Assert.Equal(0, picker.SelectedIndex);
         Assert.Same(picker.Items[0], picker.SelectedItem);
@@ -695,6 +708,55 @@ public sealed class ChatMentionsTests : IDisposable
 
         Assert.Equal("go", request.Messages[request.Messages.Count - 1].Content);
         Assert.False(vm.Inspector.IsOpen);
+    }
+
+    [Fact]
+    public async Task RemovingARetrievedChunkOrTheRepoMap_InTheInspector_LeavesItOutOfThePreviewAndTheSend_ThenTheNextMessageHasItAgain()
+    {
+        _diagnostics.Preview = request =>
+        {
+            var excluded = new HashSet<string>(request.ExcludedContextKeys, StringComparer.Ordinal);
+            var items = new[]
+            {
+                new ContextReportItemDto { Kind = "system", Name = "System prompt", Tokens = 30, OriginalTokens = 30 },
+                new ContextReportItemDto { Kind = "repoMap", Name = "Repository map", Tokens = 120, OriginalTokens = 120, ContextKey = "repoMap" },
+                new ContextReportItemDto { Kind = "retrieved", Name = "src/Orders/OrderService.cs:9-12", Tokens = 60, OriginalTokens = 60, ContextKey = "idx:1" },
+                new ContextReportItemDto { Kind = "retrieved", Name = "src/Inventory/StockRoom.cs:3-8", Tokens = 50, OriginalTokens = 50, ContextKey = "idx:2" },
+                new ContextReportItemDto { Kind = "query", Name = "Your message", Tokens = 4, OriginalTokens = 4 },
+            };
+            return new ContextReportDto { ModelId = "qwen2.5-coder:7b", ProviderId = "ollama", IsLocal = true, ContextWindow = 8192, OutputReserve = 2048, BudgetTokens = 6114, Items = [.. items.Where(i => !excluded.Contains(i.ContextKey))], IsAssembled = true };
+        };
+        using var vm = await StartAsync();
+        vm.InputText = "how are totals computed";
+        await vm.InspectAsync().WithTimeout(Timeout);
+
+        var chunk = vm.Inspector.Items.Single(i => i.ContextKey == "idx:1");
+        var map = vm.Inspector.Items.Single(i => i.ContextKey == "repoMap");
+        Assert.True(chunk.CanRemove);
+        Assert.True(map.CanRemove);
+        Assert.Null(chunk.Pin);
+        Assert.Equal(ChatStrings.InspectorKindRetrieved, chunk.KindLabel);
+        Assert.Equal(ChatStrings.Format(ChatStrings.RemoveContextItemNameFormat, "src/Orders/OrderService.cs:9-12"), chunk.RemoveAutomationName);
+        Assert.True(vm.Inspector.RemoveCommand.CanExecute(chunk));
+
+        vm.Inspector.RemoveCommand.Execute(chunk);
+        await Wait.UntilAsync(() => _diagnostics.Previews.Count == 2 && vm.Inspector.Items.All(i => i.ContextKey != "idx:1"), "the inspector previews again without the chunk");
+        vm.Inspector.RemoveCommand.Execute(vm.Inspector.Items.Single(i => i.ContextKey == "repoMap"));
+        await Wait.UntilAsync(() => _diagnostics.Previews.Count == 3 && vm.Inspector.Items.All(i => i.ContextKey != "repoMap"), "the inspector previews again without the map");
+        Assert.Equal(["idx:1", "repoMap"], _diagnostics.Previews.Last().ExcludedContextKeys);
+
+        var script = _models.Next();
+        vm.Inspector.SendCommand.Execute(null);
+        var sent = await script.Started.Task.WithTimeout(Timeout);
+        script.Finish();
+        await Wait.UntilAsync(() => !vm.IsSending, "the reply finishes");
+        Assert.Equal(["idx:1", "repoMap"], sent.ExcludedContextKeys);
+
+        // The removals belonged to that message.
+        vm.InputText = "and taxes?";
+        await vm.InspectAsync().WithTimeout(Timeout);
+        Assert.Empty(_diagnostics.Previews.Last().ExcludedContextKeys);
+        Assert.Contains(vm.Inspector.Items, i => i.ContextKey == "idx:1");
     }
 
     [Fact]

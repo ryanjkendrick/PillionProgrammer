@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "comment": "The model manifest (design sections 7, 10 and 11; work item 2.7): every ONNX embedding model the host may load, with the source URL, SHA-256 and size of each file. Model binaries are never committed: the build downloads the files of the models marked 'bundled' into the output under models\\<id>\\ (Pillion.ModelGateway/build/BundledModels.targets), verifies every hash and fails on a mismatch; the other models are downloaded on request into %LOCALAPPDATA%\\PillionProgrammer\\models\\<id>\\ by ModelDownloadService, which only fetches URLs listed here. At run time the host looks in its install folder first, then in %LOCALAPPDATA%, hashes each file once per host start and refuses one whose hash or size differs. This file is compiled into Pillion.ModelGateway.dll, so the copy that is trusted at run time carries the assembly's Authenticode signature. Every URL names a fixed Hugging Face commit, so the bytes behind it cannot change. 'role' is one of model (the int8 ONNX graph, used on CPU), model-fp16 (the FP16 graph, used with DirectML when present), vocab (WordPiece vocab.txt), sentencepiece (a SentencePiece model), tokenizer (a Hugging Face tokenizer.json) and tokenizer-config (tokenizer_config.json, kept for reference and the lower-casing flag); an 'optional' file is not needed to run the model and is not bundled. 'pooling' is cls or mean, as the model card specifies; 'tokenizer' names the tokenizer family that chunk caps are counted in; 'maxTokens' is the model's own limit. A model with 'available': false is listed for the record but never offered.",
+  "models": [
+    {
+      "id": "bge-small-en-v1.5",
+      "displayName": "BGE small English v1.5 (int8, bundled)",
+      "bundled": true,
+      "available": true,
+      "license": "MIT",
+      "licenseUrl": "https://huggingface.co/BAAI/bge-small-en-v1.5",
+      "source": "ONNX export Xenova/bge-small-en-v1.5 at commit ea104dacec62c0de699686887e3f920caeb4f3e3 of BAAI/bge-small-en-v1.5 (MIT). The export repository declares no licence of its own; it is a format conversion of the MIT weights (its float32 graph is byte-identical to the upstream onnx/model.onnx), so the upstream MIT licence and notice apply. The int8 graph is onnx/model_quantized.onnx (dynamic quantisation); measured on 2026-10-15 its CLS vectors keep a cosine of at least 0.997 to the float32 graph's on the test sentences, against 0.980 for the export's model_int8.onnx.",
+      "dimensions": 384,
+      "maxTokens": 512,
+      "pooling": "cls",
+      "normalize": true,
+      "tokenizer": "bert-wordpiece",
+      "files": [
+        {
+          "role": "model",
+          "path": "model_quantized.onnx",
+          "url": "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/ea104dacec62c0de699686887e3f920caeb4f3e3/onnx/model_quantized.onnx",
+          "sha256": "6c9c6101a956d62dfb5e7190c538226c0c5bb9cb27b651234b6df063ee7dbfe4",
+          "size": 34014426
+        },
+        {
+          "role": "model-fp16",
+          "path": "model_fp16.onnx",
+          "url": "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/ea104dacec62c0de699686887e3f920caeb4f3e3/onnx/model_fp16.onnx",
+          "sha256": "4d76223b73a3fd708f009a93a830a6ed5e536b07c77d3c812ba7b35a4988d767",
+          "size": 66749212,
+          "optional": true
+        },
+        {
+          "role": "vocab",
+          "path": "vocab.txt",
+          "url": "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/ea104dacec62c0de699686887e3f920caeb4f3e3/vocab.txt",
+          "sha256": "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3",
+          "size": 231508
+        },
+        {
+          "role": "tokenizer-config",
+          "path": "tokenizer_config.json",
+          "url": "https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/ea104dacec62c0de699686887e3f920caeb4f3e3/tokenizer_config.json",
+          "sha256": "9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3",
+          "size": 366
+        }
+      ]
+    },
+    {
+      "id": "multilingual-e5-small",
+      "displayName": "Multilingual E5 small (int8, on request)",
+      "bundled": false,
+      "available": true,
+      "license": "MIT",
+      "licenseUrl": "https://huggingface.co/intfloat/multilingual-e5-small",
+      "source": "The upstream repository intfloat/multilingual-e5-small (MIT) at commit 614241f622f53c4eeff9890bdc4f31cfecc418b3, which publishes its own ONNX export. The int8 graph is onnx/model_qint8_avx512_vnni.onnx; despite the name it runs on CPUs without AVX-512 VNNI (checked on a Ryzen 7 3700X). There is no FP16 export validated for DirectML (onnx/model_O4.onnx is an optimisation-level-4 graph for GPUs that has not been tried), so the model runs on CPU or on DirectML with the int8 graph.",
+      "dimensions": 384,
+      "maxTokens": 512,
+      "pooling": "mean",
+      "normalize": true,
+      "tokenizer": "xlmr-sentencepiece",
+      "files": [
+        {
+          "role": "model",
+          "path": "model_qint8_avx512_vnni.onnx",
+          "url": "https://huggingface.co/intfloat/multilingual-e5-small/resolve/614241f622f53c4eeff9890bdc4f31cfecc418b3/onnx/model_qint8_avx512_vnni.onnx",
+          "sha256": "dd476dd0c2514e9b9be83aeb3853fac0763e0bdf4a71645407587d77c48a2d88",
+          "size": 118346824
+        },
+        {
+          "role": "sentencepiece",
+          "path": "sentencepiece.bpe.model",
+          "url": "https://huggingface.co/intfloat/multilingual-e5-small/resolve/614241f622f53c4eeff9890bdc4f31cfecc418b3/onnx/sentencepiece.bpe.model",
+          "sha256": "cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865",
+          "size": 5069051
+        },
+        {
+          "role": "tokenizer-config",
+          "path": "tokenizer_config.json",
+          "url": "https://huggingface.co/intfloat/multilingual-e5-small/resolve/614241f622f53c4eeff9890bdc4f31cfecc418b3/onnx/tokenizer_config.json",
+          "sha256": "a1d6bc8734a6f635dc158508bef000f8e2e5a759c7d92f984b2c86e5ff53425b",
+          "size": 443
+        }
+      ]
+    },
+    {
+      "id": "jina-embeddings-v2-base-code",
+      "displayName": "Jina embeddings v2 base code (int8, on request)",
+      "bundled": false,
+      "available": true,
+      "license": "Apache-2.0",
+      "licenseUrl": "https://huggingface.co/jinaai/jina-embeddings-v2-base-code",
+      "source": "The upstream repository jinaai/jina-embeddings-v2-base-code (Apache-2.0) at commit 516f4baf13dec4ddddda8631e019b5737c8bc250, which publishes its own ONNX export. The model's custom architecture (JinaBERT with ALiBi attention and a GEGLU feed-forward) runs on stock ONNX Runtime 1.24.4: checked on 2026-10-15, the int8 graph loads on the CPU execution provider and embeds a batch of 32 texts of 512 tokens in about 10 s. Whether its vectors beat the bundled model on code is for the retrieval benchmark (work item 2.16) to show; until then it is offered on request only. The FP16 graph is optional and has not been validated on DirectML.",
+      "dimensions": 768,
+      "maxTokens": 8192,
+      "pooling": "mean",
+      "normalize": true,
+      "tokenizer": "roberta-bpe",
+      "files": [
+        {
+          "role": "model",
+          "path": "model_quantized.onnx",
+          "url": "https://huggingface.co/jinaai/jina-embeddings-v2-base-code/resolve/516f4baf13dec4ddddda8631e019b5737c8bc250/onnx/model_quantized.onnx",
+          "sha256": "ed45870251c9f0cf656e78aab0d37a23489066df8a222bb1c8caf8a45f2cb16d",
+          "size": 161895621
+        },
+        {
+          "role": "model-fp16",
+          "path": "model_fp16.onnx",
+          "url": "https://huggingface.co/jinaai/jina-embeddings-v2-base-code/resolve/516f4baf13dec4ddddda8631e019b5737c8bc250/onnx/model_fp16.onnx",
+          "sha256": "1aafc4fcd63d2e6899e88402ff731e7c646c2e435048294a3cbc908a40d45d7c",
+          "size": 321072580,
+          "optional": true
+        },
+        {
+          "role": "tokenizer",
+          "path": "tokenizer.json",
+          "url": "https://huggingface.co/jinaai/jina-embeddings-v2-base-code/resolve/516f4baf13dec4ddddda8631e019b5737c8bc250/tokenizer.json",
+          "sha256": "b01c78a902aa4facb2f47f95449f48e2f7bbfea5d2472ee2f6ce92323c6f86e5",
+          "size": 2561316
+        },
+        {
+          "role": "tokenizer-config",
+          "path": "tokenizer_config.json",
+          "url": "https://huggingface.co/jinaai/jina-embeddings-v2-base-code/resolve/516f4baf13dec4ddddda8631e019b5737c8bc250/tokenizer_config.json",
+          "sha256": "f477aeb15ff9f78d3c1ddf2361d2b0b8b20cf55220f839f29a37f3a18efddd89",
+          "size": 493
+        }
+      ]
+    }
+  ]
+}

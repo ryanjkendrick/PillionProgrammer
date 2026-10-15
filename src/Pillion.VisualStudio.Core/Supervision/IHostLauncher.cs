@@ -38,6 +38,9 @@ public interface IHostSession : IDisposable
     /// <summary>Raised on a background thread when the host sends <c>settingsChanged</c>.</summary>
     event EventHandler<HostSettingsChangedEventArgs>? SettingsChanged;
 
+    /// <summary>Raised on a background thread when the host sends <c>indexStatusChanged</c> (contract 1.3).</summary>
+    event EventHandler<HostIndexStatusChangedEventArgs>? IndexStatusChanged;
+
     /// <summary>
     /// Gets a task that completes when the connection is lost or the process exits. Its result describes what
     /// happened (for example "host process exited with code 3").
@@ -49,6 +52,17 @@ public interface IHostSession : IDisposable
     /// <returns>The proxy.</returns>
     T GetProxy<T>()
         where T : class;
+
+    /// <summary>
+    /// Sends a JSON-RPC notification (no response) to the host on this connection, for example <c>ideActivityChanged</c>.
+    /// </summary>
+    /// <param name="method">The notification's name.</param>
+    /// <param name="argument">The notification's one positional argument (<see langword="null"/> is sent as a null argument).</param>
+    /// <returns>
+    /// <see langword="true"/> when the notification was written to the connection; <see langword="false"/> when the session is
+    /// disposed or the connection is lost. Never throws for those cases.
+    /// </returns>
+    Task<bool> NotifyAsync(string method, object? argument);
 
     /// <summary>
     /// Asks the host to shut down, waits up to <paramref name="timeout"/> for it to exit and kills the process tree

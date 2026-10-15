@@ -30,6 +30,7 @@ internal sealed class FakeOllamaServer
         Handler.On("GET api/ps", (_, _) => FakeOllamaHandler.Respond(HttpStatusCode.OK, PsJson()));
         Handler.OnAsync("POST api/generate", HandleGenerateAsync);
         Handler.OnAsync("POST api/chat", HandleChatAsync);
+        Handler.OnAsync("POST api/embed", HandleEmbedAsync);
     }
 
     public FakeOllamaHandler Handler { get; } = FakeOllamaHandler.WithDefaults();
@@ -64,6 +65,13 @@ internal sealed class FakeOllamaServer
                 return $"chat@{context}/{keepAlive}";
             }
 
+            if (r.Path == "api/embed")
+            {
+                return body["input"] is JsonArray { Count: 0 } && keepAlive == "0"
+                    ? "unload-embed"
+                    : $"embed@{context}/{keepAlive}" + (body["options"]?["num_gpu"]?.GetValue<int>() == 0 ? "+cpu" : string.Empty);
+            }
+
             var prompt = body["prompt"]?.GetValue<string>() ?? string.Empty;
             return prompt.Length > 0 ? $"generate@{context}/{keepAlive}"
                 : keepAlive == "0" ? "unload"
@@ -81,7 +89,8 @@ internal sealed class FakeOllamaServer
     };
 
     private static long BytesAt(string model, int context) =>
-        (long)((model.Contains("1.5b", StringComparison.Ordinal) ? 1050 + (28.0 * context / 1024)
+        (long)((model.StartsWith("qwen3-embedding", StringComparison.Ordinal) ? 1930 + (112.0 * context / 1024)
+            : model.Contains("1.5b", StringComparison.Ordinal) ? 1050 + (28.0 * context / 1024)
             : model.Contains("14b", StringComparison.Ordinal) ? 8800 + (192.0 * context / 1024)
             : model.StartsWith("gemma", StringComparison.Ordinal) ? 1600 + (28.0 * context / 1024)
             : 4300 + (56.0 * context / 1024)) * MiB);
@@ -109,7 +118,7 @@ internal sealed class FakeOllamaServer
                     ["size"] = bytes,
                     ["digest"] = "abc",
                     ["expires_at"] = runner.ExpiresAt is { } at ? at.ToString("O", CultureInfo.InvariantCulture) : "2319-01-19T05:51:01.647710507Z",
-                    ["size_vram"] = bytes,
+                    ["size_vram"] = runner.OnCpu ? 0 : bytes,
                     ["context_length"] = runner.Context,
                 });
             }
@@ -142,13 +151,38 @@ internal sealed class FakeOllamaServer
             : FakeOllamaHandler.Respond(HttpStatusCode.OK, FakeOllamaHandler.Fixture("generate-qwen-coder.ndjson"), "application/x-ndjson");
     }
 
+    private async Task<HttpResponseMessage> HandleEmbedAsync(HttpRequestMessage request, JsonObject? body, CancellationToken cancellationToken)
+    {
+        var model = body!["model"]!.GetValue<string>();
+        var keepAlive = KeepAliveOf(body);
+        var inputs = body["input"] as JsonArray ?? [];
+        if (inputs.Count == 0 && keepAlive == "0")
+        {
+            lock (_lock)
+            {
+                Runners.RemoveAll(r => r.Model == model);
+            }
+
+            return FakeOllamaHandler.Respond(HttpStatusCode.OK, $$"""{"model":"{{model}}","embeddings":[]}""");
+        }
+
+        await AdmitAsync(model, body["options"]?["num_ctx"]?.GetValue<int>() ?? 2048, keepAlive, cancellationToken, onCpu: body["options"]?["num_gpu"]?.GetValue<int>() == 0);
+        var embeddings = new JsonArray();
+        foreach (var input in inputs)
+        {
+            embeddings.Add(new JsonArray(1.0, (double)(input?.GetValue<string>().Length ?? 0), 0.5, -0.25));
+        }
+
+        return FakeOllamaHandler.Respond(HttpStatusCode.OK, new JsonObject { ["model"] = model, ["embeddings"] = embeddings, ["prompt_eval_count"] = inputs.Count }.ToJsonString());
+    }
+
     private async Task<HttpResponseMessage> HandleChatAsync(HttpRequestMessage request, JsonObject? body, CancellationToken cancellationToken)
     {
         await AdmitAsync(body!["model"]!.GetValue<string>(), body["options"]?["num_ctx"]?.GetValue<int>() ?? 4096, KeepAliveOf(body), cancellationToken);
         return FakeOllamaHandler.Respond(HttpStatusCode.OK, FakeOllamaHandler.Fixture("chat-gemma4.ndjson"), "application/x-ndjson");
     }
 
-    private async Task AdmitAsync(string model, int context, string keepAlive, CancellationToken cancellationToken)
+    private async Task AdmitAsync(string model, int context, string keepAlive, CancellationToken cancellationToken, bool onCpu = false)
     {
         var blocked = false;
         lock (_lock)
@@ -164,7 +198,7 @@ internal sealed class FakeOllamaServer
             }
             else
             {
-                Runners.Add(new Runner(model, context, keepAlive, ExpiryOf(keepAlive)));
+                Runners.Add(new Runner(model, context, keepAlive, ExpiryOf(keepAlive), onCpu));
             }
         }
 
@@ -175,7 +209,7 @@ internal sealed class FakeOllamaServer
         }
     }
 
-    internal sealed record Runner(string Model, int Context, string KeepAlive, DateTimeOffset? ExpiresAt);
+    internal sealed record Runner(string Model, int Context, string KeepAlive, DateTimeOffset? ExpiresAt, bool OnCpu = false);
 }
 
 public class OllamaResidencyTests

@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Microsoft.VisualStudio.Threading;
 using Pillion.Contracts;
 using Pillion.VisualStudio.Core;
+using Pillion.VisualStudio.Core.Signals;
 
 namespace Pillion.VisualStudio.Tests;
 
@@ -303,7 +304,7 @@ public sealed class RealProcessTests : IDisposable
         providers.SelectedProvider!.Id = "work-gateway";
         providers.SelectedProvider.ApiKey = "sk-test-not-a-real-key";
         await providers.SaveAsync();
-        providersStatus.AssertSaved();
+        await providersStatus.WaitForSavedAsync();
         Assert.Equal("sk-test-not-a-real-key", credentials.Keys["work-gateway"]);
         await providers.TestSelectedAsync();
         Assert.Equal("Connection succeeded. The fake host reached provider 'work-gateway'.", providers.SelectedProvider.TestResult);
@@ -313,7 +314,7 @@ public sealed class RealProcessTests : IDisposable
         var privacyStatus = new StatusRecorder(privacy);
         privacy.LocalOnly = true;
         await privacy.SaveAsync();
-        privacyStatus.AssertSaved();
+        await privacyStatus.WaitForSavedAsync();
         await Wait.UntilAsync(() => changedSections.Contains("privacy"), "the host's settingsChanged reached the supervisor");
 
         // The Models and routing page over the same wire: Chat to Local-strong, the autocomplete cloud switch on.
@@ -325,7 +326,7 @@ public sealed class RealProcessTests : IDisposable
         routing.TaskRoutes.Single(r => r.TaskClass == TaskClass.Autocomplete).CloudSwitchOn = true;
         var routingStatus = new StatusRecorder(routing);
         await routing.SaveAsync();
-        routingStatus.AssertSaved();
+        await routingStatus.WaitForSavedAsync();
         await Wait.UntilAsync(() => changedSections.Contains("routing") && changedSections.Contains("cloudSwitches"), "settingsChanged named routing and cloudSwitches");
 
         using var routingAgain = new RoutingOptionsViewModel(supervisor, uiContext.Factory, _log);
@@ -361,7 +362,8 @@ public sealed class RealProcessTests : IDisposable
             };
         }
 
-        public void AssertSaved() => Assert.Contains("Saved.", _seen);
+        /// <summary>Waits for the page to have said "Saved." (the status can be set on the UI thread just after the save returns).</summary>
+        public Task WaitForSavedAsync() => Wait.UntilAsync(() => _seen.Contains("Saved."), "the page to say Saved. (it said: " + string.Join(" | ", _seen) + ")", timeoutMs: 30000);
     }
 
     /// <summary>Reads the log while the logger may be appending to it (File.ReadAllText would deny it write access).</summary>
@@ -396,6 +398,98 @@ public sealed class RealProcessTests : IDisposable
         }
 
         return count;
+    }
+
+    [Fact]
+    public async Task ContractOnePointThree_TheFakeHostServesConversationsCitationsAndTheIndex_AndPushesIndexStatus()
+    {
+        Assert.True(File.Exists(FakeHostPath), "Build tests/Pillion.FakeHost first: " + FakeHostPath);
+        Environment.SetEnvironmentVariable(ModeVariable, "quiet");
+        Environment.SetEnvironmentVariable(ChunkDelayVariable, "1");
+        using var supervisor = CreateSupervisor(new RestartPolicy());
+        var statuses = new ConcurrentQueue<IndexStatus>();
+        supervisor.IndexStatusChanged += (_, e) => statuses.Enqueue(e.Status);
+        supervisor.Start();
+        await supervisor.WhenReadyAsync(CancellationToken.None).WithTimeout(TimeSpan.FromSeconds(30));
+
+        // Conversations: the canned two, newest first, then a chat with a conversation id is appended with its citations.
+        var conversations = supervisor.GetProxy<IConversationService>();
+        var page = await conversations.ListConversationsAsync(new ConversationListRequest { Limit = 1 }, CancellationToken.None);
+        Assert.Equal("Fix the build", Assert.Single(page.Items).Title);
+        Assert.True(page.HasMore);
+
+        var reply = new System.Collections.Generic.List<ChatChunk>();
+        var request = new ChatRequest { RequestId = "c13", ConversationId = "conv-13", Messages = [new ChatMessage { Role = ChatRole.User, Content = "Where is Main? /cite" }] };
+        await foreach (var chunk in supervisor.GetProxy<IModelService>().ChatAsync(request, CancellationToken.None))
+        {
+            reply.Add(chunk);
+        }
+
+        Assert.Equal(2, reply.Last().Citations.Length);
+        Assert.All(reply.Take(reply.Count - 1), c => Assert.Empty(c.Citations));
+        var detail = await conversations.GetConversationAsync("conv-13", CancellationToken.None);
+        Assert.NotNull(detail);
+        Assert.Equal([ChatRole.User, ChatRole.Assistant], detail.Messages.Select(m => m.Role));
+        Assert.Equal(2, detail.Messages[1].Citations.Length);
+        Assert.True(await conversations.RenameConversationAsync("conv-13", "Main", CancellationToken.None));
+        Assert.True(await conversations.SetPinsAsync("conv-13", [new ConversationPin { Kind = MentionKinds.File, Target = @"C:\fake\src\Program.cs", DisplayName = "Program.cs", TokenCount = 9 }], CancellationToken.None));
+        Assert.False(await conversations.SetPinsAsync("no-such-conversation", [], CancellationToken.None));
+        Assert.Null(await conversations.GetConversationAsync("no-such-conversation", CancellationToken.None));
+        var deleted = await conversations.DeleteAllConversationsAsync(CancellationToken.None);
+        Assert.Equal(3, deleted.Conversations);
+        Assert.Empty((await conversations.ListConversationsAsync(new ConversationListRequest(), CancellationToken.None)).Items);
+
+        // The index: nothing at first; pause and rebuild drive indexStatusChanged, at most twice a second.
+        var context = supervisor.GetProxy<IContextService>();
+        Assert.Empty((await context.SearchDetailedAsync(new SearchRequest { Query = "Main" }, CancellationToken.None)).Results);
+        await context.PauseIndexingAsync(true, CancellationToken.None);
+        await Wait.UntilAsync(() => statuses.Any(s => s.Phase == IndexPhase.Paused && s.PauseReason == IndexPauseReason.User), "a Paused status was pushed");
+        await context.PauseIndexingAsync(false, CancellationToken.None);
+        await context.RebuildIndexAsync(@"C:\fake", CancellationToken.None);
+        await Wait.UntilAsync(() => statuses.Any(s => s.Phase == IndexPhase.Idle && s.Roots.Length == 1), "the rebuild finished", timeoutMs: 20000);
+        Assert.Contains(statuses, s => s.Phase == IndexPhase.Embedding && s.Progress is { FilesTotal: 40 });
+
+        var status = await context.GetIndexStatusAsync(CancellationToken.None);
+        var root = Assert.Single(status.Roots);
+        Assert.Equal(IndexRole.Writer, root.Role);
+        Assert.Equal(2, status.ExcludedSecretFileCount);
+        var excluded = await context.ListExcludedFilesAsync(new ExcludedFilesRequest { RootPath = root.RootPath, Limit = 2 }, CancellationToken.None);
+        Assert.All(excluded.Items, f => Assert.True(f.IsSecretBearing));
+        Assert.True(excluded.HasMore);
+        var search = await context.SearchDetailedAsync(new SearchRequest { Query = "Main", IncludeText = true }, CancellationToken.None);
+        Assert.NotNull(search.Results[0].Text);
+        Assert.Equal(root.IndexId + ":7", search.Results[0].ChunkId);
+        var indexes = await context.ListIndexesAsync(CancellationToken.None);
+        Assert.Contains(indexes, i => i.RootExists == false);
+        Assert.True(await context.DeleteIndexAsync(root.IndexId, CancellationToken.None));
+        await Wait.UntilAsync(() => statuses.Last().Roots.Length == 0, "the deletion was pushed");
+    }
+
+    [Fact]
+    public async Task IndexingRelay_TellsTheFakeHostTheWorkspaceAndTheActivity_OverTheRealWire()
+    {
+        Assert.True(File.Exists(FakeHostPath), "Build tests/Pillion.FakeHost first: " + FakeHostPath);
+        using var supervisor = CreateSupervisor(new RestartPolicy());
+        using var hub = new IdeSignalsHub(SystemClock.Instance, _log);
+        var workspace = new FakeWorkspaceSource();
+        workspace.Set(new WorkspaceDescription { SolutionPath = @"C:\fake\App.sln", ProjectPaths = [@"C:\fake\App\App.csproj", @"C:\fake\Lib\Lib.csproj"] }, raise: false);
+        using var relay = new IndexingRelay(supervisor, hub, workspace, activity: null, SystemClock.Instance, _log);
+        relay.Start();
+        supervisor.Start();
+        await supervisor.WhenReadyAsync(CancellationToken.None).WithTimeout(TimeSpan.FromSeconds(30));
+
+        // The fake host reports what it received on stderr, which the launcher copies into the log.
+        await Wait.UntilAsync(() => LogText.Contains("fakehost: ide activity None"), "the host received the activity set");
+        await Wait.UntilAsync(() => LogText.Contains("fakehost: workspace solution with 2 projects"), "the host received the workspace");
+
+        hub.NotifyBuildStarted();
+        await Wait.UntilAsync(() => LogText.Contains("fakehost: ide activity Build"), "the host received the build flag");
+        hub.NotifyBuildFinished(success: true);
+        await Wait.UntilAsync(() => LogText.Split('\n').Count(l => l.Contains("fakehost: ide activity None")) == 2, "the host received the end of the build");
+
+        await supervisor.ShutdownAsync(TimeSpan.FromSeconds(2));
+        Assert.Contains("indexing.workspace.sent", LogText);
+        Assert.DoesNotContain(LogText.Split('\n'), l => l.Contains("indexing.") && l.Contains(@"C:\fake")); // Counts only, never file names.
     }
 
     private HostProcessLauncher CreateLauncher() => new(

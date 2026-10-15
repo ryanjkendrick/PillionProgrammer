@@ -8,4 +8,19 @@
     <ProjectReference Include="..\..\src\Pillion.Host\Pillion.Host.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Indexing pipeline fixtures (work item 2.9): a small repository read from disk at run time, never compiled, plus the
+         Context Engine's chunker fixtures (C#, TypeScript, Python) reused as a second tree. -->
+    <Compile Remove="Indexing\Fixtures\**" />
+    <None Remove="Indexing\Fixtures\**" />
+    <None Include="Indexing\Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\Pillion.ContextEngine.Tests\Fixtures\csharp\**\*;..\Pillion.ContextEngine.Tests\Fixtures\typescript\**\*;..\Pillion.ContextEngine.Tests\Fixtures\python\**\*"
+          LinkBase="Indexing\Fixtures\engine"
+          CopyToOutputDirectory="PreserveNewest" />
+    <!-- The Context Engine's generator of synthetic C# repositories, for the throughput tests. -->
+    <Compile Include="..\Pillion.ContextEngine.Tests\Symbols\SyntheticRepository.cs" Link="Indexing\SyntheticRepository.cs" />
+    <!-- The Context Engine's chunker fixtures, the sources of the small index the mention tests build (work item 2.13). -->
+    <None Include="..\Pillion.ContextEngine.Tests\Fixtures\**\*" LinkBase="ContextEngineFixtures" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

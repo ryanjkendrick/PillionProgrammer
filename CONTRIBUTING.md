@@ -61,3 +61,23 @@ comment.
 
 All package versions live in `Directory.Packages.props`. The Visual Studio SDK, StreamJsonRpc and MessagePack
 versions are tied to what Visual Studio 17.14 ships; do not bump them without reading the comment there.
+
+## Model files
+
+Model binaries are never committed. `src/Pillion.ModelGateway/Models/models.manifest.json` lists every embedding model
+the host may load, with a pinned URL, SHA-256 and size for each file. The first build downloads the bundled model
+(`bge-small-en-v1.5`, about 34 MB, from huggingface.co) into
+`%USERPROFILE%\.nuget\packages\pillion.models\` and copies it into the output under `models\`; later builds, clean
+builds and other worktrees reuse that cache and need no network. A file whose hash or size differs from the manifest
+fails the build and is deleted. To build somewhere that cannot reach huggingface.co, fill the cache from another
+machine, point `-p:PillionModelCache=<folder>` at a copy, or pass `-p:PillionSkipModelDownload=true` (the build warns
+and the bundled model is missing from the output, so the `Category=Model` tests fail).
+
+To add or update a model, change the manifest: use a `resolve/<commit>/` URL so the bytes cannot change, take the
+SHA-256 and size from the Hugging Face API (`/api/models/<repo>?blobs=true`) or from the downloaded file, record the
+licence of the weights and of the export in `THIRD-PARTY-NOTICES.txt`, and keep the catalog's `embedding` entry for the
+model in step (a test checks both).
+
+Tests that run a model are marked `[Trait("Category", "Model")]`: they use the bundled model in the build output and
+run with the rest of `--filter "Category!=Live"`. Tests of the models downloaded on request are `Live`, because they
+download about 280 MB into `%TEMP%\pillion-model-tests` the first time.

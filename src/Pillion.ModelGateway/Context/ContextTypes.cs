@@ -78,6 +78,10 @@ public enum ContextItemKind
 /// <param name="Truncated">Whether part of it was cut.</param>
 /// <param name="Dropped">Whether all of it was left out.</param>
 /// <param name="Note">Why it was truncated or dropped; empty otherwise.</param>
+/// <param name="Key">
+/// The key a client sends back in <see cref="ChatRequest.ExcludedContextKeys"/> to leave the item out (a retrieved chunk's
+/// id, or a source's key such as <c>repoMap</c>); empty for items removed some other way (pins) or not at all.
+/// </param>
 public sealed record ContextReportItem(
     ContextItemKind Kind,
     string Name,
@@ -85,7 +89,8 @@ public sealed record ContextReportItem(
     int OriginalTokens,
     bool Truncated,
     bool Dropped,
-    string Note);
+    string Note,
+    string Key = "");
 
 /// <summary>
 /// Everything context assembly decided for one request: every item with its token count and whether it was truncated or
@@ -151,12 +156,17 @@ public sealed class AssembledContext
     /// <param name="sections">The sections, from most to least stable.</param>
     /// <param name="messages">The messages to send: one system message, the recent turns, the query.</param>
     /// <param name="report">The report.</param>
-    public AssembledContext(IReadOnlyList<PromptSection> sections, IReadOnlyList<ChatMessage> messages, ContextReport report)
+    /// <param name="sentChunks">The retrieved chunks that went into the prompt, in prompt order (the citation set of the reply).</param>
+    public AssembledContext(IReadOnlyList<PromptSection> sections, IReadOnlyList<ChatMessage> messages, ContextReport report, IReadOnlyList<ContextChunk>? sentChunks = null)
     {
         Sections = sections;
         Messages = messages;
         Report = report;
+        SentChunks = sentChunks ?? [];
     }
+
+    /// <summary>Gets the retrieved chunks that went into the prompt, in prompt order (whole or cut); the reply's citations are matched against them.</summary>
+    public IReadOnlyList<ContextChunk> SentChunks { get; }
 
     /// <summary>Gets the sections, ordered from most to least stable (system, rules, repo map, pins, current file, retrieved chunks, summary, history, query).</summary>
     public IReadOnlyList<PromptSection> Sections { get; }
@@ -219,10 +229,39 @@ public enum ContextSlot
     RetrievedChunks,
 }
 
-/// <summary>Text a context source adds to the prompt.</summary>
+/// <summary>
+/// Text a context source adds to the prompt. A source of retrieved code also lists its <see cref="Chunks"/>: the assembler then
+/// places each chunk on its own (best first, each under the per-chunk cap, all of them under the slot's cap), labels it with
+/// its <c>path:start-end</c> span, reports it as its own item, and puts <see cref="Text"/> before them as the section's
+/// introduction (the instruction to cite).
+/// </summary>
 /// <param name="Name">The name for the report, for example <c>Repository map</c>.</param>
-/// <param name="Text">The text.</param>
-public sealed record ContextContribution(string Name, string Text);
+/// <param name="Text">The text (with <see cref="Chunks"/>, the introduction placed before them).</param>
+public sealed record ContextContribution(string Name, string Text)
+{
+    /// <summary>Gets the key a client sends back in <see cref="ChatRequest.ExcludedContextKeys"/> to leave the whole contribution out; empty when it cannot be removed.</summary>
+    public string Key { get; init; } = string.Empty;
+
+    /// <summary>Gets the retrieved chunks, best first; empty for a contribution that is plain text.</summary>
+    public IReadOnlyList<ContextChunk> Chunks { get; init; } = [];
+}
+
+/// <summary>A retrieved span of code that goes into a prompt and can be cited.</summary>
+/// <param name="Key">The chunk id (the contract's <c>SearchResult.ChunkId</c>); also the key that removes it from the prompt.</param>
+/// <param name="Path">The path shown to the model and matched in its reply: relative to the repository root, with <c>/</c> separators.</param>
+/// <param name="FilePath">The full path of the file (what a citation opens).</param>
+/// <param name="StartLine">The 1-based first line of the span.</param>
+/// <param name="EndLine">The 1-based last line of the span (inclusive).</param>
+/// <param name="Text">The text of the span.</param>
+/// <param name="Breadcrumb">The chunk's breadcrumb, <c>path &gt; namespace &gt; type &gt; member</c>.</param>
+/// <param name="Score">The fused score the chunks are ordered by.</param>
+public sealed record ContextChunk(string Key, string Path, string FilePath, int StartLine, int EndLine, string Text, string Breadcrumb, double Score)
+{
+    /// <summary>Gets the span as the prompt labels it: <c>path:start-end</c>, or <c>path:line</c> for a one-line span.</summary>
+    public string Label => EndLine > StartLine
+        ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{Path}:{StartLine}-{EndLine}")
+        : string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{Path}:{StartLine}");
+}
 
 /// <summary>
 /// The hook phase 2 uses for retrieved chunks and the repository map (design section 7, Context assembly). The assembler asks
@@ -239,6 +278,16 @@ public interface IContextSource
     /// <param name="cancellationToken">A token that cancels the call.</param>
     /// <returns>The contribution, or <see langword="null"/> when there is nothing to add.</returns>
     Task<ContextContribution?> GetAsync(ChatRequest request, AssemblyTarget target, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Determines whether the source would add something to a chat request that carries no pins, current file or rules, so that
+    /// the request goes through assembly anyway (retrieval with an index open). The default is <see langword="false"/>: the
+    /// source then only contributes to requests assembled for another reason.
+    /// </summary>
+    /// <param name="request">The chat request.</param>
+    /// <param name="cancellationToken">A token that cancels the call.</param>
+    /// <returns><see langword="true"/> when the request should be assembled for this source.</returns>
+    ValueTask<bool> RequestsAssemblyAsync(ChatRequest request, CancellationToken cancellationToken) => ValueTask.FromResult(false);
 }
 
 /// <summary>Tunable limits of context assembly (design section 7).</summary>
@@ -261,6 +310,9 @@ public sealed class ContextAssemblerOptions
 
     /// <summary>Gets or sets the share of the budget the retrieved chunks may take. Default 0.20.</summary>
     public double RetrievedCapFraction { get; set; } = 0.20;
+
+    /// <summary>Gets or sets the share of the budget one retrieved chunk may take before it is cut to its first lines. Default 0.08.</summary>
+    public double RetrievedChunkCapFraction { get; set; } = 0.08;
 
     /// <summary>Gets or sets the most tokens a rolling summary may take. Default 512.</summary>
     public int SummaryMaxTokens { get; set; } = 512;

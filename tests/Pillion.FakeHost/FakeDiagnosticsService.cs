@@ -3,15 +3,17 @@ using Pillion.Contracts;
 namespace Pillion.FakeHost;
 
 /// <summary>
-/// A canned <see cref="IDiagnosticsService"/>: empty autocomplete counters, the Outbound records of the chat requests this
+/// A canned <see cref="IDiagnosticsService"/>: empty autocomplete counters (from 1.3, a canned prompt-prefix reuse of 3 in 4), the Outbound records of the chat requests this
 /// fake host served (<see cref="FakeRecorder"/>), and a Context Inspector preview built from the request without a model
 /// (the system prompt, each pin, the current file and the message; a pin named with <c>huge</c> in it is reported as
-/// dropped, and a cloud model's preview counts one redaction per pin).
+/// dropped, and a cloud model's preview counts one redaction per pin). From contract 1.3, a message containing <c>/cite</c>
+/// (unless retrieval is off for it) also reports a repository map and two retrieved chunks, each with its
+/// <see cref="ContextReportItemDto.ContextKey"/>, and leaves out the ones named in <see cref="ChatRequest.ExcludedContextKeys"/>.
 /// </summary>
 internal sealed class FakeDiagnosticsService(FakeRecorder recorder) : IDiagnosticsService
 {
     public Task<AutocompleteHostCounters> GetAutocompleteCountersAsync(CancellationToken cancellationToken) =>
-        Task.FromResult(new AutocompleteHostCounters { WindowSeconds = 300 });
+        Task.FromResult(new AutocompleteHostCounters { WindowSeconds = 300, PromptPrefixChecks = 4, PromptPrefixReuses = 3, PromptPrefixReuseRate = 0.75 });
 
     public Task<OutboundRecordDto[]> GetOutboundRecordsAsync(int maxCount, CancellationToken cancellationToken)
     {
@@ -48,7 +50,21 @@ internal sealed class FakeDiagnosticsService(FakeRecorder recorder) : IDiagnosti
             items.Add(new ContextReportItemDto { Kind = "currentFile", Name = Path.GetFileName(request.CurrentFile), Tokens = tokens, OriginalTokens = tokens });
         }
 
-        var query = (request.Messages.Count > 0 ? request.Messages[^1].Content ?? string.Empty : string.Empty).Length / 4;
+        var message = request.Messages.Count > 0 ? request.Messages[^1].Content ?? string.Empty : string.Empty;
+        var retrieves = message.Contains("/cite", StringComparison.OrdinalIgnoreCase) && request.RetrievalMode != RetrievalMode.Off;
+        if (retrieves)
+        {
+            var excluded = new HashSet<string>(request.ExcludedContextKeys ?? [], StringComparer.Ordinal);
+            var canned = new[]
+            {
+                new ContextReportItemDto { Kind = "repoMap", Name = "Repository map", Tokens = 180, OriginalTokens = 180, ContextKey = "repoMap" },
+                new ContextReportItemDto { Kind = "retrieved", Name = "src/Program.cs:12-15", Tokens = 64, OriginalTokens = 64, ContextKey = FakeContextService.CannedIndexId + ":7" },
+                new ContextReportItemDto { Kind = "retrieved", Name = "src/Runner.cs:4-10", Tokens = 96, OriginalTokens = 96, ContextKey = FakeContextService.CannedIndexId + ":12" },
+            };
+            items.AddRange(canned.Where(i => !excluded.Contains(i.ContextKey)));
+        }
+
+        var query = message.Length / 4;
         items.Add(new ContextReportItemDto { Kind = "query", Name = "Your message", Tokens = query, OriginalTokens = query });
         Console.Error.WriteLine("fakehost: preview " + request.RequestId + " pins " + request.Pins.Length);
         return Task.FromResult(new ContextReportDto
@@ -61,7 +77,7 @@ internal sealed class FakeDiagnosticsService(FakeRecorder recorder) : IDiagnosti
             BudgetTokens = model.ContextWindow - (model.ContextWindow / 4) - 40,
             TotalTokens = items.Sum(i => i.Tokens),
             Items = [.. items],
-            IsAssembled = request.Pins.Length > 0 || !string.IsNullOrEmpty(request.CurrentFile),
+            IsAssembled = request.Pins.Length > 0 || !string.IsNullOrEmpty(request.CurrentFile) || retrieves,
             Redacts = !model.IsLocal,
             RedactionCount = items.Sum(i => i.RedactionCount),
         });

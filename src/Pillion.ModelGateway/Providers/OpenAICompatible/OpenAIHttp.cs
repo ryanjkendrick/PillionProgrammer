@@ -54,6 +54,27 @@ internal sealed partial class OpenAIHttp
         return await ParseAsync(stream, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Sends a POST with a JSON body and parses the JSON response (embeddings; chat streams through <see cref="PostStreamAsync"/>).</summary>
+    public async Task<JsonDocument> PostJsonAsync(string path, JsonObject body, string modelId, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(Endpoint, path))
+        {
+            Content = new StringContent(body.ToJsonString(), Encoding.UTF8, new MediaTypeHeaderValue("application/json")),
+        };
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        using var response = await SendAsync(request, modelId, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
+        await using var stream = await ReadStreamAsync(response, cancellationToken).ConfigureAwait(false);
+        var document = await ParseAsync(stream, cancellationToken).ConfigureAwait(false);
+        if (document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("error", out _))
+        {
+            var text = document.RootElement.GetRawText();
+            document.Dispose();
+            throw MapError(HttpStatusCode.InternalServerError, text, modelId, midStream: false, hasKey: true, providerName: DisplayName);
+        }
+
+        return document;
+    }
+
     /// <summary>Sends a GET for the probe and reports the response without throwing for an HTTP error status.</summary>
     public async Task<(HttpStatusCode Status, string? Server, JsonDocument? Body, bool KeySent)> ProbeAsync(string path, CancellationToken cancellationToken)
     {

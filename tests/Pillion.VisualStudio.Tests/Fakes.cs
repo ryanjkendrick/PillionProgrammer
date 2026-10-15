@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
@@ -134,6 +135,11 @@ internal sealed class FakeSession(int processId, HostState initialState) : IHost
     public void ReportSettingsChanged(params string[] sections) =>
         SettingsChanged?.Invoke(this, new HostSettingsChangedEventArgs(sections));
 
+    public event EventHandler<HostIndexStatusChangedEventArgs>? IndexStatusChanged;
+
+    public void ReportIndexStatus(IndexStatus status) =>
+        IndexStatusChanged?.Invoke(this, new HostIndexStatusChangedEventArgs(status));
+
     public int ProcessId { get; } = processId;
 
     public HostState LatestHostState => _latest;
@@ -171,6 +177,20 @@ internal sealed class FakeSession(int processId, HostState initialState) : IHost
         return typeof(T) == typeof(IHostLifecycleService)
             ? (T)(object)new FakeLifecycleProxy(this)
             : throw new NotSupportedException(typeof(T).Name);
+    }
+
+    /// <summary>Gets the notifications sent on this session, in order.</summary>
+    public ConcurrentQueue<(string Method, object? Argument)> Notifications { get; } = new();
+
+    public Task<bool> NotifyAsync(string method, object? argument)
+    {
+        if (Disposed || _completion.Task.IsCompleted)
+        {
+            return Task.FromResult(false);
+        }
+
+        Notifications.Enqueue((method, argument));
+        return Task.FromResult(true);
     }
 
     public Task ShutdownAsync(TimeSpan timeout)

@@ -7,8 +7,8 @@ into both processes.
 ## What lives here
 
 - Service interfaces. VSIX to host: `IModelService`, `IInlineEditService`, `IContextService`, `IAgentService`,
-  `ISettingsService`, `IHostLifecycleService`, `IDiagnosticsService`. Host to VSIX: `IEditorService`, `IApprovalService`,
-  `IWorkspaceQueryService`.
+  `ISettingsService`, `IHostLifecycleService`, `IDiagnosticsService`, `IConversationService`. Host to VSIX: `IEditorService`,
+  `IApprovalService`, `IWorkspaceQueryService`.
 - The DTOs those interfaces exchange, the shared enums, `PillionError` / `PillionRpcException`, and
   `ContractVersion`.
 
@@ -28,9 +28,187 @@ Nothing else: no transport, no serializer, no implementation. The only package r
 
 `tests/Pillion.Contracts.Tests` asserts the exact method names on each interface, so an accidental contract change
 fails the tests. When you change an interface deliberately, update that test and `ContractVersion` in the same
-commit.
+commit. Method names must also be unique across all the services one side exposes (Pillion Host registers every
+VSIX-to-host service on one JSON-RPC connection under its CLR method names, and the VSIX does the same for the host-to-VSIX
+ones), and must not clash with a notification name (`ContractV13Tests`).
 
 ## Changelog
+
+### 1.3 (phase 2)
+
+Additive only, batched at the boundary of phase 2's first wave into one minor bump (`ContractVersion` says 1.3; decision
+of 2026-10-15 in `docs/phase-2-plan.md`). A 1.2 peer is still accepted by the handshake: a 1.2 host answers the new
+methods with StreamJsonRpc's method-not-found error, a 1.2 client never calls them and registers no handler for
+`indexStatusChanged` (nor sends `ideActivityChanged`, `documentSaved` or `openDocumentsChanged`), and each side reads the new fields' defaults from the other (`ContractV13Tests`, and over the real
+pipe `ContractV13RpcTests` and `HandshakeCompatibilityTests` in the host tests). Every new DTO is round-tripped by
+`DtoRoundTripTests`. Until the consuming work items land, Pillion Host answers most new methods with
+`PillionErrorCode.NotImplemented` while a work item was still outstanding; by the end of phase 2 every 1.3 method is
+implemented (see the host README, Contract 1.3 stubs: none are left); the fake host serves them all with canned data.
+
+Every addition, by the work item that made it and the item that consumes it (the sections below give the members and their
+`Order` values):
+
+| Work item | Added to the contract | Consumed by |
+| --- | --- | --- |
+| 2.2 | `IConversationService` and its DTOs, including `ConversationMessage.Citations` and `ConversationMessage.Cancelled`; `PillionErrorCode.StorageUnavailable` | Host: `ConversationRpcService`, `ConversationRecorder` (2.2). Chat window: the conversation list, restore, Delete all on the Privacy page (2.2) |
+| 2.9 | `IndexStatus.Phase`, `PauseReason`, `Roots`, `ExcludedSecretFileCount`, `LastError`, `Progress`; `IndexRootStatus`, `IndexProgress`; `IContextService.SetWorkspaceAsync` and `WorkspaceDescription`; `IdeActivity` and the client-to-host notification `ideActivityChanged`; the host-to-client notification `indexStatusChanged` | Host: `IndexingService` (2.9). VSIX: `IndexingRelay` sends the workspace and the activity (2.9); the Index window and the status bar read the status (2.15) |
+| 2.15 | `ListExcludedFilesAsync`, `RebuildIndexAsync`, `DeleteIndexAsync`, `ListIndexesAsync` with `ExcludedFilesRequest`, `ExcludedFilesPage`, `ExcludedFile`, `IndexInfo` | The Index window (2.15); served by `IndexingService` (2.9) |
+| 2.10 | The client-to-host notifications `documentSaved` and `openDocumentsChanged` | Host: `IndexingService.NotifySaved` and the open-documents-first rule of a full run (2.10). VSIX: `IndexingRelay` |
+| 2.11 | `SearchDetailedAsync`, `SearchResponse`, `SearchMode`; `SearchRequest.Roots`, `Partitions`, `Languages`, `Mode`, `MaxPerFile`, `IncludeText`, `FocusFiles`; `SearchResult.ChunkId`, `Breadcrumb`, `Kind`, `Partition`, `Language`, `LexicalRank`, `VectorRank`, `FusedScore`, `Text` | Host: `RetrievalService` (2.11), then the prompt builders (2.12); the evaluation harness (2.16) and the Gate 2 scenarios (2.17) call it over the contract |
+| 2.12 | `Citation`; `ChatChunk.Citations`; `ChatRequest.RetrievalMode`, `MaxRetrievedChunks`, `ExcludedContextKeys`; `ContextReportItemDto.ContextKey`; `AutocompleteHostCounters.PromptPrefixChecks`, `PromptPrefixReuses`, `PromptPrefixReuseRate` | Gateway `ContextAssembler` and the host's retrieval sources (2.12). Chat window: citation links, the Sources line, Remove in the Context Inspector (2.12). Gate 2 reads the prompt-prefix counters (2.17, issue #47) |
+| 2.13 | `MentionKinds`; `MentionRequest.Qualifier`, `Arguments`; `MentionResolution.Citations` | Host: `ContextRpcService` mentions v2 (2.13). Chat window: the picker and the IDE payloads for `@output`, `@build`, `@tests` (2.13) |
+| 2.14 | `IWorkspaceQueryService.CallersOfAsync` with `CallersOfRequest`, `CallersOfResponse`, `CallSite` | VSIX: `WorkspaceQueryService` (2.14). Host: `IWorkspaceQueries` for `@symbol` and chat (2.14, 2.13) |
+| batch | `ContractVersion` 1.3; `PillionErrorCode.NotImplemented` | All of the above |
+
+- **Conversations (work item 2.2).** A new VSIX-to-host service over `conversations.db`, behind the `localStore` flag. There
+  is no append method: the host appends the user's message and the reply as `ChatAsync` runs a request whose
+  `ConversationId` names a conversation. Pillion Host implements it in work item 2.2 (see the host README, Saved
+  conversations).
+
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `IConversationService` (new, VSIX to host) | `ListConversationsAsync(ConversationListRequest)` | | One page, most recently updated first |
+  | `IConversationService` | `GetConversationAsync(string conversationId)` | | Messages and pins; `null` for an unknown id |
+  | `IConversationService` | `CreateConversationAsync(ConversationCreateRequest)` | | Creating an existing id returns it unchanged |
+  | `IConversationService` | `RenameConversationAsync(string conversationId, string title)` | | `bool`; an empty title leaves it as it was |
+  | `IConversationService` | `DeleteConversationAsync(string conversationId)` | | `bool` |
+  | `IConversationService` | `DeleteAllConversationsAsync()` | | Delete all on the Privacy page: conversations, messages, pins and the Outbound log, then compaction |
+  | `IConversationService` | `SetPinsAsync(string conversationId, ConversationPin[] pins)` | | Replaces the pins; `bool` (false for an unknown id) |
+  | `ConversationListRequest` (new) | `Offset`, `Limit` | 0-1 | `Limit` 0 means 50, capped at 500 |
+  | `ConversationPage` (new) | `Items`, `HasMore` | 0-1 | `ConversationSummary[]` |
+  | `ConversationSummary` (new) | `Id`, `Title`, `CreatedUtc`, `UpdatedUtc`, `LastModelId`, `MessageCount` | 0-5 | `LastModelId` is `providerId/modelId` or `null` |
+  | `ConversationDetail` (new) | `Conversation`, `Messages`, `Pins` | 0-2 | |
+  | `ConversationMessage` (new) | `Id`, `Role`, `Content`, `ModelId`, `ProviderId`, `PromptTokens`, `CompletionTokens`, `CreatedUtc`, `Citations`, `Cancelled` | 0-9 | `Role` is `ChatRole`; `Citations` keep a restored reply's spans clickable; `Cancelled` marks a reply stopped before it finished (`Content` is what had arrived); both added with work item 2.2 |
+  | `ConversationPin` (new) | `Kind`, `Target`, `DisplayName`, `TokenCount` | 0-3 | What to resolve again on restore (`@Kind:Target`), never the content |
+  | `ConversationCreateRequest` (new) | `Id`, `Title`, `ModelId` | 0-2 | Empty `Id`: the host chooses one; empty `Title`: named from the first user message |
+  | `DeleteAllConversationsResult` (new) | `Conversations`, `Messages`, `Pins`, `OutboundEntries` | 0-3 | What was deleted |
+  | `PillionErrorCode` | `StorageUnavailable` | enum value 7 | The Local Store cannot be opened or used (key, schema, migration, cipher); `LocalStoreException` uses it for every kind but `FeatureDisabled` (still `PolicyDenied`). A 1.2 peer sees an unknown number |
+
+- **Index status and control (work items 2.9 and 2.15).** `IndexStatus` grows; `IContextService` gains four control
+  methods; the host pushes the status in a new notification.
+
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `IndexStatus` | `Phase` | 5 | `IndexPhase` (new enum): `Idle` 0, `Discovering`, `Hashing`, `Chunking`, `Embedding`, `Storing`, `Paused`, `Failed` |
+  | `IndexStatus` | `PauseReason` | 6 | `IndexPauseReason` (new enum): `None` 0, `User`, `Build`, `Test`, `Debug`, `Battery`, `Memory`, `LowDisk` |
+  | `IndexStatus` | `Roots` | 7 | `IndexRootStatus[]`, one per repository root of the open solution |
+  | `IndexStatus` | `ExcludedSecretFileCount` | 8 | Secret-bearing files excluded, over every root |
+  | `IndexStatus` | `LastError` | 9 | `string?` for the Index window |
+  | `IndexStatus` | `Progress` | 10 | `IndexProgress?`; `null` when idle. `IndexedFileCount` and `TotalFileCount` stay the totals over every root |
+  | `IndexRootStatus` (new) | `RootPath`, `IndexId`, `Role`, `IndexedFileCount`, `TotalFileCount`, `ExcludedFileCount`, `SecretFileCount`, `ChunkCount`, `DiskBytes`, `LastFullSweepUtc`, `EmbeddingModelId`, `ChunkerVersion`, `SchemaVersion` | 0-12 | `Role` is `IndexRole` (new enum): `Unknown` 0 (not opened yet), `Writer`, `Reader` |
+  | `IndexProgress` (new) | `FilesDone`, `FilesTotal`, `ChunksDone`, `EstimatedRemainingSeconds` | 0-3 | The run in progress; the estimate is -1 when unknown |
+  | `IContextService` | `ListExcludedFilesAsync(ExcludedFilesRequest)` | | One page of a root's excluded files and folders, secret-bearing first |
+  | `IContextService` | `RebuildIndexAsync(string rootPath)` | | Starts a rebuild in the background (forwarded to the owner on a reader); progress arrives as notifications |
+  | `IContextService` | `DeleteIndexAsync(string indexId)` | | `bool`; refused with `PolicyDenied` while another live host owns the index |
+  | `IContextService` | `ListIndexesAsync()` | | `IndexInfo[]`: every index folder on the machine, for the retention view |
+  | `ExcludedFilesRequest` (new) | `RootPath`, `Offset`, `Limit`, `SecretOnly` | 0-3 | `Limit` 0 means 200, capped at 1,000 |
+  | `ExcludedFilesPage` (new) | `Items`, `TotalCount`, `HasMore` | 0-2 | |
+  | `ExcludedFile` (new) | `Path`, `Reason`, `Description`, `IsSecretBearing`, `IsDirectory` | 0-4 | `Reason` is the name of `Pillion.Indexing`'s `ExclusionReason` (a string, so a new rule needs no contract change) |
+  | `IndexInfo` (new) | `IndexId`, `RootPath`, `EmbeddingModelId`, `ChunkerVersion`, `DiskBytes`, `LastUsedUtc`, `RootExists`, `IsInUse`, `IsOpen` | 0-8 | `RootExists` is `bool?` (`null`: the drive is offline or there is no `state.json`) |
+
+  Notification `indexStatusChanged`, host to client, one positional argument: the `IndexStatus`. Sent whenever the status
+  changes, **at most twice a second** (changes within a window are coalesced; the latest is sent when it ends), and not
+  replayed to a client that connects later, which calls `GetIndexStatusAsync`. Like `connectivityChanged` it is not a
+  method on a contract interface; a 1.2 client registers no handler and ignores it. In the VSIX it surfaces as
+  `IHostConnection.IndexStatusChanged`.
+
+- **Workspace and IDE activity (work item 2.9, added within 1.3).** The host could not learn what is open or when the IDE
+  is building, so the pipeline needed two additions; both are additive and the version stays 1.3. A host without them (an
+  earlier 1.3 build or 1.2) answers `SetWorkspaceAsync` with method-not-found and ignores the notification; the extension
+  logs that and carries on.
+
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `IContextService` | `SetWorkspaceAsync(WorkspaceDescription)` | | What is open; the host resolves the repository roots and indexes them in the background (behind `features.indexing`). Called after every handshake and when the solution, its projects or the opened folder change; the same roots again restart nothing; an empty description closes the indexes |
+  | `WorkspaceDescription` (new) | `SolutionPath`, `ProjectPaths`, `FolderPath` | 0-2 | Full paths: the `.sln`/`.slnx` (or `null`), the loaded projects' files (or folders), the Open Folder folder (or `null`) |
+  | `IdeActivity` (new, `[Flags]`) | `None` 0, `Build` 1, `Debug` 2, `Test` 4 | | An integer on the wire |
+
+  Notification `ideActivityChanged`, **client to host**, one positional argument: the `IdeActivity` holding every activity
+  in progress (a set, so a lost or repeated notification cannot leave the host out of step). Sent after every handshake and
+  whenever the set changes. The host pauses indexing while any flag is set (pause reasons `Build`, `Debug`, `Test`) and
+  forgets the set when the client disconnects. It is the first client-to-host notification: the host registers it on every
+  connection like an RPC target, and only after the handshake (`ContractV13Tests` keeps it from clashing with method names).
+  The extension (`IndexingRelay` in Pillion.VisualStudio.Core) sends `Build` from the solution build events and `Debug`
+  from the debugger's mode; it does not set `Test` yet (no supported Test Explorer API in the SDK packages it uses), so a
+  test run pauses indexing only through its build.
+
+- **Saves and open documents (work item 2.10, added within 1.3).** Two more client-to-host notifications, additive, the
+  version stays 1.3; a host without them (an earlier 1.3 build or 1.2) has no handler and drops them, and its file watcher
+  (or its next sweep) still sees the files. Neither side logs the paths.
+
+  Notification `documentSaved`, **client to host**, one positional argument: the saved document's full path (a string).
+  Sent at once for every save Visual Studio reports, not debounced and not deduplicated (the host compares hashes). The host
+  hands the file to the incremental indexer of the root it lies in, bypassing the watcher's 500 ms debounce, so it is
+  searchable within the 500 ms budget (Gate 2); a file outside every root the host owns, or excluded by the discovery rules,
+  is ignored.
+
+  Notification `openDocumentsChanged`, **client to host**, one positional argument: the full paths of every open document
+  (a string array; the documents opened since the extension's relay started). Sent after every handshake (possibly empty)
+  and, after 500 ms of quiet, whenever the set changes. A full indexing run (a branch switch's sweep) indexes the open ones
+  among its added and changed files first; the host forgets the set when the client disconnects.
+
+- **Search (work item 2.11).** `SearchAsync` is unchanged (a 1.2 client keeps calling it); the new
+  `SearchDetailedAsync(SearchRequest)` returns the hits with timings.
+
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `IContextService` | `SearchDetailedAsync(SearchRequest)` | | Returns `SearchResponse` |
+  | `SearchRequest` | `Roots`, `Partitions`, `Languages` | 2-4 | `string[]` filters; empty does not restrict |
+  | `SearchRequest` | `Mode` | 5 | `SearchMode` (new enum): `Hybrid` 0 (default), `Lexical`, `Vector`, `Symbol` |
+  | `SearchRequest` | `MaxPerFile` | 6 | 0 means the host default |
+  | `SearchRequest` | `IncludeText` | 7 | Whether hits carry the full chunk text |
+  | `SearchRequest` | `FocusFiles` | 8 | `string[]`: open and recently edited files for the retrieval boost |
+  | `SearchResult` | `ChunkId` | 5 | Opaque to the client, unique across one host's indexes (index id and chunk row id) |
+  | `SearchResult` | `Breadcrumb`, `Kind`, `Partition`, `Language` | 6-9 | The chunk's breadcrumb and chunker kind, its file's partition and language |
+  | `SearchResult` | `LexicalRank`, `VectorRank` | 10-11 | One-based rank in each candidate list; 0 when absent from it |
+  | `SearchResult` | `FusedScore` | 12 | The Reciprocal Rank Fusion score |
+  | `SearchResult` | `Text` | 13 | `string?`: the full chunk text when `IncludeText` was set |
+  | `SearchResponse` (new) | `Results`, `LexicalMs`, `VectorMs`, `FusionMs`, `TotalMs`, `Degraded` | 0-5 | `Degraded`: the time budget cut retrieval short |
+
+- **Citations and retrieval in chat (work item 2.12).**
+
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `Citation` (new) | `FilePath`, `StartLine`, `EndLine`, `ChunkId`, `Breadcrumb`, `ReplyOffset` | 0-5 | A zero-based, inclusive `file:line` span; `ReplyOffset` is the UTF-16 offset into the reply text where it applies, or -1 for the whole reply |
+  | `ChatChunk` | `Citations` | 8 | `Citation[]`, on the final chunk only |
+  | `ChatRequest` | `RetrievalMode` | 9 | `RetrievalMode` (new enum): `Auto` 0 (the host decides), `On`, `Off` |
+  | `ChatRequest` | `MaxRetrievedChunks` | 10 | 0 means the host default |
+  | `ChatRequest` | `ExcludedContextKeys` | 11 | `string[]`: the items removed in the Context Inspector before sending, by their `ContextKey`; the host leaves them out. Added with work item 2.12, after the wave-1 batch, still additive under 1.3 |
+  | `ContextReportItemDto` | `ContextKey` | 9 | The key that removes the item (a `retrieved` chunk's id, or `repoMap`); empty for pins (removed by `PinIndex`) and items that cannot be removed. Added with work item 2.12 |
+  | `AutocompleteHostCounters` | `PromptPrefixChecks`, `PromptPrefixReuses`, `PromptPrefixReuseRate` | 22-24 | Model requests whose document had an earlier model request to the same model; those whose prompt prefix (snippets, header, code before the caret) starts with the previous one's, which a resident local model's prompt cache can reuse; and the rate (issue #47, option 1). Added with work item 2.12 |
+
+  A host's chat reply cites the retrieved chunks it sent: an explicit `path:line` or `path:start-end` reference in the reply
+  that matches a sent chunk becomes a `Citation` with `ReplyOffset` just after the reference; when the reply names none, every
+  chunk sent is listed with `ReplyOffset` -1 (implicit citations, which the Chat window shows collapsed under "Sources").
+
+- **Mentions v2 (work item 2.13).** The kind stays a string on the wire; the new static class `MentionKinds` names every
+  kind, the phase 1 ones (`file`, `folder`, `selection`, `errors`, `clipboard`) and the new `symbol`, `docs`,
+  `solution`, `git`, `output`, `build` and `tests`. `MentionResolution.Truncated` already existed (1.2, order 7).
+
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `MentionRequest` | `Qualifier` | 7 | The kind the user typed in `@kind:value` (an explicit disambiguation: no fuzzy fallback); empty for a bare `@name` |
+  | `MentionRequest` | `Arguments` | 8 | `string[]`: for `git`, `diff` (default), `staged`, `log` with a count, or a revision range; for `output`, the pane |
+  | `MentionResolution` | `Citations` | 12 | `Citation[]`: the spans the content came from (for example a symbol's definition and references) |
+
+  No member was added for the pane text of `output`, `build` and `tests`: as the `MentionKinds` documentation says, the
+  client sends it as `Payload`. For a `symbol` that is ambiguous, `Candidates` holds values that resolve to one definition,
+  `Dotted.Name#<full path>:<1-based line>`, rather than paths; the client sends one back as the value after `@symbol:`.
+
+- **Workspace queries (work item 2.14).** A host-to-VSIX method beside `FindReferencesAsync`. The VSIX enforces the
+  budgets: one workspace query in flight, 2 s each, at most five a second; over the concurrency or rate limit a call fails
+  at once with `Cancelled`, and one that reaches 2 s returns what it found with `Truncated`. The host falls back to the
+  index's approximate edges. A 1.2 VSIX answers with method-not-found, which the host treats the same way.
+
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `IWorkspaceQueryService` | `CallersOfAsync(CallersOfRequest)` | | The callers of a member, from the live Roslyn workspace |
+  | `CallersOfRequest` (new) | `SymbolName`, `Container`, `FilePath`, `Line`, `MaxResults` | 0-4 | `Line` is -1 when unknown; `MaxResults` 0 means 100 |
+  | `CallersOfResponse` (new) | `IsFound`, `Callers`, `Truncated` | 0-2 | `CallSite[]` ordered by file and line |
+  | `CallSite` (new) | `FilePath`, `Line`, `Snippet`, `CallerName`, `IsApproximate` | 0-4 | `IsApproximate`: matched by name, not bound by the compiler |
+
+- **Stubs.** `PillionErrorCode.NotImplemented` (enum value 8): the method is on the contract but this host does not
+  implement it yet; the message names the feature and `Details` the work item.
 
 ### 1.2 (phase 1)
 

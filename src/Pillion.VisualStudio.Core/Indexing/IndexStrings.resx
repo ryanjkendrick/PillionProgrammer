@@ -1,0 +1,809 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <!-- The Index window, status bar indicator and Indexing Options page strings (src/Pillion.VisualStudio.Core/Indexing/IndexStrings.cs). Each comment says where the string appears and what its placeholders are. -->
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <data name="WindowTitle" xml:space="preserve">
+    <value>Pillion Index</value>
+    <comment>Caption of the Index tool window and its View menu entry.</comment>
+  </data>
+  <data name="WindowName" xml:space="preserve">
+    <value>Pillion Index</value>
+    <comment>Screen-reader name of the Index window.</comment>
+  </data>
+  <data name="DisabledMessage" xml:space="preserve">
+    <value>The Index window is disabled by settings or policy</value>
+    <comment>Shown instead of the index while the indexWindow feature flag is off.</comment>
+  </data>
+  <data name="HostNotReady" xml:space="preserve">
+    <value>Host not ready. The index loads when Pillion Host is ready.</value>
+    <comment>Shown while Pillion Host is not connected.</comment>
+  </data>
+  <data name="NoStatusYet" xml:space="preserve">
+    <value>No status yet</value>
+    <comment>Phase line before the host has reported the index status.</comment>
+  </data>
+  <data name="StatusFailedFormat" xml:space="preserve">
+    <value>Could not read the index status: {0}</value>
+    <comment>Shown when the status call failed; {0} is the reason.</comment>
+  </data>
+  <data name="HeaderName" xml:space="preserve">
+    <value>Index status</value>
+    <comment>Screen-reader name of the status header group.</comment>
+  </data>
+  <data name="PauseButton" xml:space="preserve">
+    <value>_Pause</value>
+    <comment>Button that pauses indexing; the underscore marks the access key.</comment>
+  </data>
+  <data name="PauseName" xml:space="preserve">
+    <value>Pause indexing</value>
+    <comment>Screen-reader name of the Pause button.</comment>
+  </data>
+  <data name="PauseToolTip" xml:space="preserve">
+    <value>Pause background indexing until you resume it</value>
+    <comment>Tooltip of the Pause button.</comment>
+  </data>
+  <data name="ResumeButton" xml:space="preserve">
+    <value>Res_ume</value>
+    <comment>Button that resumes indexing.</comment>
+  </data>
+  <data name="ResumeName" xml:space="preserve">
+    <value>Resume indexing</value>
+    <comment>Screen-reader name of the Resume button.</comment>
+  </data>
+  <data name="ResumeToolTip" xml:space="preserve">
+    <value>Resume background indexing</value>
+    <comment>Tooltip of the Resume button.</comment>
+  </data>
+  <data name="RefreshButton" xml:space="preserve">
+    <value>Re_fresh</value>
+    <comment>Button that reads the index status again.</comment>
+  </data>
+  <data name="RefreshName" xml:space="preserve">
+    <value>Refresh the index status</value>
+    <comment>Screen-reader name of the Refresh button.</comment>
+  </data>
+  <data name="RefreshToolTip" xml:space="preserve">
+    <value>Read the index status, the index folders and the excluded files again</value>
+    <comment>Tooltip of the Refresh button.</comment>
+  </data>
+  <data name="TabRoots" xml:space="preserve">
+    <value>_Roots</value>
+    <comment>Header of the tab that lists the repository roots.</comment>
+  </data>
+  <data name="TabRootsName" xml:space="preserve">
+    <value>Repository roots</value>
+    <comment>Screen-reader name of the Roots tab.</comment>
+  </data>
+  <data name="TabExcluded" xml:space="preserve">
+    <value>_Excluded files</value>
+    <comment>Header of the tab that lists excluded files.</comment>
+  </data>
+  <data name="TabExcludedName" xml:space="preserve">
+    <value>Excluded files</value>
+    <comment>Screen-reader name of the Excluded files tab.</comment>
+  </data>
+  <data name="TabIndexes" xml:space="preserve">
+    <value>_Indexes</value>
+    <comment>Header of the tab that lists every index folder.</comment>
+  </data>
+  <data name="TabIndexesName" xml:space="preserve">
+    <value>Index folders on this machine</value>
+    <comment>Screen-reader name of the Indexes tab.</comment>
+  </data>
+  <data name="LastErrorFormat" xml:space="preserve">
+    <value>Last error: {0}</value>
+    <comment>Last error the indexer met; {0} is the message.</comment>
+  </data>
+  <data name="ProgressName" xml:space="preserve">
+    <value>Indexing progress</value>
+    <comment>Screen-reader name of the progress bar.</comment>
+  </data>
+  <data name="ProgressFormat" xml:space="preserve">
+    <value>{0} of {1} files, {2} chunks</value>
+    <comment>Progress line; {0} files done, {1} files in the run, {2} chunks stored.</comment>
+  </data>
+  <data name="PausedLine" xml:space="preserve">
+    <value>Paused</value>
+    <comment>Line shown while indexing is paused for no known reason.</comment>
+  </data>
+  <data name="PausedLineFormat" xml:space="preserve">
+    <value>Paused: {0}</value>
+    <comment>Line shown while indexing is paused; {0} is the reason, for example a build is running.</comment>
+  </data>
+  <data name="TotalsFormat" xml:space="preserve">
+    <value>{0} files in {1} root(s), {2} chunks, {3} on disk; {4} secret-bearing file(s) excluded</value>
+    <comment>Totals line; files indexed, roots, chunks, disk use, secret-bearing files.</comment>
+  </data>
+  <data name="LastUpdatedFormat" xml:space="preserve">
+    <value>Last updated {0}</value>
+    <comment>Line with when the index was last updated; {0} is a date and time.</comment>
+  </data>
+  <data name="NoRoots" xml:space="preserve">
+    <value>No repository root is open. Open a solution or folder in a repository and Pillion indexes it.</value>
+    <comment>Shown on the Roots tab while the host reports no root.</comment>
+  </data>
+  <data name="ActionMessageName" xml:space="preserve">
+    <value>Last action</value>
+    <comment>Screen-reader name of the line that reports the last action.</comment>
+  </data>
+  <data name="PhaseIdle" xml:space="preserve">
+    <value>Idle (up to date)</value>
+    <comment>Indexing phase.</comment>
+  </data>
+  <data name="PhaseDiscovering" xml:space="preserve">
+    <value>Discovering files</value>
+    <comment>Indexing phase.</comment>
+  </data>
+  <data name="PhaseHashing" xml:space="preserve">
+    <value>Hashing files</value>
+    <comment>Indexing phase.</comment>
+  </data>
+  <data name="PhaseChunking" xml:space="preserve">
+    <value>Parsing and chunking</value>
+    <comment>Indexing phase.</comment>
+  </data>
+  <data name="PhaseEmbedding" xml:space="preserve">
+    <value>Embedding chunks</value>
+    <comment>Indexing phase.</comment>
+  </data>
+  <data name="PhaseStoring" xml:space="preserve">
+    <value>Storing</value>
+    <comment>Indexing phase.</comment>
+  </data>
+  <data name="PhasePaused" xml:space="preserve">
+    <value>Paused</value>
+    <comment>Indexing phase.</comment>
+  </data>
+  <data name="PhaseFailed" xml:space="preserve">
+    <value>Failed</value>
+    <comment>Indexing phase.</comment>
+  </data>
+  <data name="PauseUser" xml:space="preserve">
+    <value>you paused it</value>
+    <comment>Why indexing is paused (long form, after 'Paused: ').</comment>
+  </data>
+  <data name="PauseBuild" xml:space="preserve">
+    <value>a build is running</value>
+    <comment>Why indexing is paused (long form).</comment>
+  </data>
+  <data name="PauseTest" xml:space="preserve">
+    <value>tests are running</value>
+    <comment>Why indexing is paused (long form).</comment>
+  </data>
+  <data name="PauseDebug" xml:space="preserve">
+    <value>the debugger is attached</value>
+    <comment>Why indexing is paused (long form).</comment>
+  </data>
+  <data name="PauseBattery" xml:space="preserve">
+    <value>battery saver is on</value>
+    <comment>Why indexing is paused (long form).</comment>
+  </data>
+  <data name="PauseMemory" xml:space="preserve">
+    <value>the memory limit was reached</value>
+    <comment>Why indexing is paused (long form).</comment>
+  </data>
+  <data name="PauseLowDisk" xml:space="preserve">
+    <value>disk space is low</value>
+    <comment>Why indexing is paused (long form).</comment>
+  </data>
+  <data name="PauseUserShort" xml:space="preserve">
+    <value>you</value>
+    <comment>Why indexing is paused (status bar).</comment>
+  </data>
+  <data name="PauseBuildShort" xml:space="preserve">
+    <value>build</value>
+    <comment>Why indexing is paused (status bar).</comment>
+  </data>
+  <data name="PauseTestShort" xml:space="preserve">
+    <value>tests</value>
+    <comment>Why indexing is paused (status bar).</comment>
+  </data>
+  <data name="PauseDebugShort" xml:space="preserve">
+    <value>debugger</value>
+    <comment>Why indexing is paused (status bar).</comment>
+  </data>
+  <data name="PauseBatteryShort" xml:space="preserve">
+    <value>battery</value>
+    <comment>Why indexing is paused (status bar).</comment>
+  </data>
+  <data name="PauseMemoryShort" xml:space="preserve">
+    <value>memory</value>
+    <comment>Why indexing is paused (status bar).</comment>
+  </data>
+  <data name="PauseLowDiskShort" xml:space="preserve">
+    <value>low disk</value>
+    <comment>Why indexing is paused (status bar).</comment>
+  </data>
+  <data name="PauseFailedFormat" xml:space="preserve">
+    <value>Could not pause indexing: {0}</value>
+    <comment>Shown when Pause failed; {0} is the reason.</comment>
+  </data>
+  <data name="ResumeFailedFormat" xml:space="preserve">
+    <value>Could not resume indexing: {0}</value>
+    <comment>Shown when Resume failed; {0} is the reason.</comment>
+  </data>
+  <data name="RemainingUnderMinute" xml:space="preserve">
+    <value>Less than a minute remaining</value>
+    <comment>Estimated time left.</comment>
+  </data>
+  <data name="RemainingMinutesFormat" xml:space="preserve">
+    <value>About {0} min remaining</value>
+    <comment>Estimated time left; {0} is minutes.</comment>
+  </data>
+  <data name="RemainingHoursFormat" xml:space="preserve">
+    <value>About {0} h {1} min remaining</value>
+    <comment>Estimated time left; {0} hours, {1} minutes.</comment>
+  </data>
+  <data name="SweepNever" xml:space="preserve">
+    <value>Never</value>
+    <comment>Shown when no full sweep has finished yet.</comment>
+  </data>
+  <data name="Unknown" xml:space="preserve">
+    <value>unknown</value>
+    <comment>Shown for a value the host does not know.</comment>
+  </data>
+  <data name="UnknownRoot" xml:space="preserve">
+    <value>(unknown root)</value>
+    <comment>Shown for an index folder whose state file is missing.</comment>
+  </data>
+  <data name="RoleWriter" xml:space="preserve">
+    <value>Writer (this host owns the index)</value>
+    <comment>Role of this host for an index.</comment>
+  </data>
+  <data name="RoleReader" xml:space="preserve">
+    <value>Reader (another host owns the index)</value>
+    <comment>Role of this host for an index.</comment>
+  </data>
+  <data name="RoleUnknown" xml:space="preserve">
+    <value>Not open yet</value>
+    <comment>Role of this host for an index that is not open.</comment>
+  </data>
+  <data name="FilesOfFormat" xml:space="preserve">
+    <value>{0} of {1}</value>
+    <comment>A count of a total, for example files done of files to do.</comment>
+  </data>
+  <data name="PercentFormat" xml:space="preserve">
+    <value>{0}%</value>
+    <comment>A percentage.</comment>
+  </data>
+  <data name="VersionsFormat" xml:space="preserve">
+    <value>Chunker {0}, schema {1}</value>
+    <comment>Versions an index was built with.</comment>
+  </data>
+  <data name="ExcludedCountFormat" xml:space="preserve">
+    <value>{0} excluded, {1} secret-bearing</value>
+    <comment>Exclusion counts of a root.</comment>
+  </data>
+  <data name="RootRowNameFormat" xml:space="preserve">
+    <value>{0}. {1}. {2} files, {3} chunks, {4} on disk, model {5}</value>
+    <comment>Screen-reader name of a root row.</comment>
+  </data>
+  <data name="RootLabel" xml:space="preserve">
+    <value>Root</value>
+    <comment>Label.</comment>
+  </data>
+  <data name="RoleLabel" xml:space="preserve">
+    <value>Role</value>
+    <comment>Label of a root's role.</comment>
+  </data>
+  <data name="FilesLabel" xml:space="preserve">
+    <value>Files indexed</value>
+    <comment>Label.</comment>
+  </data>
+  <data name="ChunksLabel" xml:space="preserve">
+    <value>Chunks</value>
+    <comment>Label.</comment>
+  </data>
+  <data name="DiskLabel" xml:space="preserve">
+    <value>Disk use</value>
+    <comment>Label.</comment>
+  </data>
+  <data name="ModelLabel" xml:space="preserve">
+    <value>Embedding model</value>
+    <comment>Label.</comment>
+  </data>
+  <data name="LastSweepLabel" xml:space="preserve">
+    <value>Last full sweep</value>
+    <comment>Label.</comment>
+  </data>
+  <data name="ExcludedLabel" xml:space="preserve">
+    <value>Exclusions</value>
+    <comment>Label.</comment>
+  </data>
+  <data name="RebuildButton" xml:space="preserve">
+    <value>Re_build</value>
+    <comment>Button that rebuilds a root's index.</comment>
+  </data>
+  <data name="RebuildRootNameFormat" xml:space="preserve">
+    <value>Rebuild the index of {0}</value>
+    <comment>Screen-reader name of a root's Rebuild button; {0} is the root.</comment>
+  </data>
+  <data name="RebuildToolTip" xml:space="preserve">
+    <value>Index this root again from scratch in the background</value>
+    <comment>Tooltip of Rebuild.</comment>
+  </data>
+  <data name="DeleteButton" xml:space="preserve">
+    <value>_Delete</value>
+    <comment>Button that deletes an index.</comment>
+  </data>
+  <data name="DeleteRootNameFormat" xml:space="preserve">
+    <value>Delete the index of {0}</value>
+    <comment>Screen-reader name of a root's Delete button; {0} is the root.</comment>
+  </data>
+  <data name="DeleteToolTip" xml:space="preserve">
+    <value>Delete this index from disk (asks first)</value>
+    <comment>Tooltip of Delete.</comment>
+  </data>
+  <data name="RebuildStartedFormat" xml:space="preserve">
+    <value>Rebuild of {0} started.</value>
+    <comment>Shown after a rebuild started; {0} is the root.</comment>
+  </data>
+  <data name="RebuildFailedFormat" xml:space="preserve">
+    <value>Could not rebuild {0}: {1}</value>
+    <comment>Shown when a rebuild could not start; {0} is the root, {1} the reason.</comment>
+  </data>
+  <data name="DeleteRootConfirmFormat" xml:space="preserve">
+    <value>Delete the index of {0} ({1})? Pillion indexes it again from scratch the next time the folder is opened.</value>
+    <comment>Confirmation before deleting a root's index; {0} root, {1} disk use.</comment>
+  </data>
+  <data name="DeleteIndexConfirmFormat" xml:space="preserve">
+    <value>Delete the index folder of {0} ({1})? This cannot be undone.</value>
+    <comment>Confirmation before deleting an index folder; {0} root, {1} disk use.</comment>
+  </data>
+  <data name="DeleteOpenIndexConfirmFormat" xml:space="preserve">
+    <value>Delete the index of {0} ({1})? It is open for the current solution: it is closed first and built again from scratch the next time the solution opens.</value>
+    <comment>Confirmation before deleting an index that is open here.</comment>
+  </data>
+  <data name="DeletedFormat" xml:space="preserve">
+    <value>Deleted the index of {0}.</value>
+    <comment>Shown after a delete; {0} is the root.</comment>
+  </data>
+  <data name="NothingToDeleteFormat" xml:space="preserve">
+    <value>There is no index to delete for {0}.</value>
+    <comment>Shown when the host has no index with that id.</comment>
+  </data>
+  <data name="DeleteFailedFormat" xml:space="preserve">
+    <value>Could not delete the index of {0}: {1}</value>
+    <comment>Shown when a delete failed or was refused; {0} root, {1} reason.</comment>
+  </data>
+  <data name="ExcludedRootLabel" xml:space="preserve">
+    <value>Roo_t:</value>
+    <comment>Label of the root picker on the Excluded files tab.</comment>
+  </data>
+  <data name="ExcludedRootName" xml:space="preserve">
+    <value>Repository root whose excluded files are listed</value>
+    <comment>Screen-reader name of the root picker.</comment>
+  </data>
+  <data name="SecretOnlyCheck" xml:space="preserve">
+    <value>Secret-bearing _only</value>
+    <comment>Check box that limits the list to secret-bearing files.</comment>
+  </data>
+  <data name="SecretOnlyName" xml:space="preserve">
+    <value>Show only secret-bearing files</value>
+    <comment>Screen-reader name of the check box.</comment>
+  </data>
+  <data name="PreviousPageButton" xml:space="preserve">
+    <value>Pre_vious</value>
+    <comment>Button that shows the previous page of excluded files.</comment>
+  </data>
+  <data name="PreviousPageName" xml:space="preserve">
+    <value>Previous page of excluded files</value>
+    <comment>Screen-reader name.</comment>
+  </data>
+  <data name="NextPageButton" xml:space="preserve">
+    <value>_Next</value>
+    <comment>Button that shows the next page of excluded files.</comment>
+  </data>
+  <data name="NextPageName" xml:space="preserve">
+    <value>Next page of excluded files</value>
+    <comment>Screen-reader name.</comment>
+  </data>
+  <data name="CopyPathButton" xml:space="preserve">
+    <value>_Copy path</value>
+    <comment>Button that copies the chosen file's path.</comment>
+  </data>
+  <data name="CopyPathName" xml:space="preserve">
+    <value>Copy the path of the chosen excluded file</value>
+    <comment>Screen-reader name.</comment>
+  </data>
+  <data name="OpenPillionIgnoreButton" xml:space="preserve">
+    <value>Open .pillionignore</value>
+    <comment>Button that opens the .pillionignore file of the chosen root.</comment>
+  </data>
+  <data name="OpenPillionIgnoreName" xml:space="preserve">
+    <value>Open the .pillionignore file of the chosen root</value>
+    <comment>Screen-reader name.</comment>
+  </data>
+  <data name="OpenPillionIgnoreToolTip" xml:space="preserve">
+    <value>Open .pillionignore at the repository root (created when it does not exist) to exclude more paths</value>
+    <comment>Tooltip.</comment>
+  </data>
+  <data name="ExcludedListName" xml:space="preserve">
+    <value>Excluded files and folders, secret-bearing files first</value>
+    <comment>Screen-reader name of the list.</comment>
+  </data>
+  <data name="ExcludedColumnShield" xml:space="preserve">
+    <value>Secret</value>
+    <comment>Header of the column with the shield glyph.</comment>
+  </data>
+  <data name="ExcludedColumnPath" xml:space="preserve">
+    <value>Path</value>
+    <comment>Column header.</comment>
+  </data>
+  <data name="ExcludedColumnKind" xml:space="preserve">
+    <value>Kind</value>
+    <comment>Column header.</comment>
+  </data>
+  <data name="ExcludedColumnReason" xml:space="preserve">
+    <value>Rule</value>
+    <comment>Column header.</comment>
+  </data>
+  <data name="ExcludedColumnDetails" xml:space="preserve">
+    <value>Details</value>
+    <comment>Column header.</comment>
+  </data>
+  <data name="ExcludedNoRoot" xml:space="preserve">
+    <value>No repository root is open.</value>
+    <comment>Shown on the Excluded files tab without a root.</comment>
+  </data>
+  <data name="ExcludedNone" xml:space="preserve">
+    <value>Nothing is excluded.</value>
+    <comment>Shown when a root excludes nothing.</comment>
+  </data>
+  <data name="ExcludedNoSecretFiles" xml:space="preserve">
+    <value>No secret-bearing files were found.</value>
+    <comment>Shown when the secret-only filter matches nothing.</comment>
+  </data>
+  <data name="ExcludedPageFormat" xml:space="preserve">
+    <value>Showing {0}-{1} of {2}</value>
+    <comment>Page line; first and last entry shown, total.</comment>
+  </data>
+  <data name="ExcludedFailedFormat" xml:space="preserve">
+    <value>Could not read the excluded files: {0}</value>
+    <comment>Shown when the list failed; {0} is the reason.</comment>
+  </data>
+  <data name="GroupSecretBearing" xml:space="preserve">
+    <value>Secret-bearing files (never indexed)</value>
+    <comment>Group header on the Excluded files list.</comment>
+  </data>
+  <data name="GroupOtherExclusions" xml:space="preserve">
+    <value>Other exclusions</value>
+    <comment>Group header on the Excluded files list.</comment>
+  </data>
+  <data name="KindSecretFile" xml:space="preserve">
+    <value>Secret-bearing file</value>
+    <comment>Kind column.</comment>
+  </data>
+  <data name="KindSecretFolder" xml:space="preserve">
+    <value>Secret-bearing folder</value>
+    <comment>Kind column.</comment>
+  </data>
+  <data name="KindFile" xml:space="preserve">
+    <value>File</value>
+    <comment>Kind column.</comment>
+  </data>
+  <data name="KindFolder" xml:space="preserve">
+    <value>Folder</value>
+    <comment>Kind column.</comment>
+  </data>
+  <data name="ShieldName" xml:space="preserve">
+    <value>Secret-bearing</value>
+    <comment>Screen-reader name of the shield glyph.</comment>
+  </data>
+  <data name="ExcludedRowNameFormat" xml:space="preserve">
+    <value>{0}. {1}. {2}. {3}</value>
+    <comment>Screen-reader name of an excluded file row; path, kind, rule, details.</comment>
+  </data>
+  <data name="PillionIgnoreFailedFormat" xml:space="preserve">
+    <value>Could not open .pillionignore in {0}: {1}</value>
+    <comment>Shown when the file could not be created or opened.</comment>
+  </data>
+  <data name="ReasonSecretBearing" xml:space="preserve">
+    <value>Secret-bearing file</value>
+    <comment>Rule that excluded a file.</comment>
+  </data>
+  <data name="ReasonGitIgnore" xml:space="preserve">
+    <value>Ignored by .gitignore</value>
+    <comment>Rule that excluded a file.</comment>
+  </data>
+  <data name="ReasonPillionIgnore" xml:space="preserve">
+    <value>Ignored by .pillionignore</value>
+    <comment>Rule that excluded a file.</comment>
+  </data>
+  <data name="ReasonBuiltIn" xml:space="preserve">
+    <value>Built-in exclusion</value>
+    <comment>Rule that excluded a file.</comment>
+  </data>
+  <data name="ReasonUserExclude" xml:space="preserve">
+    <value>Matches indexing.exclude</value>
+    <comment>Rule that excluded a file.</comment>
+  </data>
+  <data name="ReasonGeneratedFile" xml:space="preserve">
+    <value>Generated file</value>
+    <comment>Rule that excluded a file.</comment>
+  </data>
+  <data name="ReasonMinifiedFile" xml:space="preserve">
+    <value>Minified file</value>
+    <comment>Rule that excluded a file.</comment>
+  </data>
+  <data name="ReasonLockFile" xml:space="preserve">
+    <value>Lock file</value>
+    <comment>Rule that excluded a file.</comment>
+  </data>
+  <data name="ReasonGeneratedHeader" xml:space="preserve">
+    <value>Generated header</value>
+    <comment>Rule that excluded a file.</comment>
+  </data>
+  <data name="ReasonBinary" xml:space="preserve">
+    <value>Binary file</value>
+    <comment>Rule that excluded a file.</comment>
+  </data>
+  <data name="ReasonTooLarge" xml:space="preserve">
+    <value>Too large</value>
+    <comment>Rule that excluded a file.</comment>
+  </data>
+  <data name="ReasonReparsePoint" xml:space="preserve">
+    <value>Link or reparse point</value>
+    <comment>Rule that excluded a file.</comment>
+  </data>
+  <data name="ReasonNestedRepository" xml:space="preserve">
+    <value>Nested repository</value>
+    <comment>Rule that excluded a file.</comment>
+  </data>
+  <data name="ReasonUnreadable" xml:space="preserve">
+    <value>Unreadable</value>
+    <comment>Rule that excluded a file.</comment>
+  </data>
+  <data name="ReasonUnknown" xml:space="preserve">
+    <value>Excluded</value>
+    <comment>Rule that excluded a file when the host named none.</comment>
+  </data>
+  <data name="IndexesSummaryFormat" xml:space="preserve">
+    <value>{0} index(es), {1} on disk, {2} stale</value>
+    <comment>Summary above the index list; count, disk use, stale count.</comment>
+  </data>
+  <data name="IndexesNone" xml:space="preserve">
+    <value>There are no index folders on this machine.</value>
+    <comment>Shown when there are none.</comment>
+  </data>
+  <data name="IndexesFailedFormat" xml:space="preserve">
+    <value>Could not read the index folders: {0}</value>
+    <comment>Shown when the list failed; {0} is the reason.</comment>
+  </data>
+  <data name="IndexesListName" xml:space="preserve">
+    <value>Index folders on this machine</value>
+    <comment>Screen-reader name of the list.</comment>
+  </data>
+  <data name="RootExists" xml:space="preserve">
+    <value>Root exists</value>
+    <comment>Whether an index's repository root still exists.</comment>
+  </data>
+  <data name="RootGone" xml:space="preserve">
+    <value>Root is gone (stale)</value>
+    <comment>Whether an index's repository root still exists.</comment>
+  </data>
+  <data name="RootUnknown" xml:space="preserve">
+    <value>Root unknown (drive offline or no state file)</value>
+    <comment>Whether an index's repository root still exists.</comment>
+  </data>
+  <data name="InUseOpen" xml:space="preserve">
+    <value>Open in this Visual Studio</value>
+    <comment>Whether an index is in use.</comment>
+  </data>
+  <data name="InUseOtherHost" xml:space="preserve">
+    <value>In use by another running host</value>
+    <comment>Whether an index is in use.</comment>
+  </data>
+  <data name="NotInUse" xml:space="preserve">
+    <value>Not in use</value>
+    <comment>Whether an index is in use.</comment>
+  </data>
+  <data name="LastUsedLabel" xml:space="preserve">
+    <value>Last used</value>
+    <comment>Label.</comment>
+  </data>
+  <data name="RootExistsLabel" xml:space="preserve">
+    <value>Repository</value>
+    <comment>Label of whether the root exists.</comment>
+  </data>
+  <data name="InUseLabel" xml:space="preserve">
+    <value>State</value>
+    <comment>Label of whether the index is in use.</comment>
+  </data>
+  <data name="IndexRowNameFormat" xml:space="preserve">
+    <value>{0}. {1}. {2}. {3}</value>
+    <comment>Screen-reader name of an index folder row; root, disk use, root state, use.</comment>
+  </data>
+  <data name="DeleteIndexNameFormat" xml:space="preserve">
+    <value>Delete the index folder of {0}</value>
+    <comment>Screen-reader name of an index folder's Delete button.</comment>
+  </data>
+  <data name="DeleteIndexToolTip" xml:space="preserve">
+    <value>Delete this index folder (asks first; not possible while another host uses it)</value>
+    <comment>Tooltip.</comment>
+  </data>
+  <data name="StatusBarIndexingFormat" xml:space="preserve">
+    <value>Indexing {0}%</value>
+    <comment>Status bar text while indexing; {0} is the percentage.</comment>
+  </data>
+  <data name="StatusBarIndexing" xml:space="preserve">
+    <value>Indexing</value>
+    <comment>Status bar text while indexing without a measure.</comment>
+  </data>
+  <data name="StatusBarPausedFormat" xml:space="preserve">
+    <value>Index paused: {0}</value>
+    <comment>Status bar text while paused; {0} is the short reason.</comment>
+  </data>
+  <data name="StatusBarPaused" xml:space="preserve">
+    <value>Index paused</value>
+    <comment>Status bar text while paused.</comment>
+  </data>
+  <data name="StatusBarFailed" xml:space="preserve">
+    <value>Index error</value>
+    <comment>Status bar text after an indexing error.</comment>
+  </data>
+  <data name="StatusBarOpenName" xml:space="preserve">
+    <value>Open the Pillion Index window</value>
+    <comment>Screen-reader name and tooltip prefix of the status bar indicator.</comment>
+  </data>
+  <data name="SummaryNoStatus" xml:space="preserve">
+    <value>The index status is not known yet</value>
+    <comment>Summary sentence.</comment>
+  </data>
+  <data name="SummaryFailed" xml:space="preserve">
+    <value>Indexing failed</value>
+    <comment>Summary sentence.</comment>
+  </data>
+  <data name="SummaryFailedFormat" xml:space="preserve">
+    <value>Indexing failed: {0}</value>
+    <comment>Summary sentence; {0} is the error.</comment>
+  </data>
+  <data name="SummaryPaused" xml:space="preserve">
+    <value>Indexing is paused</value>
+    <comment>Summary sentence.</comment>
+  </data>
+  <data name="SummaryPausedFormat" xml:space="preserve">
+    <value>Indexing is paused: {0}</value>
+    <comment>Summary sentence; {0} is the reason.</comment>
+  </data>
+  <data name="SummaryIndexingFormat" xml:space="preserve">
+    <value>Indexing: {0}</value>
+    <comment>Summary sentence; {0} is the phase.</comment>
+  </data>
+  <data name="SummaryIdle" xml:space="preserve">
+    <value>The index is up to date</value>
+    <comment>Summary sentence.</comment>
+  </data>
+  <data name="SummaryNoIndex" xml:space="preserve">
+    <value>There is no index to build</value>
+    <comment>Summary sentence.</comment>
+  </data>
+  <data name="OptionsDisabledMessage" xml:space="preserve">
+    <value>Indexing options are disabled by settings or policy</value>
+    <comment>Shown instead of the Indexing page while the indexWindow feature flag is off.</comment>
+  </data>
+  <data name="OptionsPageName" xml:space="preserve">
+    <value>Pillion Programmer indexing</value>
+    <comment>Screen-reader name of the Indexing Options page.</comment>
+  </data>
+  <data name="OptionsExcludeLabel" xml:space="preserve">
+    <value>_Exclude patterns</value>
+    <comment>Label of the exclude box.</comment>
+  </data>
+  <data name="OptionsExcludeName" xml:space="preserve">
+    <value>Exclude patterns, one per line</value>
+    <comment>Screen-reader name of the exclude box.</comment>
+  </data>
+  <data name="OptionsExcludeHelp" xml:space="preserve">
+    <value>One pattern per line, in .gitignore syntax. Files that match are never indexed. Add more with a .pillionignore file at the repository root.</value>
+    <comment>Help under the exclude box.</comment>
+  </data>
+  <data name="OptionsMaxMemoryLabel" xml:space="preserve">
+    <value>Maximum _memory for indexing (MB)</value>
+    <comment>Label.</comment>
+  </data>
+  <data name="OptionsMaxMemoryName" xml:space="preserve">
+    <value>Maximum memory for indexing in megabytes</value>
+    <comment>Screen-reader name.</comment>
+  </data>
+  <data name="OptionsMaxMemoryHelp" xml:space="preserve">
+    <value>Indexing pauses when it reaches this limit, even after halving the embedding batch. The default is 1536.</value>
+    <comment>Help.</comment>
+  </data>
+  <data name="OptionsPauseOnBattery" xml:space="preserve">
+    <value>Pause indexing on _battery saver</value>
+    <comment>Check box.</comment>
+  </data>
+  <data name="OptionsPauseOnBatteryName" xml:space="preserve">
+    <value>Pause indexing while battery saver is on</value>
+    <comment>Screen-reader name.</comment>
+  </data>
+  <data name="OptionsRetentionLabel" xml:space="preserve">
+    <value>_Retention (days)</value>
+    <comment>Label.</comment>
+  </data>
+  <data name="OptionsRetentionName" xml:space="preserve">
+    <value>Retention in days</value>
+    <comment>Screen-reader name.</comment>
+  </data>
+  <data name="OptionsRetentionHelp" xml:space="preserve">
+    <value>An index that is not opened for this many days is deleted, and so is one whose repository folder no longer exists. 0 turns the age rule off. The default is 30.</value>
+    <comment>Help.</comment>
+  </data>
+  <data name="OptionsModelFormat" xml:space="preserve">
+    <value>Active embedding model: {0}</value>
+    <comment>Read-only line; {0} is the model id.</comment>
+  </data>
+  <data name="OptionsModelNone" xml:space="preserve">
+    <value>Active embedding model: chosen when the first index is built (the bundled model by default)</value>
+    <comment>Read-only line when no index exists yet.</comment>
+  </data>
+  <data name="OptionsModelName" xml:space="preserve">
+    <value>Active embedding model, read only</value>
+    <comment>Screen-reader name of the line.</comment>
+  </data>
+  <data name="OptionsMaxMemoryInvalidFormat" xml:space="preserve">
+    <value>Maximum memory must be a whole number of megabytes from {0} to {1}.</value>
+    <comment>Validation message.</comment>
+  </data>
+  <data name="OptionsRetentionInvalidFormat" xml:space="preserve">
+    <value>Retention must be a whole number of days from {0} to {1}.</value>
+    <comment>Validation message.</comment>
+  </data>
+  <data name="OptionsSave" xml:space="preserve">
+    <value>Save</value>
+    <comment>Button.</comment>
+  </data>
+  <data name="OptionsSaveName" xml:space="preserve">
+    <value>Save indexing settings</value>
+    <comment>Screen-reader name.</comment>
+  </data>
+  <data name="OptionsReload" xml:space="preserve">
+    <value>Reload</value>
+    <comment>Button.</comment>
+  </data>
+  <data name="OptionsReloadName" xml:space="preserve">
+    <value>Reload indexing settings</value>
+    <comment>Screen-reader name.</comment>
+  </data>
+</root>

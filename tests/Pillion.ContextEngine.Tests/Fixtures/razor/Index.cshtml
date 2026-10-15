@@ -1,0 +1,17 @@
+@model IndexModel
+@{
+    ViewData["Title"] = "Home";
+    var greeting = "Hello";
+}
+
+<div class="text-center">
+    <h1 class="display-4">@greeting</h1>
+    @if (Model.ShowLink)
+    {
+        <a href="/about">About</a>
+    }
+</div>
+
+@functions {
+    public string Shout(string text) => text.ToUpperInvariant();
+}
