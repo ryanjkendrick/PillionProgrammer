@@ -20,6 +20,8 @@
     <!-- Roslyn's C# and VB parsers, for syntax validation of inline edits (no compilation; see Directory.Packages.props). -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
     <PackageReference Include="Microsoft.CodeAnalysis.VisualBasic" />
+    <!-- @git mentions (work item 2.13): diffs and commits through libgit2; its native git2-*.dll ships in the publish. -->
+    <PackageReference Include="LibGit2Sharp" />
   </ItemGroup>
 
   <ItemGroup>
