@@ -337,7 +337,10 @@ if a load times out with models listed in the message, unload one with `ollama s
 
 `Context/ContextAssembler.cs` builds the prompt of a chat request (design section 7, Context assembly), independent of
 any provider. `ModelGateway.ChatAsync` uses it for a request that carries `Pins`, a `CurrentFile` or
-`CurrentFileRegion`, or `ProjectRules` (`ContextAssembler.ShouldAssemble`); any other request is sent exactly as before.
+`CurrentFileRegion`, or `ProjectRules` (`ContextAssembler.ShouldAssemble`), and for a chat request whose `RetrievalMode` is
+not `Off` when a registered source asks for it (`ShouldAssembleAsync`, `IContextSource.RequestsAssemblyAsync`: the host's
+retrieval source does when `retrieval` is on and an index is open; work item 2.12); any other request, and every inline
+edit and summary, is sent exactly as before.
 Assembly runs once per candidate model, because the model's window decides what fits; routing for such a request checks
 only that the user's own message fits, so history that assembly is about to compress cannot rule a small-window model out.
 
@@ -354,8 +357,8 @@ at all fails with `ContextOverflow` for that candidate, and the next candidate (
 | 1 | Project rules (`ProjectRules`, supplied by the VSIX after workspace trust) | 10% of the budget | Head kept, elision marker |
 | 2 | Pins, in the order the client sent them | 25% of the budget each | First 60% and last 40%, elision marker between |
 | 3 | Current file region | 15% | Lines around the middle kept, markers at the cut ends |
-| 4 | Retrieved chunks (phase 2 hook, `IContextSource`) | 20% | Head kept |
-| 5 | Repository map (phase 2 hook) | 10% | Head kept |
+| 4 | Retrieved chunks by fused score (`IContextSource`, slot `RetrievedChunks`, asked before any repo map source) | 20% for all of them, 8% each (`RetrievedChunkCapFraction`) | Each chunk on its own: first lines kept; a chunk that no longer fits is dropped and a later, smaller one may still go in |
+| 5 | Repository map (slot `RepoMap`) | 10% | Head kept |
 | 6 | History, newest turns first | what is left | Compressed into a rolling summary |
 
 An item that does not fit the room left is cut to it when at least 64 tokens remain, otherwise dropped. Cuts happen on
@@ -363,6 +366,16 @@ line boundaries; the budget is checked with the real count, not the estimate (`T
 approved excluded or secret file (`IsSensitive`) is dropped for a cloud model, and a pin or current file that matches
 `indexing.exclude` or the secret-file rules without approval is dropped (`FileAccessPolicy`, shared with mention
 resolution in the host).
+
+**Retrieved chunks and citations (work item 2.12).** A source of retrieved code returns a `ContextContribution` with
+`Chunks` (`ContextChunk`: chunk id, path relative to the repository root, full path, 1-based span, text, breadcrumb,
+score) and an introduction that tells the model to cite them. Each chunk becomes `### path:start-end` and a fenced block,
+and its own report item (`Kind` `RetrievedChunks`, `Key` = the chunk id); the repo map's item has the source's `Key`
+(`repoMap`). `ChatRequest.ExcludedContextKeys` leaves out chunks and contributions by key (the Context Inspector's remove
+button); a chunk whose file is now excluded or looks secret is dropped. `AssembledContext.SentChunks` lists what went in.
+After the stream, `CitationExtractor` turns `path:line`, `path:start-end` (also `#L12-L14`, an en dash, a bare file name or
+a full path) references that fall inside a sent chunk into `Citation`s with `ReplyOffset` just after the reference; when the
+reply names none, every sent chunk is cited with `ReplyOffset` -1 (implicit). The final chunk carries them.
 
 **History and the rolling summary.** If the history fits, it is kept verbatim. Otherwise the newest turns that fit in half
 of the room (starting at a user turn) stay, and the older turns are summarised through `IHistorySummariser`, which the gateway

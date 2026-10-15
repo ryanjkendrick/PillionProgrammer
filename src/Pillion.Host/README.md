@@ -198,6 +198,35 @@ returns the same hits as `SearchDetailedAsync` without the timings. `SearchReque
 - `features.reranker` (off by default) is read, but no cross-encoder ships yet (licence review, design section 18): the
   fused order is kept and the host logs that once.
 
+### Context for prompts (work item 2.12)
+
+`CodeContextRetriever` is the part the prompt builders share: it honours `retrieval`, asks the catalog whether an index is
+open, runs `IRetrievalService.RetrieveAsync` (the retriever's own shape: 1-based lines, paths relative to the root) and maps
+hits to `ContextChunk`s; a failed search gives nothing. It resolves `IRetrievalService` lazily, because the question embedder
+goes through the gateway, which takes the autocomplete snippet source.
+
+- **Chat, retrieved chunks** (`RetrievalContextSource`, an `IContextSource`): unless `RetrievalMode` is `Off`, the query is
+  the user's latest message plus the identifiers of pinned selections, the focus files are the current file and the pinned
+  files, and `MaxRetrievedChunks` results are asked for (default 8, at most 20). Chunks of a pinned file are left out. It
+  asks for assembly of a plain request when an index is open. The result is kept for 30 s per request id, so fallback
+  models and the preview do not search again.
+- **Chat, repo map** (`RepoMapContextSource`): `RepoMapRenderer` over the catalog's symbol graphs (else the
+  `ISymbolGraphProvider`'s), focused on the same files, within the assembler's repo map cap counted with the chat model's
+  tokenizer; key `repoMap`. The read-only catalog carries no graphs, so the map appears once the indexing pipeline (2.9)
+  supplies them.
+- **Autocomplete** (`AutocompleteSnippetProvider`, the gateway's `IAutocompleteSnippetSource`): the enclosing declaration
+  and the identifiers of the caret's lines, open documents as focus files, a 100 ms budget, chunks of other files only, at
+  most three; a degraded search gives none. The snippets are chosen once per document and enclosing member and reused for
+  every keystroke in it until the declaration changes or 30 s pass (one search in flight per member, detached from the
+  keystroke's cancellation), so the prompt prefix stays the same; the gateway caches completions per snippet set.
+- **Inline edits** (`InlineEditRetrieval`, `IInlineEditContext`): the instruction and the identifiers of the code to edit,
+  the document as focus file, at most four chunks, none overlapping the scope or the context sent around it.
+
+Measured on a generated 100,000-chunk encrypted index (`ContextAssemblyBenchmarkTests`, `Category=Benchmark`): whole chat
+assembly with 8 retrieved chunks and the repo map, p50 44 to 47 ms and p95 55 to 59 ms with a hashing embedder (budget 150
+and 400 ms); with the bundled bge-small model embedding each question on the CPU (`Category=Model`), p50 153 ms and p95
+169 ms, of which the query embedding is 134 ms on average.
+
 ## Index status notification (`indexStatusChanged`)
 
 Host to client, a JSON-RPC notification with one positional argument, an `IndexStatus` (contract 1.3). `IndexStatusNotifier`
