@@ -1334,6 +1334,7 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         RefreshModelsCommand.RaiseCanExecuteChanged();
         NewConversationCommand.RaiseCanExecuteChanged();
         DeleteConversationCommand.RaiseCanExecuteChanged();
+        RetryLoadConversationCommand.RaiseCanExecuteChanged();
     }
 
     private void Run(Func<Task> work)
