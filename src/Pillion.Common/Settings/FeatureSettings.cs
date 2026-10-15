@@ -59,6 +59,9 @@ public static class FeatureNames
     /// <summary>Workspace queries: <c>find_references</c> and <c>callers_of</c> answered by the live Roslyn workspace in Visual Studio (<c>IWorkspaceQueryService</c>), with the index's approximate edges as the fallback (work item 2.14).</summary>
     public const string WorkspaceQueries = "workspaceQueries";
 
+    /// <summary>The Index window, its status bar indicator and the Indexing options page in Visual Studio (work item 2.15).</summary>
+    public const string IndexWindow = "indexWindow";
+
     /// <summary>Hybrid retrieval: <c>IContextService.SearchAsync</c> and <c>SearchDetailedAsync</c> over the open indexes (work item 2.11). An index also needs <see cref="Indexing"/> and <see cref="LocalStore"/>.</summary>
     public const string Retrieval = "retrieval";
 
@@ -87,6 +90,7 @@ public static class FeatureNames
         Embeddings,
         BundledEmbeddings,
         WorkspaceQueries,
+        IndexWindow,
         Retrieval,
         Reranker,
     ];
@@ -160,6 +164,7 @@ public sealed class FeatureSettings : SettingsNode
             "embeddings" => Embeddings,
             "bundledembeddings" => BundledEmbeddings,
             "workspacequeries" => WorkspaceQueries,
+            "indexwindow" => IndexWindow,
             "retrieval" => Retrieval,
             "reranker" => Reranker,
             _ => true,
@@ -231,6 +236,9 @@ public sealed class FeatureSettings : SettingsNode
             case "workspacequeries":
                 WorkspaceQueries = false;
                 break;
+            case "indexwindow":
+                IndexWindow = false;
+                break;
             case "retrieval":
                 Retrieval = false;
                 break;
@@ -269,6 +277,8 @@ public sealed class FeatureSettings : SettingsNode
     /// <c>callers_of</c> from the index's approximate edges only.
     /// </summary>
     public bool WorkspaceQueries { get; set; } = true;
+    /// <summary>Gets or sets a value indicating whether the Pillion Index window, the status bar indexing indicator and the Indexing options page are available in Visual Studio. The host indexes either way; this only hides the views.</summary>
+    public bool IndexWindow { get; set; } = true;
 
     /// <summary>
     /// Gets or sets a value indicating whether Pillion Host answers workspace searches with hybrid retrieval (lexical,
