@@ -72,6 +72,9 @@ public sealed record TreeSitterSymbolGrammar
     /// <summary>Regions whose identifiers are type uses (Python's <c>type</c> annotations).</summary>
     public IReadOnlySet<string> TypeRegions { get; init; } = FrozenSet<string>.Empty;
 
+    /// <summary>Subtrees that are skipped entirely (type parameter declarations: <c>&lt;T&gt;</c> declares <c>T</c>, it does not use it).</summary>
+    public IReadOnlySet<string> SkippedRegions { get; init; } = FrozenSet<string>.Empty;
+
     /// <summary>Type argument lists: names inside are type uses even within an inheritance region.</summary>
     public IReadOnlySet<string> TypeArgumentRegions { get; init; } = FrozenSet<string>.Empty;
 
@@ -122,7 +125,11 @@ public sealed record TreeSitterDefinitionRule(SymbolKind Kind)
 /// <param name="TargetField">The field holding the referenced expression (<c>function</c> of a call); its rightmost name is the reference. Null with <paramref name="NameField"/> null: the first named child.</param>
 /// <param name="NameField">With no target field: the field holding the name on the node itself (Java <c>method_invocation</c> → <c>name</c>).</param>
 /// <param name="QualifierField">With <paramref name="NameField"/>: the field holding the qualifier (<c>object</c>).</param>
-public sealed record TreeSitterReferenceRule(SymbolReferenceKind Kind, string? TargetField = null, string? NameField = null, string? QualifierField = null);
+public sealed record TreeSitterReferenceRule(SymbolReferenceKind Kind, string? TargetField = null, string? NameField = null, string? QualifierField = null)
+{
+    /// <summary>True for object creations (<c>new_expression</c>): the reference is a <see cref="SymbolReference.IsConstruction"/>.</summary>
+    public bool IsConstruction { get; init; }
+}
 
 /// <summary>Whether each file of a language is a module symbol, and its name.</summary>
 public enum FileModuleNaming

@@ -47,7 +47,7 @@ internal sealed class SymbolSink(SourceDocument document, string language)
     }
 
     /// <summary>Adds a reference at a document offset.</summary>
-    public void Reference(string name, SymbolReferenceKind kind, int offset, string? qualifier, string fromContainer)
+    public void Reference(string name, SymbolReferenceKind kind, int offset, string? qualifier, string fromContainer, bool isConstruction = false)
     {
         name = CleanName(name);
         if (name.Length == 0)
@@ -64,6 +64,7 @@ internal sealed class SymbolSink(SourceDocument document, string language)
             Kind = kind,
             Qualifier = string.IsNullOrEmpty(qualifier) ? null : Share(qualifier),
             FromContainer = Share(fromContainer ?? string.Empty),
+            IsConstruction = isConstruction,
             Language = Language,
         });
     }

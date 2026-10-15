@@ -240,7 +240,7 @@ public sealed class VisualBasicSymbolExtractor : SyntaxSymbolExtractor
 
         public override void VisitObjectCreationExpression(ObjectCreationExpressionSyntax node)
         {
-            TypeName(node.Type, SymbolReferenceKind.Call);
+            TypeName(node.Type, SymbolReferenceKind.Call, construction: true);
             Visit(node.ArgumentList);
             Visit(node.Initializer);
         }
@@ -331,8 +331,8 @@ public sealed class VisualBasicSymbolExtractor : SyntaxSymbolExtractor
         private void Define(string name, SymbolKind kind, int start, int end, string signature) =>
             sink.Define(name, kind, _container, start, end, signature);
 
-        private void Reference(string name, SymbolReferenceKind kind, int position, string? qualifier) =>
-            sink.Reference(name, kind, position, qualifier, _from);
+        private void Reference(string name, SymbolReferenceKind kind, int position, string? qualifier, bool construction = false) =>
+            sink.Reference(name, kind, position, qualifier, _from, construction);
 
         private void SimpleName(SimpleNameSyntax node)
         {
@@ -375,14 +375,14 @@ public sealed class VisualBasicSymbolExtractor : SyntaxSymbolExtractor
             Reference(name, SymbolReferenceKind.Use, node.SpanStart, memberQualifier);
         }
 
-        private void TypeName(TypeSyntax type, SymbolReferenceKind kind)
+        private void TypeName(TypeSyntax type, SymbolReferenceKind kind, bool construction = false)
         {
             if (type is NameSyntax name)
             {
                 var (text, position, qualifier) = Rightmost(name);
                 if (text.Length > 0)
                 {
-                    Reference(text, kind, position, qualifier);
+                    Reference(text, kind, position, qualifier, construction);
                 }
 
                 VisitTypeArguments(name switch
@@ -394,11 +394,11 @@ public sealed class VisualBasicSymbolExtractor : SyntaxSymbolExtractor
             }
             else if (type is NullableTypeSyntax nullable)
             {
-                TypeName(nullable.ElementType, kind);
+                TypeName(nullable.ElementType, kind, construction);
             }
             else if (type is ArrayTypeSyntax array)
             {
-                TypeName(array.ElementType, kind);
+                TypeName(array.ElementType, kind, construction);
             }
             else
             {
@@ -431,7 +431,8 @@ public sealed class VisualBasicSymbolExtractor : SyntaxSymbolExtractor
             }
 
             var savedFrom = _from;
-            _from = _container.Length == 0 ? name : _container + Breadcrumbs.Separator + Breadcrumbs.Sanitize(name);
+            var segment = Breadcrumbs.Sanitize(name);
+            _from = segment.Length == 0 ? _container : _container.Length == 0 ? segment : _container + Breadcrumbs.Separator + segment;
             _locals = CollectLocals(node);
             _memberDepth++;
             try
@@ -474,18 +475,16 @@ public sealed class VisualBasicSymbolExtractor : SyntaxSymbolExtractor
             return SignatureText.Normalize(source.ToString(TextSpan.FromBounds(start, end)));
         }
 
-        private string? Qualifier(ExpressionSyntax expression)
+        /// <summary>The simple name an access is made through (a type, namespace or variable), as in the C# extractor.</summary>
+        private static string? Qualifier(ExpressionSyntax expression) => expression switch
         {
-            var qualifier = expression switch
-            {
-                SimpleNameSyntax simple => simple.Identifier.ValueText,
-                MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
-                QualifiedNameSyntax qualified => qualified.Right.Identifier.ValueText,
-                _ => null,
-            };
-
-            return qualifier is null || _locals?.Contains(qualifier) == true ? null : qualifier;
-        }
+            SimpleNameSyntax simple => simple.Identifier.ValueText,
+            MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
+            QualifiedNameSyntax qualified => qualified.Right.Identifier.ValueText,
+            ObjectCreationExpressionSyntax { Type: NameSyntax type } => Rightmost(type).Name is { Length: > 0 } name ? name : null,
+            ParenthesizedExpressionSyntax parenthesized => Qualifier(parenthesized.Expression),
+            _ => null,
+        };
 
         private static HashSet<string> CollectLocals(SyntaxNode member)
         {

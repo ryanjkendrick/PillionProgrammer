@@ -119,6 +119,10 @@ public sealed class TreeSitterSymbolExtractor : SyntaxSymbolExtractor
 
         public bool TypeArguments { get; set; }
 
+        public bool Skipped { get; set; }
+
+        public bool Leading { get; set; }
+
         public Mode Region { get; set; }
     }
 
@@ -182,6 +186,8 @@ public sealed class TreeSitterSymbolExtractor : SyntaxSymbolExtractor
             Flag(grammar.Grammar.FileNamespaces, role => role.FileNamespace = true);
             Flag(grammar.Grammar.BodyTypes, role => role.Body = true);
             Flag(grammar.Grammar.FunctionValueTypes, role => role.FunctionValue = true);
+            Flag(grammar.Grammar.Leading, role => role.Leading = true);
+            Flag(grammar.SkippedRegions, role => role.Skipped = true);
             Flag(grammar.InheritanceRegions, role => role.Region = Mode.Inheritance);
             Flag(grammar.ImportRegions, role => role.Region = Mode.Import);
             Flag(grammar.TypeRegions, role => role.Region = Mode.TypeUse);
@@ -337,22 +343,23 @@ public sealed class TreeSitterSymbolExtractor : SyntaxSymbolExtractor
         private bool Enter(TsNode node, int depth)
         {
             var role = compiled.Role(node);
+            var frame = _frames.Peek();
+            var mode = frame.Mode;
+            if (_pending.Count > 0 && _pending.Remove(Key(node), out var pendingMode))
+            {
+                // A field marked by its declaration (Python superclasses): its names take the pending mode.
+                mode = pendingMode;
+                frame = Push(depth, frame, frame.Container, frame.From, frame.Scope, frame.TypeName, mode, frame.SuppressDefinitions);
+            }
+
             if (role is null)
             {
                 return true;
             }
 
-            if (_suppressed.Count > 0 && _suppressed.Remove(Key(node)))
+            if (role.Skipped || (_suppressed.Count > 0 && _suppressed.Remove(Key(node))))
             {
                 return false;
-            }
-
-            var frame = _frames.Peek();
-            var mode = frame.Mode;
-            if (_pending.Count > 0 && _pending.Remove(Key(node), out var pendingMode))
-            {
-                mode = pendingMode;
-                frame = Push(depth, frame, frame.Container, frame.From, frame.Scope, frame.TypeName, mode, frame.SuppressDefinitions);
             }
 
             if (role.FileNamespace)
@@ -486,7 +493,9 @@ public sealed class TreeSitterSymbolExtractor : SyntaxSymbolExtractor
                 return true;
             }
 
-            sink.Define(name, kind, container, node.StartIndex, node.EndIndex, Signature(node.StartIndex, HeaderEnd(node)));
+            // A type alias has no body: its whole text is the signature (cut to the signature length).
+            var headerEnd = kind == SymbolKind.TypeAlias ? node.EndIndex : HeaderEnd(node);
+            sink.Define(name, kind, container, node.StartIndex, node.EndIndex, Signature(node.StartIndex, headerEnd));
             if (leaf is { } nameNode)
             {
                 _suppressed.Add(Key(nameNode));
@@ -558,7 +567,9 @@ public sealed class TreeSitterSymbolExtractor : SyntaxSymbolExtractor
             {
                 var nameNode = declarator == node
                     ? Child(node, compiled.LeftField) ?? Child(node, compiled.NameField)
-                    : Child(declarator, compiled.NameField) ?? Child(declarator, compiled.DeclaratorField) ?? declarator;
+                    : compiled.Role(declarator)?.DeclaratorWrapper == true
+                        ? declarator
+                        : Child(declarator, compiled.NameField) ?? Child(declarator, compiled.DeclaratorField) ?? declarator;
                 if (nameNode is null)
                 {
                     continue;
@@ -649,7 +660,7 @@ public sealed class TreeSitterSymbolExtractor : SyntaxSymbolExtractor
                 (name, qualifier, leaf) = NameOf(target);
             }
 
-            if (!Emit(name, rule.Kind, leaf?.StartIndex ?? node.StartIndex, qualifier, frame))
+            if (!Emit(name, rule.Kind, leaf?.StartIndex ?? node.StartIndex, qualifier, frame, rule.IsConstruction))
             {
                 return;
             }
@@ -716,7 +727,7 @@ public sealed class TreeSitterSymbolExtractor : SyntaxSymbolExtractor
             }
         }
 
-        private bool Emit(string name, SymbolReferenceKind kind, int offset, string? qualifier, Frame frame)
+        private bool Emit(string name, SymbolReferenceKind kind, int offset, string? qualifier, Frame frame, bool isConstruction = false)
         {
             if (!IsName(name) || _grammar.IgnoredNames.Contains(name))
             {
@@ -728,7 +739,7 @@ public sealed class TreeSitterSymbolExtractor : SyntaxSymbolExtractor
                 qualifier = null;
             }
 
-            sink.Reference(name, kind, offset, qualifier, frame.From);
+            sink.Reference(name, kind, offset, qualifier, frame.From, isConstruction);
             return true;
         }
 
@@ -756,7 +767,8 @@ public sealed class TreeSitterSymbolExtractor : SyntaxSymbolExtractor
                     {
                         if (node.GetChildForField(qualifierField) is { } owner)
                         {
-                            qualifier = NameOf(owner, depth + 1).Name;
+                            // Only a name qualifies (a.b.c, Point::new); a call or a parenthesised expression does not.
+                            qualifier = IsNameNode(owner) ? NameOf(owner, depth + 1).Name : null;
                             break;
                         }
                     }
@@ -798,8 +810,12 @@ public sealed class TreeSitterSymbolExtractor : SyntaxSymbolExtractor
             }
 
             var (lastName, _, lastLeaf) = NameOf(last, depth + 1);
-            return (lastName, previous is null ? null : NameOf(previous, depth + 1).Name, lastLeaf);
+            return (lastName, previous is not null && IsNameNode(previous) ? NameOf(previous, depth + 1).Name : null, lastLeaf);
         }
+
+        /// <summary>True for nodes that are names: identifiers, qualified names and leaves such as <c>this</c>.</summary>
+        private bool IsNameNode(TsNode node) => compiled.Role(node) is { Identifier: true } or { TypeIdentifier: true }
+            or { QualifiedName: true } or { QualifiedType: true } || node.NamedChildren.Count == 0;
 
         /// <summary>A definition's name: the first name field present, followed through C declarators.</summary>
         private (string Name, TsNode? Leaf, string? Scope) DefinitionName(TsNode node, ushort[] fields)
@@ -936,19 +952,32 @@ public sealed class TreeSitterSymbolExtractor : SyntaxSymbolExtractor
             return null;
         }
 
-        /// <summary>Where a declaration's header ends: the start of its body, else the end of its first line.</summary>
+        /// <summary>
+        /// Where a declaration's header ends: the start of its body (or of a comment before the body), else the end of
+        /// its first line.
+        /// </summary>
         private int HeaderEnd(TsNode node)
         {
             var body = Child(node, compiled.BodyField);
-            if (body is null)
+            int? comment = null;
+            using (var cursor = new TsTreeCursor(node))
             {
-                using var cursor = new TsTreeCursor(node);
                 if (cursor.GotoFirstChild())
                 {
                     do
                     {
                         var child = cursor.CurrentNode;
-                        if (child.IsNamed && compiled.Role(child) is { Body: true })
+                        if (body is not null && child.StartIndex >= body.StartIndex)
+                        {
+                            break;
+                        }
+
+                        var role = child.IsNamed ? compiled.Role(child) : null;
+                        if (role is { Leading: true } && child.StartIndex > node.StartIndex)
+                        {
+                            comment ??= child.StartIndex;
+                        }
+                        else if (body is null && role is { Body: true })
                         {
                             body = child;
                             break;
@@ -958,7 +987,8 @@ public sealed class TreeSitterSymbolExtractor : SyntaxSymbolExtractor
                 }
             }
 
-            return body?.StartIndex ?? FirstLineEnd(node);
+            var end = body?.StartIndex ?? FirstLineEnd(node);
+            return comment is { } commentStart ? Math.Min(end, commentStart) : end;
         }
 
         private int FirstLineEnd(TsNode node)

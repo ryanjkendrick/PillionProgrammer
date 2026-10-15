@@ -219,7 +219,7 @@ internal sealed class CSharpSymbolCollector(SymbolSink sink, SourceText source, 
 
     public override void VisitObjectCreationExpression(ObjectCreationExpressionSyntax node)
     {
-        TypeName(node.Type, SymbolReferenceKind.Call);
+        TypeName(node.Type, SymbolReferenceKind.Call, construction: true);
         Visit(node.ArgumentList);
         Visit(node.Initializer);
     }
@@ -248,6 +248,15 @@ internal sealed class CSharpSymbolCollector(SymbolSink sink, SourceText source, 
     }
 
     public override void VisitAttributeArgument(AttributeArgumentSyntax node) => Visit(node.Expression);
+
+    public override void VisitTypeParameterConstraintClause(TypeParameterConstraintClauseSyntax node)
+    {
+        // where T : class, IComparable<T>: the constraints are type uses, the type parameter is not.
+        foreach (var constraint in node.Constraints)
+        {
+            Visit(constraint);
+        }
+    }
 
     public override void VisitArgument(ArgumentSyntax node) => Visit(node.Expression);
 
@@ -373,8 +382,8 @@ internal sealed class CSharpSymbolCollector(SymbolSink sink, SourceText source, 
     private void Define(string name, SymbolKind kind, int start, int end, string signature) =>
         sink.Define(name, kind, _container, mapOffset(start), mapOffset(end), signature);
 
-    private void Reference(string name, SymbolReferenceKind kind, int position, string? qualifier) =>
-        sink.Reference(name, kind, mapOffset(position), qualifier, _from);
+    private void Reference(string name, SymbolReferenceKind kind, int position, string? qualifier, bool construction = false) =>
+        sink.Reference(name, kind, mapOffset(position), qualifier, _from, construction);
 
     private void SimpleName(SimpleNameSyntax node)
     {
@@ -425,7 +434,7 @@ internal sealed class CSharpSymbolCollector(SymbolSink sink, SourceText source, 
     }
 
     /// <summary>A type written in a call or base position: one reference for its rightmost name, type uses for its type arguments.</summary>
-    private void TypeName(TypeSyntax type, SymbolReferenceKind kind)
+    private void TypeName(TypeSyntax type, SymbolReferenceKind kind, bool construction = false)
     {
         switch (type)
         {
@@ -433,7 +442,7 @@ internal sealed class CSharpSymbolCollector(SymbolSink sink, SourceText source, 
                 var (name, position, qualifier) = Rightmost((NameSyntax)type);
                 if (name.Length > 0 && !IsIgnored(name))
                 {
-                    Reference(name, kind, position, qualifier);
+                    Reference(name, kind, position, qualifier, construction);
                 }
 
                 var right = type switch
@@ -445,10 +454,10 @@ internal sealed class CSharpSymbolCollector(SymbolSink sink, SourceText source, 
                 VisitTypeArguments(right);
                 break;
             case NullableTypeSyntax nullable:
-                TypeName(nullable.ElementType, kind);
+                TypeName(nullable.ElementType, kind, construction);
                 break;
             case ArrayTypeSyntax array:
-                TypeName(array.ElementType, kind);
+                TypeName(array.ElementType, kind, construction);
                 break;
             default:
                 Visit(type);
@@ -482,7 +491,8 @@ internal sealed class CSharpSymbolCollector(SymbolSink sink, SourceText source, 
         }
 
         var savedFrom = _from;
-        _from = _container.Length == 0 ? name : _container + Breadcrumbs.Separator + Breadcrumbs.Sanitize(name);
+        var segment = Breadcrumbs.Sanitize(name);
+        _from = segment.Length == 0 ? _container : _container.Length == 0 ? segment : _container + Breadcrumbs.Separator + segment;
         _locals = CollectLocals(node);
         _memberDepth++;
         try
@@ -594,7 +604,7 @@ internal sealed class CSharpSymbolCollector(SymbolSink sink, SourceText source, 
 
     private static int TypeHeaderEnd(BaseTypeDeclarationSyntax node)
     {
-        if (!node.OpenBraceToken.IsMissing)
+        if (node.OpenBraceToken.RawKind != 0 && !node.OpenBraceToken.IsMissing)
         {
             return node.OpenBraceToken.SpanStart;
         }
@@ -628,17 +638,19 @@ internal sealed class CSharpSymbolCollector(SymbolSink sink, SourceText source, 
     private static string? NameQualifier(SimpleNameSyntax node) =>
         node.Parent is QualifiedNameSyntax qualified && qualified.Right == node ? Rightmost(qualified.Left).Name : null;
 
-    private string? Qualifier(ExpressionSyntax expression)
+    /// <summary>
+    /// The simple name an access is made through: a type, namespace or variable name, or the type of
+    /// <c>new Order().Total</c>; null for <c>this</c>, <c>base</c> and other expressions. A variable's name is kept: it
+    /// tells the resolver the member is not on the current type, even though it names no container.
+    /// </summary>
+    private static string? Qualifier(ExpressionSyntax expression) => expression switch
     {
-        var qualifier = expression switch
-        {
-            SimpleNameSyntax simple => simple.Identifier.ValueText,
-            MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
-            QualifiedNameSyntax qualified => qualified.Right.Identifier.ValueText,
-            AliasQualifiedNameSyntax alias => alias.Name.Identifier.ValueText,
-            _ => null,
-        };
-
-        return qualifier is null || _locals?.Contains(qualifier) == true ? null : qualifier;
-    }
+        SimpleNameSyntax simple => simple.Identifier.ValueText,
+        MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
+        QualifiedNameSyntax qualified => qualified.Right.Identifier.ValueText,
+        AliasQualifiedNameSyntax alias => alias.Name.Identifier.ValueText,
+        ObjectCreationExpressionSyntax creation => Rightmost(creation.Type).Name is { Length: > 0 } type ? type : null,
+        ParenthesizedExpressionSyntax parenthesized => Qualifier(parenthesized.Expression),
+        _ => null,
+    };
 }

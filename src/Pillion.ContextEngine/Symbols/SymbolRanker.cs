@@ -3,7 +3,7 @@ namespace Pillion.ContextEngine.Symbols;
 /// <summary>Settings for <see cref="SymbolRanker"/>.</summary>
 public sealed record PageRankOptions
 {
-    /// <summary>The default options: damping 0.85, at most 50 iterations, converged when the ranks move less than 1e-9 in total.</summary>
+    /// <summary>The default options: damping 0.85, at most 50 iterations, converged when the ranks (which sum to 1) move less than 1e-6 in total in one iteration.</summary>
     public static PageRankOptions Default { get; } = new();
 
     /// <summary>The damping factor (the chance of following an edge rather than jumping anywhere).</summary>
@@ -13,7 +13,7 @@ public sealed record PageRankOptions
     public int MaxIterations { get; init; } = 50;
 
     /// <summary>Convergence: the sum of absolute rank changes in one iteration below which iteration stops.</summary>
-    public double Tolerance { get; init; } = 1e-9;
+    public double Tolerance { get; init; } = 1e-6;
 }
 
 /// <summary>

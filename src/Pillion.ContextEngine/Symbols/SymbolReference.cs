@@ -41,6 +41,12 @@ public sealed record SymbolReference
     /// </summary>
     public string FromContainer { get; init; } = string.Empty;
 
+    /// <summary>
+    /// True for a <see cref="SymbolReferenceKind.Call"/> that constructs an object (<c>new Order()</c>): it resolves to
+    /// types only, never to a method that happens to share the type's name.
+    /// </summary>
+    public bool IsConstruction { get; init; }
+
     /// <summary>The language identifier (one of <see cref="LanguageIds"/>).</summary>
     public string Language { get; init; } = LanguageIds.Text;
 }

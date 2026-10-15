@@ -58,9 +58,9 @@ public sealed partial class SqlSymbolExtractor : SyntaxSymbolExtractor
                 AddReference(sink, match.Groups["name"], start, SymbolReferenceKind.Use, from);
                 if (match.Groups["keyword"].Value.Equals("FROM", StringComparison.OrdinalIgnoreCase))
                 {
-                    // FROM a, b, c
+                    // FROM a, b x, c AS y
                     var position = match.Index + match.Length;
-                    while (CommaName().Match(statement, position) is { Success: true } next && next.Index == position)
+                    while (CommaName().Match(statement, position) is { Success: true } next)
                     {
                         AddReference(sink, next.Groups["name"], start, SymbolReferenceKind.Use, from);
                         position = next.Index + next.Length;
@@ -176,7 +176,8 @@ public sealed partial class SqlSymbolExtractor : SyntaxSymbolExtractor
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex TableReference();
 
-    [GeneratedRegex(@"\s*,\s*" + Name, RegexOptions.CultureInvariant)]
+    /// <summary>The next table of a <c>FROM</c> list, after the previous table's optional alias.</summary>
+    [GeneratedRegex(@"\G(?:\s+(?:AS\s+)?[A-Za-z_]\w*)?\s*,\s*" + Name, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex CommaName();
 
     [GeneratedRegex(@"\bEXEC(?:UTE)?\s+(?:@\w+\s*=\s*)?" + Name, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]

@@ -14,11 +14,14 @@ namespace Pillion.ContextEngine.Symbols;
 /// candidates, a construction resolves to its type). A dotted or <c>::</c> name with no match is retried as its last
 /// segment, qualified by the segment before it.</item>
 /// <item>Candidates whose kind cannot be what the reference names are dropped (<see cref="SymbolKinds.IsCompatible"/>:
-/// a type use names a type, a call names a callable or a type).</item>
+/// a type use names a type, a call names a callable or a type, a construction such as <c>new Order()</c> names a type).</item>
 /// <item>With a qualifier (<c>Point</c> in <c>Point::new</c>), candidates whose container ends with that name, or that
 /// live in a file whose stem is that name, are preferred when there are any (container-qualified resolution).</item>
-/// <item>An unqualified <see cref="SymbolReferenceKind.Use"/> (a bare identifier in C# or VB) resolves only within its
-/// own file, where its field or property almost always is.</item>
+/// <item>Without a qualifier, candidates declared in the innermost container around the reference (its
+/// <see cref="SymbolReference.FromContainer"/>: the class its code is in, else the namespace) are preferred when there
+/// are any.</item>
+/// <item>An unqualified <see cref="SymbolReferenceKind.Use"/> in C#, VB or Razor (a bare identifier, which names a
+/// member of the current type once locals are skipped) resolves only within its own file.</item>
 /// <item>Otherwise candidates in the same file are preferred, then candidates in the same partition, then any.</item>
 /// <item>One candidate gives one edge; up to <see cref="SymbolGraphOptions.MaxCandidates"/> give one edge each, marked
 /// ambiguous; more give none (counted as too ambiguous). References with no candidate are counted as unresolved.</item>
@@ -189,7 +192,7 @@ public sealed class SymbolGraphBuilder
 
             if (order == 0)
             {
-                order = SymbolKinds.IsContainer(b.Kind).CompareTo(SymbolKinds.IsContainer(a.Kind));
+                order = NestingRank(a.Kind).CompareTo(NestingRank(b.Kind));
             }
 
             if (order == 0)
@@ -204,9 +207,17 @@ public sealed class SymbolGraphBuilder
 
             return order != 0 ? order : a.Id.CompareTo(b.Id);
         }
+
+        /// <summary>What may contain what when two definitions span the same lines: namespaces, then types, then members.</summary>
+        internal static int NestingRank(SymbolKind kind) => kind switch
+        {
+            SymbolKind.Namespace or SymbolKind.Module => 0,
+            _ when SymbolKinds.IsContainer(kind) => 1,
+            _ => 2,
+        };
     }
 
-    /// <summary>Resolves references against a graph's definitions.</summary>
+    /// <summary>Resolves references against a graph's definitions, through the graph's name indexes.</summary>
     private sealed class Resolver(SymbolGraph graph, SymbolGraphOptions options)
     {
         private readonly List<int> _candidates = [];
@@ -220,21 +231,54 @@ public sealed class SymbolGraphBuilder
         {
             var name = reference.Name;
             var qualifier = reference.Qualifier;
-            var byName = graph.CandidatesNamed(name);
-            if (byName.Length == 0 && SplitQualified(name) is { } split)
+            var all = graph.CandidatesNamed(name);
+            if (all.Length == 0 && SplitQualified(name) is { } split)
             {
                 (name, var splitQualifier) = split;
                 qualifier ??= splitQualifier;
-                byName = graph.CandidatesNamed(name);
+                all = graph.CandidatesNamed(name);
             }
 
-            _candidates.Clear();
-            foreach (var index in byName)
+            if (all.Length == 0)
             {
-                if (SymbolKinds.IsCompatible(reference.Kind, graph.Definitions[index].Kind))
+                _unresolved++;
+                return;
+            }
+
+            // 1. Narrow by the qualifier, or else by the scope the reference is in.
+            var narrowed = qualifier is not null
+                ? Collect(reference, graph.CandidatesQualifiedBy(name, qualifier))
+                : CollectScope(reference, name);
+
+            // 2. Prefer the same file, then the same partition; bare C#/VB uses stay in their file.
+            var memberScoped = reference.Kind == SymbolReferenceKind.Use && reference.Qualifier is null && IsMemberScoped(reference.Language);
+            if (narrowed)
+            {
+                if (memberScoped)
                 {
-                    _candidates.Add(index);
+                    _candidates.RemoveAll(index => !SameFile(index, reference));
                 }
+                else if (!Narrow(index => SameFile(index, reference)))
+                {
+                    var partition = graph.PartitionOf(reference.FilePath);
+                    Narrow(index => string.Equals(graph.PartitionOf(graph.Definitions[index].FilePath), partition, StringComparison.Ordinal));
+                }
+            }
+            else if (!Collect(reference, graph.CandidatesInFile(name, reference.FilePath)) && !memberScoped
+                && !Collect(reference, graph.CandidatesInPartition(name, graph.PartitionOf(reference.FilePath))))
+            {
+                // Anywhere in the repository: count before collecting, a common name can have thousands of definitions.
+                var count = 0;
+                foreach (var index in all)
+                {
+                    if (IsCompatible(reference, index) && ++count > options.MaxCandidates)
+                    {
+                        _tooAmbiguous++;
+                        return;
+                    }
+                }
+
+                Collect(reference, all);
             }
 
             if (_candidates.Count == 0)
@@ -243,36 +287,13 @@ public sealed class SymbolGraphBuilder
                 return;
             }
 
-            if (qualifier is not null)
-            {
-                Narrow(index => ContainerMatches(graph.Definitions[index], qualifier));
-            }
-
-            if (reference.Kind == SymbolReferenceKind.Use && reference.Qualifier is null)
-            {
-                _candidates.RemoveAll(index => !string.Equals(graph.Definitions[index].FilePath, reference.FilePath, StringComparison.Ordinal));
-                if (_candidates.Count == 0)
-                {
-                    _unresolved++;
-                    return;
-                }
-            }
-            else
-            {
-                if (!Narrow(index => string.Equals(graph.Definitions[index].FilePath, reference.FilePath, StringComparison.Ordinal)))
-                {
-                    var partition = graph.PartitionOf(reference.FilePath);
-                    Narrow(index => string.Equals(graph.PartitionOf(graph.Definitions[index].FilePath), partition, StringComparison.Ordinal));
-                }
-            }
-
             if (_candidates.Count > options.MaxCandidates)
             {
                 _tooAmbiguous++;
                 return;
             }
 
-            var from = graph.InnermostAt(reference.FilePath, reference.Line);
+            var from = graph.SourceOf(reference.FilePath, reference.Line, reference.FromContainer);
             long? fromId = from >= 0 ? graph.Definitions[from].Id : null;
             foreach (var index in _candidates)
             {
@@ -294,7 +315,56 @@ public sealed class SymbolGraphBuilder
 
         public SymbolGraphStatistics Statistics(int references) => new(references, _resolved, _ambiguous, _tooAmbiguous, _unresolved);
 
-        /// <summary>Keeps the candidates that match, when any do; returns whether the list was narrowed to them.</summary>
+        /// <summary>Bare identifiers in these languages name members of the current type (or locals, which are skipped).</summary>
+        private static bool IsMemberScoped(string language) => language is LanguageIds.CSharp or LanguageIds.VisualBasic or LanguageIds.Razor;
+
+        /// <summary>
+        /// Collects the candidates declared in the innermost container around the reference that declares any: its
+        /// from-container (the member or class its code is in), then each enclosing container in turn.
+        /// </summary>
+        private bool CollectScope(SymbolReference reference, string name)
+        {
+            var scope = reference.FromContainer;
+            while (scope.Length > 0)
+            {
+                if (Collect(reference, graph.CandidatesIn(name, scope)))
+                {
+                    return true;
+                }
+
+                var cut = scope.LastIndexOf(Breadcrumbs.Separator, StringComparison.Ordinal);
+                scope = cut < 0 ? string.Empty : scope[..cut];
+            }
+
+            _candidates.Clear();
+            return false;
+        }
+
+        /// <summary>Replaces the candidates with the compatible ones in <paramref name="source"/>; returns whether there are any.</summary>
+        private bool Collect(SymbolReference reference, int[] source)
+        {
+            _candidates.Clear();
+            foreach (var index in source)
+            {
+                if (IsCompatible(reference, index))
+                {
+                    _candidates.Add(index);
+                }
+            }
+
+            return _candidates.Count > 0;
+        }
+
+        private bool IsCompatible(SymbolReference reference, int index)
+        {
+            var kind = graph.Definitions[index].Kind;
+            return SymbolKinds.IsCompatible(reference.Kind, kind) && (!reference.IsConstruction || SymbolKinds.IsType(kind));
+        }
+
+        private bool SameFile(int index, SymbolReference reference) =>
+            string.Equals(graph.Definitions[index].FilePath, reference.FilePath, StringComparison.Ordinal);
+
+        /// <summary>Keeps the candidates that match, when any do; returns whether any matched.</summary>
         private bool Narrow(Func<int, bool> match)
         {
             _preferred.Clear();
@@ -335,33 +405,50 @@ public sealed class SymbolGraphBuilder
     }
 
     /// <summary>
-    /// Whether a definition's container ends with the qualifier (generic arguments ignored, and the last part of a dotted
-    /// namespace accepted), or the definition's file is named after it.
+    /// The qualifiers that select a definition: the last segment of its container without generic arguments
+    /// (<c>Greeter</c> for <c>Fixtures.Sample &gt; Greeter&lt;T&gt;</c>), that segment's last dotted or <c>::</c> part
+    /// (<c>Sample</c> for the namespace <c>Fixtures.Sample</c>), and its file's name up to the first dot (a module).
     /// </summary>
-    internal static bool ContainerMatches(SymbolDefinition definition, string qualifier)
+    internal static IEnumerable<string> QualifierKeys(SymbolDefinition definition)
     {
         var container = definition.Container;
         if (container.Length > 0)
         {
-            var last = container[(container.LastIndexOf(Breadcrumbs.Separator, StringComparison.Ordinal) + 1)..].Trim();
+            var cut = container.LastIndexOf(Breadcrumbs.Separator, StringComparison.Ordinal);
+            var last = (cut < 0 ? container : container[(cut + Breadcrumbs.Separator.Length)..]).Trim();
             var generic = last.IndexOfAny(['<', '(', '[']);
             if (generic > 0)
             {
                 last = last[..generic].TrimEnd();
             }
 
-            if (string.Equals(last, qualifier, StringComparison.Ordinal)
-                || string.Equals(LastPart(last), qualifier, StringComparison.Ordinal))
+            if (last.Length > 0)
             {
-                return true;
+                yield return last;
+                var part = LastPart(last);
+                if (part.Length > 0 && part != last)
+                {
+                    yield return part;
+                }
             }
         }
 
         var path = definition.FilePath;
         var fileName = path[(path.LastIndexOfAny(['/', '\\']) + 1)..];
         var dot = fileName.IndexOf('.', StringComparison.Ordinal);
-        return string.Equals(dot > 0 ? fileName[..dot] : fileName, qualifier, StringComparison.Ordinal);
+        var stem = dot > 0 ? fileName[..dot] : fileName;
+        if (stem.Length > 0)
+        {
+            yield return stem;
+        }
     }
+
+    /// <summary>
+    /// Whether a definition's container ends with the qualifier (generic arguments ignored, and the last part of a dotted
+    /// namespace accepted), or the definition's file is named after it.
+    /// </summary>
+    internal static bool ContainerMatches(SymbolDefinition definition, string qualifier) =>
+        QualifierKeys(definition).Contains(qualifier, StringComparer.Ordinal);
 
     private static string LastPart(string name)
     {

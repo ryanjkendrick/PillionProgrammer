@@ -19,7 +19,12 @@ public sealed class SymbolGraph
     private readonly int[] _parents;
     private readonly Func<string, string> _partitionOf;
     private readonly Dictionary<string, string> _partitions = new(StringComparer.Ordinal);
+    private readonly Dictionary<(string Name, string Container), int[]> _inContainer;
+    private readonly Dictionary<(string Name, string Key), int[]> _byQualifierKey;
+    private readonly Dictionary<(string Name, string Path), int[]> _inFile;
+    private readonly Dictionary<(string Name, string Partition), int[]> _inPartition;
     private readonly Dictionary<string, int[]> _innermost = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Dictionary<string, List<int>>> _byQualifiedName = new(StringComparer.Ordinal);
     private readonly Lazy<SymbolRanking> _ranking;
     private Dictionary<long, int[]> _incoming = [];
     private Dictionary<long, int[]> _outgoing = [];
@@ -47,8 +52,9 @@ public sealed class SymbolGraph
             var range = _fileRanges[definition.FilePath];
             _fileRanges[definition.FilePath] = (range.Start, range.Count + 1);
 
-            // Definitions are in source order with containers first, so the enclosing one is on the stack.
-            while (stack.Count > 0 && definitions[stack[^1]].EndLine < definition.EndLine)
+            // Definitions are in source order with containers first, so the enclosing one is on the stack. Over the
+            // same lines, only a namespace contains a type and only a type contains a member.
+            while (stack.Count > 0 && !Contains(definitions[stack[^1]], definition))
             {
                 stack.RemoveAt(stack.Count - 1);
             }
@@ -57,7 +63,53 @@ public sealed class SymbolGraph
             stack.Add(i);
         }
 
+        // Resolution indexes over the candidates (constructors excluded), so a reference is resolved by lookups rather
+        // than by scanning every definition that shares its name.
+        var inContainer = new Dictionary<(string, string), List<int>>();
+        var byKey = new Dictionary<(string, string), List<int>>();
+        var inFile = new Dictionary<(string, string), List<int>>();
+        var inPartition = new Dictionary<(string, string), List<int>>();
+        for (var i = 0; i < definitions.Count; i++)
+        {
+            var definition = definitions[i];
+            if (definition.Kind == SymbolKind.Constructor)
+            {
+                continue;
+            }
+
+            var name = definition.Name;
+            Add(inContainer, (name, definition.Container), i);
+            foreach (var key in SymbolGraphBuilder.QualifierKeys(definition))
+            {
+                Add(byKey, (name, key), i);
+            }
+
+            Add(inFile, (name, definition.FilePath), i);
+            Add(inPartition, (name, PartitionOf(definition.FilePath)), i);
+        }
+
+        _inContainer = Freeze(inContainer);
+        _byQualifierKey = Freeze(byKey);
+        _inFile = Freeze(inFile);
+        _inPartition = Freeze(inPartition);
         _ranking = new Lazy<SymbolRanking>(() => SymbolRanker.Rank(this), LazyThreadSafetyMode.ExecutionAndPublication);
+
+        static void Add(Dictionary<(string, string), List<int>> map, (string, string) key, int index)
+        {
+            if (!map.TryGetValue(key, out var list))
+            {
+                list = [];
+                map[key] = list;
+            }
+
+            if (list.Count == 0 || list[^1] != index)
+            {
+                list.Add(index);
+            }
+        }
+
+        static Dictionary<(string, string), int[]> Freeze(Dictionary<(string, string), List<int>> map) =>
+            map.ToDictionary(pair => pair.Key, pair => pair.Value.ToArray());
     }
 
     /// <summary>Every definition, ordered by path, then source order with containers before their members.</summary>
@@ -174,6 +226,18 @@ public sealed class SymbolGraph
     /// <summary>The definitions a reference to <paramref name="name"/> may resolve to (constructors excluded).</summary>
     internal int[] CandidatesNamed(string name) => _candidatesByName.TryGetValue(name, out var candidates) ? candidates : s_none;
 
+    /// <summary>Candidates named <paramref name="name"/> declared directly in <paramref name="container"/>.</summary>
+    internal int[] CandidatesIn(string name, string container) => _inContainer.GetValueOrDefault((name, container), s_none);
+
+    /// <summary>Candidates named <paramref name="name"/> whose container or file matches a qualifier (see <see cref="SymbolGraphBuilder.QualifierKeys"/>).</summary>
+    internal int[] CandidatesQualifiedBy(string name, string qualifier) => _byQualifierKey.GetValueOrDefault((name, qualifier), s_none);
+
+    /// <summary>Candidates named <paramref name="name"/> in a file.</summary>
+    internal int[] CandidatesInFile(string name, string path) => _inFile.GetValueOrDefault((name, path), s_none);
+
+    /// <summary>Candidates named <paramref name="name"/> in a partition.</summary>
+    internal int[] CandidatesInPartition(string name, string partition) => _inPartition.GetValueOrDefault((name, partition), s_none);
+
     internal string PartitionOf(string path)
     {
         if (!_partitions.TryGetValue(path, out var partition))
@@ -183,6 +247,78 @@ public sealed class SymbolGraph
         }
 
         return partition;
+    }
+
+    /// <summary>
+    /// The definition a reference's code belongs to: the innermost definition containing its line, unless another
+    /// definition containing the line is named exactly by the reference's from-container (code on one line with
+    /// several members). -1 for file-level code. Used while building only.
+    /// </summary>
+    internal int SourceOf(string path, int line, string fromContainer)
+    {
+        var innermost = InnermostAt(path, line);
+        if (fromContainer.Length == 0 || (innermost >= 0 && IsNamedBy(Definitions[innermost], fromContainer))
+            || !_fileRanges.TryGetValue(path, out var range))
+        {
+            return innermost;
+        }
+
+        if (!_byQualifiedName.TryGetValue(path, out var byName))
+        {
+            byName = [];
+            for (var i = range.Start; i < range.Start + range.Count; i++)
+            {
+                var qualified = Definitions[i].QualifiedName;
+                if (!byName.TryGetValue(qualified, out var list))
+                {
+                    list = [];
+                    byName[qualified] = list;
+                }
+
+                list.Add(i);
+            }
+
+            _byQualifiedName[path] = byName;
+        }
+
+        var best = innermost;
+        if (byName.TryGetValue(fromContainer, out var named))
+        {
+            var span = int.MaxValue;
+            foreach (var index in named)
+            {
+                var definition = Definitions[index];
+                if (definition.StartLine <= line && line <= definition.EndLine && definition.EndLine - definition.StartLine < span)
+                {
+                    best = index;
+                    span = definition.EndLine - definition.StartLine;
+                }
+            }
+        }
+
+        return best;
+    }
+
+    private static bool Contains(SymbolDefinition outer, SymbolDefinition inner) =>
+        outer.EndLine >= inner.EndLine
+        && (outer.StartLine < inner.StartLine || outer.EndLine > inner.EndLine
+            || SymbolGraphBuilder.DefinitionOrder.NestingRank(outer.Kind) < SymbolGraphBuilder.DefinitionOrder.NestingRank(inner.Kind));
+
+    /// <summary>Whether <paramref name="qualifiedName"/> is the definition's container and name, without allocating.</summary>
+    private static bool IsNamedBy(SymbolDefinition definition, string qualifiedName)
+    {
+        var container = definition.Container;
+        var name = definition.Name;
+        if (container.Length == 0)
+        {
+            return string.Equals(name, qualifiedName, StringComparison.Ordinal);
+        }
+
+        const string Separator = " > ";
+        return qualifiedName.Length == container.Length + Separator.Length + name.Length
+            && qualifiedName.StartsWith(container, StringComparison.Ordinal)
+            && string.CompareOrdinal(qualifiedName, container.Length, Separator, 0, Separator.Length) == 0
+            && qualifiedName.EndsWith(name, StringComparison.Ordinal);
     }
 
     /// <summary>The innermost definition in a file whose lines contain a line, or -1. Used while building only.</summary>
@@ -221,6 +357,7 @@ public sealed class SymbolGraph
         Edges = edges;
         Statistics = statistics;
         _innermost.Clear();
+        _byQualifiedName.Clear();
         var incoming = new Dictionary<long, List<int>>();
         var outgoing = new Dictionary<long, List<int>>();
         for (var i = 0; i < edges.Count; i++)

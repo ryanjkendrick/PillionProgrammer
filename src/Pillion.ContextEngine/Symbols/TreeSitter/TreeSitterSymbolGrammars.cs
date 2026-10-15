@@ -11,7 +11,7 @@ public static class TreeSitterSymbolGrammars
 
     private static readonly IReadOnlyDictionary<string, TreeSitterReferenceRule> s_jsReferences = Map(
         ("call_expression", s_callFunction),
-        ("new_expression", new TreeSitterReferenceRule(SymbolReferenceKind.Call, TargetField: "constructor")),
+        ("new_expression", new TreeSitterReferenceRule(SymbolReferenceKind.Call, TargetField: "constructor") { IsConstruction = true }),
         ("decorator", new TreeSitterReferenceRule(SymbolReferenceKind.Call)));
 
     private static readonly IReadOnlyDictionary<string, SymbolKind> s_jsDeclarations = Map(
@@ -48,6 +48,7 @@ public static class TreeSitterSymbolGrammars
         InheritanceRegions = Set("class_heritage", "extends_type_clause"),
         ImportRegions = Set("import_statement"),
         TypeArgumentRegions = Set("type_arguments"),
+        SkippedRegions = Set("type_parameters"),
         ModuleStrings = Set("string"),
         FileModule = FileModuleNaming.Stem,
         ConstructorNames = Set("constructor"),
@@ -146,13 +147,14 @@ public static class TreeSitterSymbolGrammars
         Declarators = Set("init_declarator"),
         References = Map(
             ("call_expression", s_callFunction),
-            ("new_expression", new TreeSitterReferenceRule(SymbolReferenceKind.Call, TargetField: "type"))),
+            ("new_expression", new TreeSitterReferenceRule(SymbolReferenceKind.Call, TargetField: "type") { IsConstruction = true })),
         TypeIdentifiers = Set("type_identifier"),
         Identifiers = Set("identifier", "field_identifier", "type_identifier", "namespace_identifier"),
         QualifiedNames = Set("field_expression", "qualified_identifier"),
         InheritanceRegions = Set("base_class_clause"),
         ImportRegions = Set("preproc_include", "using_declaration"),
         TypeArgumentRegions = Set("template_argument_list"),
+        SkippedRegions = Set("template_parameter_list"),
         ModuleStrings = Set("string_literal", "system_lib_string"),
         QualifiedDeclarators = Set("qualified_identifier"),
         FileModule = FileModuleNaming.FileName,
@@ -184,6 +186,7 @@ public static class TreeSitterSymbolGrammars
         QualifiedNames = Set("selector_expression"),
         ImportRegions = Set("import_declaration"),
         TypeArgumentRegions = Set("type_arguments"),
+        SkippedRegions = Set("type_parameter_list"),
         ModuleStrings = Set("interpreted_string_literal", "raw_string_literal"),
     };
 
@@ -217,6 +220,7 @@ public static class TreeSitterSymbolGrammars
         InheritanceFields = Map(("impl_item", "trait")),
         ImportRegions = Set("use_declaration"),
         TypeArgumentRegions = Set("type_arguments"),
+        SkippedRegions = Set("type_parameters"),
         FileModule = FileModuleNaming.Stem,
         IgnoredNames = Set("Self", "self", "crate", "super"),
     };
@@ -240,7 +244,7 @@ public static class TreeSitterSymbolGrammars
         Declarators = Set("variable_declarator"),
         References = Map(
             ("method_invocation", new TreeSitterReferenceRule(SymbolReferenceKind.Call, NameField: "name", QualifierField: "object")),
-            ("object_creation_expression", new TreeSitterReferenceRule(SymbolReferenceKind.Call, TargetField: "type")),
+            ("object_creation_expression", new TreeSitterReferenceRule(SymbolReferenceKind.Call, TargetField: "type") { IsConstruction = true }),
             ("marker_annotation", new TreeSitterReferenceRule(SymbolReferenceKind.TypeUse, TargetField: "name")),
             ("annotation", new TreeSitterReferenceRule(SymbolReferenceKind.TypeUse, TargetField: "name"))),
         TypeIdentifiers = Set("type_identifier"),
@@ -250,6 +254,7 @@ public static class TreeSitterSymbolGrammars
         InheritanceRegions = Set("superclass", "super_interfaces", "extends_interfaces"),
         ImportRegions = Set("import_declaration"),
         TypeArgumentRegions = Set("type_arguments"),
+        SkippedRegions = Set("type_parameters"),
         IgnoredNames = Set("this", "super"),
     };
 
