@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using Microsoft.Data.Sqlite;
@@ -9,9 +10,13 @@ public sealed class ChunkRepository : IChunkRepository
 {
     private const string ChunkColumns = "id, file_id, start_line, end_line, kind, breadcrumb, text, token_count";
 
+    private const int MaxCachedTerms = 4096;
+    private const long TermCacheMilliseconds = 5 * 60 * 1000;
+
     private readonly VectorStorage _vectors;
     private readonly double _textWeight;
     private readonly double _identifiersWeight;
+    private readonly ConcurrentDictionary<string, (long Count, long At)> _termCounts = new(StringComparer.Ordinal);
 
     internal ChunkRepository(VectorStorage vectors, double textWeight, double identifiersWeight)
     {
@@ -53,6 +58,7 @@ public sealed class ChunkRepository : IChunkRepository
             }
         }
 
+        _termCounts.Clear();
         return Database.WriteAsync<IReadOnlyList<IReadOnlyList<long>>>(
             (connection, transaction, token) =>
             {
@@ -75,6 +81,7 @@ public sealed class ChunkRepository : IChunkRepository
         Database.WriteAsync(
             (connection, transaction, _) =>
             {
+                _termCounts.Clear();
                 // The delete trigger removes the FTS5 rows; the cascade removes the vectors.
                 return Task.FromResult(Sql.Execute(connection, transaction, "DELETE FROM chunks WHERE file_id = $file", ("$file", fileId)));
             },
@@ -204,12 +211,17 @@ public sealed class ChunkRepository : IChunkRepository
             cancellationToken);
 
     /// <inheritdoc/>
-    public Task<IReadOnlyList<LexicalHit>> SearchLexicalAsync(string query, int k, ChunkFilter? filter = null, CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<LexicalHit>> SearchLexicalAsync(string query, int k, ChunkFilter? filter = null, CancellationToken cancellationToken = default) =>
+        SearchLexicalAsync(query, k, LexicalSearchOptions.Default, filter, cancellationToken);
+
+    /// <inheritdoc/>
+    public Task<IReadOnlyList<LexicalHit>> SearchLexicalAsync(string query, int k, LexicalSearchOptions options, ChunkFilter? filter = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentOutOfRangeException.ThrowIfLessThan(k, 1);
-        var match = IdentifierSplitter.BuildMatchQuery(query);
-        if (match is null)
+        var terms = IdentifierSplitter.BuildTermExpressions(query, options.PrefixLastToken);
+        if (terms.Count == 0)
         {
             return Task.FromResult<IReadOnlyList<LexicalHit>>([]);
         }
@@ -218,6 +230,7 @@ public sealed class ChunkRepository : IChunkRepository
         return Database.ReadAsync<IReadOnlyList<LexicalHit>>(
             (connection, token) =>
             {
+                var match = string.Join(" OR ", options.SkipCommonTerms && terms.Count > 1 ? WithoutCommonTerms(connection, terms) : terms);
                 using var command = connection.CreateCommand();
                 command.Parameters.AddWithValue("$match", match);
                 command.Parameters.AddWithValue("$k", k);
@@ -290,6 +303,40 @@ public sealed class ChunkRepository : IChunkRepository
             ArgumentNullException.ThrowIfNull(chunk.Text);
             ArgumentException.ThrowIfNullOrEmpty(chunk.Kind);
         }
+    }
+
+    /// <summary>The terms that occur in fewer than half of the chunks, or the rarest term when every one is that common.</summary>
+    private List<string> WithoutCommonTerms(SqliteConnection connection, IReadOnlyList<string> terms)
+    {
+        var total = CachedCount(connection, string.Empty, "SELECT count(*) FROM chunks", null);
+        var counts = terms.Select(t => (Term: t, Count: CachedCount(connection, t, "SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH $match", t))).ToList();
+        var kept = counts.Where(c => c.Count * 2 < total).Select(c => c.Term).ToList();
+        return kept.Count > 0 ? kept : [counts.MinBy(c => c.Count).Term];
+    }
+
+    private long CachedCount(SqliteConnection connection, string key, string sql, string? match)
+    {
+        var now = Environment.TickCount64;
+        if (_termCounts.TryGetValue(key, out var cached) && now - cached.At < TermCacheMilliseconds)
+        {
+            return cached.Count;
+        }
+
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        if (match is not null)
+        {
+            command.Parameters.AddWithValue("$match", match);
+        }
+
+        var count = Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+        if (_termCounts.Count >= MaxCachedTerms)
+        {
+            _termCounts.Clear();
+        }
+
+        _termCounts[key] = (count, now);
+        return count;
     }
 
     private static ChunkRecord ReadChunk(SqliteDataReader reader) => new(

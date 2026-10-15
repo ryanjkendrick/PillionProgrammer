@@ -80,4 +80,40 @@ public interface IChunkRepository
     /// <param name="cancellationToken">Cancels the call.</param>
     /// <returns>The best matches, best first; empty for a query without tokens.</returns>
     Task<IReadOnlyList<LexicalHit>> SearchLexicalAsync(string query, int k, ChunkFilter? filter = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lexical search with options (work item 2.11): hybrid retrieval turns off the prefix match of the last token, which
+    /// suits search as you type but not a question, and leaves out terms so common that BM25 gives them no weight. The
+    /// default implementation ignores the options.
+    /// </summary>
+    /// <param name="query">The query text.</param>
+    /// <param name="k">How many to return.</param>
+    /// <param name="options">How the query is matched.</param>
+    /// <param name="filter">Partitions and languages to keep, or <see langword="null"/> for all.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns>The best matches, best first; empty for a query without tokens.</returns>
+    Task<IReadOnlyList<LexicalHit>> SearchLexicalAsync(string query, int k, LexicalSearchOptions options, ChunkFilter? filter = null, CancellationToken cancellationToken = default) =>
+        SearchLexicalAsync(query, k, filter, cancellationToken);
+}
+
+/// <summary>How <see cref="IChunkRepository.SearchLexicalAsync(string, int, LexicalSearchOptions, ChunkFilter?, CancellationToken)"/> matches a query.</summary>
+public sealed record LexicalSearchOptions
+{
+    /// <summary>Gets the options of the plain overload: the last token is a prefix, every term is kept.</summary>
+    public static LexicalSearchOptions Default { get; } = new();
+
+    /// <summary>Gets the options for a question (hybrid retrieval): no prefix, common terms left out.</summary>
+    public static LexicalSearchOptions Question { get; } = new() { PrefixLastToken = false, SkipCommonTerms = true };
+
+    /// <summary>Gets a value indicating whether the last token matches as a prefix (search as you type). Defaults to <see langword="true"/>.</summary>
+    public bool PrefixLastToken { get; init; } = true;
+
+    /// <summary>
+    /// Gets a value indicating whether terms that occur in at least half of the chunks are left out of the match. FTS5's
+    /// <c>bm25()</c> floors the idf of such a term at about zero (<c>log((N - n + 0.5) / (n + 0.5))</c> is not positive), so
+    /// it only adds near-zero-scored matches that cost time to rank and change nothing above them. When every term is that
+    /// common, the rarest is kept. Document frequencies are cached for five minutes and dropped on every write through
+    /// the repository. Defaults to <see langword="false"/>.
+    /// </summary>
+    public bool SkipCommonTerms { get; init; }
 }

@@ -1,11 +1,12 @@
 # Pillion.ContextEngine
 
-The Context Engine library (design section 7). Today it holds the **chunkers** (phase 2, work item 2.4) and **symbols
-and the repo map** (work item 2.5, [below](#symbols-and-the-repo-map)); storage and retrieval join it in later phase 2
-items. It is a .NET 10 class library with no Visual Studio dependency. Pillion Host references it: the indexing
-pipeline (work item 2.9, `src/Pillion.Host/Indexing`) chunks files and extracts their symbols with it, behind the
-`features.indexing` flag; it has no flag of its own. The tree-sitter native libraries reach the host's output and its
-published `runtimes\<rid>\native\` folder through the project reference (the host's publish keeps only its own runtime's).
+The Context Engine library (design section 7). It holds the **chunkers** (phase 2, work item 2.4), **symbols and the
+repo map** (work item 2.5, [below](#symbols-and-the-repo-map)) and **hybrid retrieval** (work item 2.11,
+[below](#hybrid-retrieval)). It is a .NET 10 class library with no Visual Studio dependency. Pillion Host references it
+for retrieval (behind `features.retrieval`) and for the indexing pipeline (work item 2.9, `src/Pillion.Host/Indexing`),
+which chunks files and extracts their symbols with it behind `features.indexing`. The tree-sitter native libraries reach
+the host's output and its published `runtimes\<rid>\native\` folder through the project reference (the host's publish
+keeps only its own runtime's).
 
 ## Versions
 
@@ -231,3 +232,60 @@ On the development machine (Release build, single thread): a 100,000-line synthe
 (13,400 definitions, 31,000 references); a 100-file, 101,000-line synthetic repository extracts in about 1 s, and then
 builds its graph in about 0.18 s, ranks in about 0.05 s and renders a 1,024-token map in about 5 ms (about 0.23 s
 after extraction). `SymbolPerformanceTests` logs the figures on every run.
+
+## Hybrid retrieval
+
+Design section 7, Hybrid retrieval steps 1 to 4 (work item 2.11), in `Retrieval\`. Pure logic over interfaces:
+`IRetrievalIndex` is one open index (chunk, vector and symbol storage of Pillion.LocalStore, the `files` table, the
+embedding model and vector size from `meta`, and optionally the in-memory `SymbolGraph`); `StorageRetrievalIndex` adapts
+an `IndexStorage` to it. `IQueryEmbedder` embeds the question (the host implements it over the Model Gateway with the
+index's own model id and vector size, purpose `Query`), and `IReranker` reorders the top 30 (only the order-keeping
+`NoOpReranker` ships; the cross-encoder waits on the licence review of design section 18, behind `features.reranker`,
+which is off by default).
+
+```csharp
+var retriever = new HybridRetriever(embedder);   // RetrievalOptions.Default, NoOpReranker
+var index = await StorageRetrievalIndex.CreateAsync(indexId, rootPath, storage, graph, ct);
+RetrievalResponse response = await retriever.SearchAsync(new RetrievalQuery { Text = "where are orders placed?" }, [index], ct);
+```
+
+1. **Query understanding** (`QueryAnalyzer`, pure): identifier tokens split exactly as the lexical index splits them
+   (`IdentifierSplitter`: camelCase, snake\_case, acronyms, letter-digit changes), qualified names (`OrderService.Place`,
+   `ns::Type`), file names (a known extension, or a path separator) and the symbol candidates (identifiers without stop
+   words or very short plain words). The lexical query is the tokens without English stop words.
+2. **Candidates**, three legs started together on the thread pool with the request's cancellation:
+   - lexical: top 50 by BM25 per index with `LexicalSearchOptions.Question` (no prefix on the last token; terms in half
+     the chunks or more are left out, as FTS5's `bm25()` gives them no weight), merged across indexes by score;
+   - vector: the question embedded once per (model, vector size) and cached for 60 s (`QueryVectorCache`, keyed by text,
+     model and size), then the top 50 by cosine similarity per index with the request's partition and language filter,
+     merged by distance; an index without vectors is skipped, and a vector of the wrong size skips the leg with a reason;
+   - symbols: each candidate name that matches a definition exactly (ordinal; a qualified name also by its container),
+     through the `SymbolGraph` when the host has one, else the `symbols` table; the hit is the smallest chunk holding the
+     definition's first line; types and callables before fields, namespaces and modules last; at most 5 definitions per
+     name and 20 hits.
+3. **Fusion**: Reciprocal Rank Fusion, `1 / (k + rank)` with `k = 60` over the three lists (`FusedScore`). The focus boost
+   adds `1 / (k + n)` for a candidate in the `n`-th focus file (files the question names first, then the request's
+   `FocusFiles`, most recent first) to the score the hits are ordered by, so it reorders what the legs found and never adds
+   chunks. Then the reranker (top 30).
+4. **Expansion**, best first until `MaxResults` (default 10, at most 100): the hit grows to its full member (all parts of a
+   split unit, nearest first) and then one neighbouring chunk on each side, while the span stays within 1,024 tokens; a hit
+   whose own chunk is already shown in its file is dropped, overlapping neighbours are trimmed and lines shared by window
+   chunks are clipped; at most `MaxPerFile` hits per file (default 3). Hits carry 1-based lines (the host converts to the
+   contract's zero-based ones), the snippet (the hit chunk, at most 600 characters), the span's text on request, the
+   ranks in each list and the opaque chunk id `<index-id>:<row-id>` (`RetrievalChunkIds`).
+
+**Budget.** Each search has a time budget (300 ms by default, `RetrievalOptions.TimeBudget` or the query's): the legs get
+80% of it, and a leg still running then is abandoned (its cancellation is signalled) and the response is marked
+`Degraded` with a reason per leg; a leg that fails, or a vector leg without an embedder, degrades it the same way.
+`Mode` `Lexical`, `Vector` or `Symbol` runs that leg alone. Timings per leg and for fusion are in the response. Query
+text is never logged.
+
+**Measured** (`RetrievalBenchmarkTests`, `Category=Benchmark`: a generated encrypted index of 100,000 chunks, 384-dimension
+int8 vectors and 100,000 symbols, 50 natural-language questions through `StorageRetrievalIndex` as the host runs them,
+with a hashing embedder so the model's time is not counted): hybrid p50 40 ms, p95 59 ms (lexical about 35 ms, vector 5
+ms, symbols 1 ms, fusion and expansion 6 ms) on the development machine, and p50 55 ms, p95 90 ms in a run while other
+builds kept the CPU saturated. Before
+the question options of lexical search the same run measured p50 157 ms, nearly all of it BM25 over the generator's
+twenty nouns that occur in most chunks. The bundled model's own cost for one query, through the gateway, is logged by
+the host's `Category=Model` retrieval test: about 110 ms with the machine lightly loaded and 220 to 430 ms with the CPU
+saturated, which is the part of the budget the vector leg is most likely to lose.
