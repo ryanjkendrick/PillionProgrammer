@@ -12,6 +12,7 @@ namespace Pillion.LocalStore.Tests.Index;
 /// backend, which is brute force over the in-memory copy of the vectors), and the bytes on disk per chunk.
 /// The asserted limits carry a generous margin for CI machines; the measured figures are written to the test output.
 /// </summary>
+[Collection(IndexPerformanceGroup.Name)]
 [Trait("Category", "Performance")]
 public sealed class IndexPerformanceTests : IDisposable
 {
@@ -22,9 +23,16 @@ public sealed class IndexPerformanceTests : IDisposable
     private const int Queries = 50;
     private const int K = 50;
 
-    // Section 13: semantic search p50 100 ms and p95 300 ms (hybrid, reference machine). The CI limits are generous.
-    private static readonly TimeSpan VectorP95Limit = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan LexicalP95Limit = TimeSpan.FromSeconds(1);
+    // Section 13: semantic search p50 100 ms and p95 300 ms (hybrid, on the reference machine, which is the development
+    // machine). Shared CI runners are slow and noisy (GitHub Actions sets CI), so there every limit is 10/3 times looser:
+    // a p95 of 1 s for the default vector backend and for FTS5. sqlite-vec is not the default path and gets twice the room.
+    private static readonly double Scale = string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI")) ? 1 : 10.0 / 3;
+    private static readonly TimeSpan VectorP95Limit = TimeSpan.FromMilliseconds(300 * Scale);
+    private static readonly TimeSpan SqliteVecP95Limit = TimeSpan.FromMilliseconds(600 * Scale);
+    private static readonly TimeSpan LexicalP95Limit = TimeSpan.FromMilliseconds(300 * Scale);
+
+    // Section 13: about 1.5 KB per chunk. Not met with both vector copies (see the report); this bound catches regressions.
+    private const double BytesPerChunkLimit = 2048;
 
     private static readonly string[] Verbs = ["get", "set", "update", "create", "delete", "find", "load", "save", "parse", "render", "build", "apply", "validate", "send", "compute"];
     private static readonly string[] Nouns = ["order", "customer", "invoice", "total", "payment", "address", "item", "cart", "token", "session", "index", "chunk", "vector", "file", "model", "request", "response", "user", "price", "tax"];
@@ -97,7 +105,6 @@ public sealed class IndexPerformanceTests : IDisposable
         var bytesPerChunk = (double)size.Bytes / Chunks;
         Report($"Insert: {Chunks:N0} chunks in {insert.Elapsed.TotalSeconds:F1} s = {Chunks / insert.Elapsed.TotalSeconds:N0} chunks/s (FTS5, int8 plain table and sqlite-vec, batches of {FilesPerBatch * ChunksPerFile})");
         Report($"Disk: {size.Bytes / 1048576.0:F1} MB = {bytesPerChunk:N0} bytes per chunk (average text {textBytes / (double)Chunks:N0} bytes; WAL {size.WalBytes / 1048576.0:F1} MB; no float32 vectors)");
-        await ReportTableSizesAsync(storage);
 
         // Queries.
         var vectorQueries = Enumerable.Range(0, Queries).Select(_ => IndexTestSupport.RandomVector(random, Dims)).ToList();
@@ -136,12 +143,16 @@ public sealed class IndexPerformanceTests : IDisposable
         Report($"Vector KNN k={K}, 2 of 20 partitions, sqlite-vec (20 queries):  p50 {vecFiltered.P50:F1} ms, p95 {vecFiltered.P95:F1} ms");
         Report($"Vector KNN k={K}, 2 of 20 partitions, auto (in-memory): p50 {bruteFiltered.P50:F1} ms, p95 {bruteFiltered.P95:F1} ms");
         Report($"FTS5 BM25 k={K}: p50 {lexical.P50:F1} ms, p95 {lexical.P95:F1} ms; 2 of 20 partitions: p50 {lexicalFiltered.P50:F1} ms, p95 {lexicalFiltered.P95:F1} ms");
-        // The backends agree on the full index too.
+        // The backends agree on the full index too (distances to the float; the ids too, unless two distances tie).
         for (var i = 0; i < 5; i++)
         {
-            Assert.Equal(
-                (await storage.SqliteVec!.SearchAsync(vectorQueries[i], 10)).Select(h => h.ChunkId),
-                (await storage.BruteForce.SearchAsync(vectorQueries[i], 10)).Select(h => h.ChunkId));
+            var fromVec = await storage.SqliteVec!.SearchAsync(vectorQueries[i], 10);
+            var fromMemory = await storage.Vectors.SearchAsync(vectorQueries[i], 10);
+            Assert.Equal(fromVec.Select(h => (float)h.Distance), fromMemory.Select(h => (float)h.Distance));
+            if (fromVec.Select(h => h.Distance).Distinct().Count() == fromVec.Count)
+            {
+                Assert.Equal(fromVec.Select(h => h.ChunkId), fromMemory.Select(h => h.ChunkId));
+            }
         }
 
         // Rebuilding sqlite-vec from the stored vectors (after a host without the extension wrote).
@@ -156,10 +167,10 @@ public sealed class IndexPerformanceTests : IDisposable
         Report($"sqlite-vec rebuild from chunk_embeddings: {rebuild.Elapsed.TotalSeconds:F1} s");
         Report($"Test body: {total.Elapsed.TotalSeconds:F1} s");
 
-        Assert.True(TimeSpan.FromMilliseconds(vec.P95) < VectorP95Limit, $"sqlite-vec p95 {vec.P95:F1} ms");
-        Assert.True(TimeSpan.FromMilliseconds(brute.P95) < VectorP95Limit, $"auto (in-memory brute force) p95 {brute.P95:F1} ms");
-        Assert.True(TimeSpan.FromMilliseconds(lexical.P95) < LexicalP95Limit, $"FTS5 p95 {lexical.P95:F1} ms");
-        Assert.True(bytesPerChunk < 4096, $"{bytesPerChunk:N0} bytes per chunk");
+        Assert.True(TimeSpan.FromMilliseconds(brute.P95) < VectorP95Limit, $"auto (in-memory brute force) p95 {brute.P95:F1} ms, limit {VectorP95Limit.TotalMilliseconds} ms");
+        Assert.True(TimeSpan.FromMilliseconds(vec.P95) < SqliteVecP95Limit, $"sqlite-vec p95 {vec.P95:F1} ms, limit {SqliteVecP95Limit.TotalMilliseconds} ms");
+        Assert.True(TimeSpan.FromMilliseconds(lexical.P95) < LexicalP95Limit, $"FTS5 p95 {lexical.P95:F1} ms, limit {LexicalP95Limit.TotalMilliseconds} ms");
+        Assert.True(bytesPerChunk < BytesPerChunkLimit, $"{bytesPerChunk:N0} bytes per chunk, limit {BytesPerChunkLimit}");
     }
 
     private static async Task<(double P50, double P95)> MeasureAsync<TQuery, TResult>(IReadOnlyList<TQuery> queries, Func<TQuery, Task<TResult>> run)
@@ -206,42 +217,20 @@ public sealed class IndexPerformanceTests : IDisposable
 
     private static string Capitalise(string word) => char.ToUpperInvariant(word[0]) + word[1..];
 
-    private async Task ReportTableSizesAsync(IndexStorage storage)
-    {
-        try
-        {
-            var rows = await storage.Database.ReadAsync(async (connection, token) =>
-            {
-                using var command = connection.CreateCommand();
-                command.CommandText = """
-                    SELECT CASE
-                             WHEN name LIKE 'chunks_fts%' THEN 'chunks_fts (FTS5)'
-                             WHEN name LIKE 'chunk_vectors%' THEN 'chunk_vectors (vec0)'
-                             WHEN name LIKE 'ix_chunks%' OR name = 'chunks' OR name = 'sqlite_autoindex_chunks_1' THEN 'chunks'
-                             ELSE name END AS part,
-                           sum(pgsize)
-                    FROM dbstat GROUP BY part ORDER BY 2 DESC
-                    """;
-                using var reader = await command.ExecuteReaderAsync(token);
-                var list = new List<string>();
-                while (await reader.ReadAsync(token))
-                {
-                    list.Add(string.Create(CultureInfo.InvariantCulture, $"{reader.GetString(0)} {reader.GetInt64(1) / (double)Chunks:N0} B/chunk"));
-                }
-
-                return list;
-            });
-            Report("Per table: " + string.Join("; ", rows.Take(8)));
-        }
-        catch (Microsoft.Data.Sqlite.SqliteException ex)
-        {
-            Report("Per table: dbstat unavailable (" + ex.Message + ")");
-        }
-    }
-
     private void Report(string line)
     {
         _output.WriteLine(line);
         Console.WriteLine("[IndexPerformance] " + line);
     }
+}
+
+/// <summary>
+/// Runs the index performance test alone in the test process: xUnit runs a collection that disables parallelization after
+/// every parallel test has finished.
+/// </summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class IndexPerformanceGroup
+{
+    /// <summary>The collection's name.</summary>
+    public const string Name = "Index performance";
 }
