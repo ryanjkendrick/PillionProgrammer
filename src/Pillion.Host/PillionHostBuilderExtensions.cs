@@ -13,6 +13,7 @@ using Pillion.Host.Logging;
 using Pillion.Host.Models;
 using Pillion.Host.Rpc;
 using Pillion.Host.Settings;
+using Pillion.Host.WorkspaceQueries;
 using Pillion.LocalStore;
 using Pillion.ModelGateway;
 using Pillion.ModelGateway.Providers.Bundled;
@@ -110,6 +111,12 @@ internal static class PillionHostBuilderExtensions
         builder.Services.AddRpcTarget<IContextService, ContextRpcService>();
         builder.Services.TryAddSingleton<INotificationSender, VsixNotificationSender>();
         builder.Services.TryAddSingleton<IndexStatusNotifier>();
+
+        // Workspace queries (work item 2.14): find_references and callers_of for @symbol and chat, from Visual Studio's Roslyn
+        // workspace with the index's approximate edges as the fallback. The index's graphs come from the pipeline (2.9) and
+        // the retrieval catalog (2.11), which replace the empty provider.
+        builder.Services.TryAddSingleton<ISymbolGraphProvider, EmptySymbolGraphProvider>();
+        builder.Services.TryAddSingleton<IWorkspaceQueries, WorkspaceQueries.WorkspaceQueries>();
 
         // Local Store (work item 2.1): the encrypted conversations.db, opened lazily behind the localStore flag. Work item
         // 2.2 persists conversations and the Outbound log through it, behind IConversationService (contract 1.3, a stub
