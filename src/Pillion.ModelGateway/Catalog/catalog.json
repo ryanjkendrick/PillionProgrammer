@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "comment": "The model catalog (design section 6): data, not code. 'profiles' maps each profile to a default model id per provider kind; routing.profiles in settings overrides it. 'families' lists capability descriptors for known model families, matched in order against the model id (case-insensitive, '*' is a wildcard); the last entry must be the '*' default. Providers that report capabilities themselves (Ollama's /api/show) override the chat, fim, vision, tools and embeddings flags and the context window; the OpenAI-compatible adapter reads only the context window, when /models reports one. The anthropic defaults are the Claude API ids on the Anthropic models overview page, the gemini defaults the model codes on the Gemini API models page, and the mistral defaults aliases and ids from the Mistral documentation (October 2026; see the note on each family). Azure OpenAI has no defaults because deployment names are chosen by the user: pin a profile to a deployment with routing.profiles (azure/my-deployment) or list the deployments in providers[].models. A family's reasoningEffort says the adapter may set the provider's reasoning-effort control (Anthropic output_config.effort, Gemini thinkingLevel); note is documentation only. Every descriptor, cost included, is a default that a provider's own listing can override (the Anthropic, Gemini and Mistral adapters read context windows, output limits and capabilities from their model lists). The openai and openai-compatible defaults are OpenAI model ids taken from the OpenAI model list in October 2026 and are only defaults: set routing.profiles (bare id or provider/model) for a gateway with different ids, such as OpenRouter's openai/... names. The context windows of the gpt-6 family are conservative placeholders. Costs are left at 0 (unknown) until the cost governor ships. A family's residency is the Ollama adapter's memory model (design section 6, Local model residency): vramMiB is the weights plus the runtime's fixed overhead at Q4_K_M in MiB, kvMiBPer1kTokens the key/value cache per 1,024 tokens of num_ctx at the default f16 cache type (2 x layers x KV heads x head size x 2 bytes), and recommendedContext the largest num_ctx to keep resident per GPU tier (cpu, 8gb, 12gb, 16gb, 24gb) when one instance serves both autocomplete and chat. A family's fimHeader (default true) says whether the autocomplete prompt carries the terse comment header (// file:, // see:, // in:, // edit:) before the code; the coder families under 3B parameters set it false (measured with AutocompletePromptQualityLiveTests on 20 C#, TypeScript and Python prefixes, 2026-10-11: no prose and no fence with either; without the header the 1.5B model's suggestions left the document parsing in 20 of 20 cases against 19 of 20 with it, at a median of 149 against 173 ms; the 7B scored 19 of 20 either way, so it keeps the header for its cross-file hints). The 7b figures were checked on an 8 GB RTX 2080 SUPER, where Ollama 0.40.1 reports 4,528 MiB for qwen2.5-coder:7b at num_ctx 4,096; the others are computed from the model architecture and the published file sizes. 'embeddingDefaults' lists, per provider kind, the embedding models the Embedding task class prefers when several are installed or allowed, in order (a provisional order until the retrieval benchmark of work item 2.16 settles the default; routing.tasks.embedding, routing.profiles and an explicit model id override it). A family's 'embedding' entry describes an embedding model for the index (work item 2.6): dimensions (0 when the size depends on the variant and is read from the first response), maxInputTokens, tokenizerFamily (the family the chunk cap is expressed in), license, supportsDimensions (the model can be asked for shorter vectors), documentPrefix and queryPrefix (text the model expects before a passage or a query), and note (where the figures come from).",
+  "comment": "The model catalog (design section 6): data, not code. 'profiles' maps each profile to a default model id per provider kind; routing.profiles in settings overrides it. 'families' lists capability descriptors for known model families, matched in order against the model id (case-insensitive, '*' is a wildcard); the last entry must be the '*' default. Providers that report capabilities themselves (Ollama's /api/show) override the chat, fim, vision, tools and embeddings flags and the context window; the OpenAI-compatible adapter reads only the context window, when /models reports one. The anthropic defaults are the Claude API ids on the Anthropic models overview page, the gemini defaults the model codes on the Gemini API models page, and the mistral defaults aliases and ids from the Mistral documentation (October 2026; see the note on each family). Azure OpenAI has no defaults because deployment names are chosen by the user: pin a profile to a deployment with routing.profiles (azure/my-deployment) or list the deployments in providers[].models. A family's reasoningEffort says the adapter may set the provider's reasoning-effort control (Anthropic output_config.effort, Gemini thinkingLevel); note is documentation only. Every descriptor, cost included, is a default that a provider's own listing can override (the Anthropic, Gemini and Mistral adapters read context windows, output limits and capabilities from their model lists). The openai and openai-compatible defaults are OpenAI model ids taken from the OpenAI model list in October 2026 and are only defaults: set routing.profiles (bare id or provider/model) for a gateway with different ids, such as OpenRouter's openai/... names. The context windows of the gpt-6 family are conservative placeholders. Costs are left at 0 (unknown) until the cost governor ships. A family's residency is the Ollama adapter's memory model (design section 6, Local model residency): vramMiB is the weights plus the runtime's fixed overhead at Q4_K_M in MiB, kvMiBPer1kTokens the key/value cache per 1,024 tokens of num_ctx at the default f16 cache type (2 x layers x KV heads x head size x 2 bytes), and recommendedContext the largest num_ctx to keep resident per GPU tier (cpu, 8gb, 12gb, 16gb, 24gb) when one instance serves both autocomplete and chat. A family's fimHeader (default true) says whether the autocomplete prompt carries the terse comment header (// file:, // see:, // in:, // edit:) before the code; the coder families under 3B parameters set it false (measured with AutocompletePromptQualityLiveTests on 20 C#, TypeScript and Python prefixes, 2026-10-11: no prose and no fence with either; without the header the 1.5B model's suggestions left the document parsing in 20 of 20 cases against 19 of 20 with it, at a median of 149 against 173 ms; the 7B scored 19 of 20 either way, so it keeps the header for its cross-file hints). The 7b figures were checked on an 8 GB RTX 2080 SUPER, where Ollama 0.40.1 reports 4,528 MiB for qwen2.5-coder:7b at num_ctx 4,096; the others are computed from the model architecture and the published file sizes. 'embeddingDefaults' lists, per provider kind, the embedding models the Embedding task class prefers when several are installed or allowed, in order (a provisional order until the retrieval benchmark of work item 2.16 settles the default; routing.tasks.embedding, routing.profiles and an explicit model id override it). A family's 'embedding' entry describes an embedding model for the index (work item 2.6): dimensions (0 when the size depends on the variant and is read from the first response), maxInputTokens, tokenizerFamily (the family the chunk cap is expressed in), license, supportsDimensions (the model can be asked for shorter vectors), documentPrefix and queryPrefix (text the model expects before a passage or a query), and note (where the figures come from). 'embeddingProviderOrder' lists the provider kinds the Embedding task class tries before the others (which keep their settings order); it puts the bundled model first so that indexing works out of the box with no download and no Ollama model, a provisional default until the retrieval benchmark (work item 2.16) decides. A model named by routing.profiles or an explicit model id still comes first. The bundled families (work item 2.7) set contextWindow far above maxInputTokens because the bundled provider truncates every input to maxInputTokens itself, so routing never rejects a long text; maxInputTokens is what the chunker caps chunks at, in the family's own tokenizer.",
   "profiles": {
     "ollama": {
       "LocalFast": "qwen2.5-coder:1.5b",
@@ -37,8 +37,10 @@
     "openai": [ "text-embedding-3-small" ],
     "openai-compatible": [ "text-embedding-3-small" ],
     "gemini": [ "gemini-embedding-001" ],
-    "mistral": [ "mistral-embed" ]
+    "mistral": [ "mistral-embed" ],
+    "bundled": [ "bge-small-en-v1.5", "multilingual-e5-small", "jina-embeddings-v2-base-code" ]
   },
+  "embeddingProviderOrder": [ "bundled" ],
   "families": [
     {
       "match": "qwen2.5-coder:0.5b*",
@@ -242,6 +244,60 @@
         "license": "Hosted service; Mistral terms apply (no weights are distributed)",
         "supportsDimensions": false,
         "note": "Mistral embeddings documentation: 1024 dimensions, 8,192 input tokens."
+      }
+    },
+    {
+      "match": "bge-small-en-v1.5",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 0,
+      "chat": false,
+      "embeddings": true,
+      "streaming": false,
+      "toolCalling": "none",
+      "embedding": {
+        "dimensions": 384,
+        "maxInputTokens": 512,
+        "tokenizerFamily": "bert-wordpiece",
+        "license": "MIT (BAAI/bge-small-en-v1.5 weights; ONNX export Xenova/bge-small-en-v1.5)",
+        "supportsDimensions": false,
+        "queryPrefix": "Represent this sentence for searching relevant passages: ",
+        "note": "The bundled default (work item 2.7): int8 ONNX graph run in the host by ONNX Runtime, CLS pooling, unit-normalised, 384 dimensions, 512 WordPiece tokens (the model card's limit; longer inputs are truncated). The query instruction is the one the BGE v1.5 model card recommends for short queries against passages; passages take none. The retrieval benchmark (work item 2.16) may drop the instruction."
+      }
+    },
+    {
+      "match": "multilingual-e5-small",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 0,
+      "chat": false,
+      "embeddings": true,
+      "streaming": false,
+      "toolCalling": "none",
+      "embedding": {
+        "dimensions": 384,
+        "maxInputTokens": 512,
+        "tokenizerFamily": "xlmr-sentencepiece",
+        "license": "MIT (intfloat/multilingual-e5-small weights and ONNX export)",
+        "supportsDimensions": false,
+        "documentPrefix": "passage: ",
+        "queryPrefix": "query: ",
+        "note": "Downloaded on request into %LOCALAPPDATA%\\PillionProgrammer\\models (work item 2.7): int8 ONNX graph, mean pooling, unit-normalised, 384 dimensions, 512 XLM-RoBERTa SentencePiece tokens. The model card requires the 'query: ' and 'passage: ' prefixes."
+      }
+    },
+    {
+      "match": "jina-embeddings-v2-base-code",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 0,
+      "chat": false,
+      "embeddings": true,
+      "streaming": false,
+      "toolCalling": "none",
+      "embedding": {
+        "dimensions": 768,
+        "maxInputTokens": 2048,
+        "tokenizerFamily": "roberta-bpe",
+        "license": "Apache-2.0 (jinaai/jina-embeddings-v2-base-code weights and ONNX export)",
+        "supportsDimensions": false,
+        "note": "Downloaded on request into %LOCALAPPDATA%\\PillionProgrammer\\models (work item 2.7): int8 ONNX graph, mean pooling, unit-normalised, 768 dimensions. The model reads up to 8,192 byte-level BPE tokens; the bundled provider caps inputs at 2,048 (BundledModelOptions.MaxSequenceTokens) to bound attention memory, and that cap is what is listed here. No prefixes. Its quality against the bundled model is for the retrieval benchmark (work item 2.16) to show."
       }
     },
     {

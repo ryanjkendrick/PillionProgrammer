@@ -211,8 +211,9 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
     "mentions": true,
     "outboundLogView": true,
     "localStore": true,
-    "indexing": true
-    "embeddings": true
+    "indexing": true,
+    "embeddings": true,
+    "bundledEmbeddings": true
   }
 }
 ```
@@ -236,6 +237,7 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
 | `localStore` | Pillion Host does not create or open its encrypted Local Store (`conversations.db`, see `src/Pillion.LocalStore/README.md`): opening it fails with `PolicyDenied` and a message that names the flag, and nothing is written to disk. Nothing uses the store yet; work item 2.2 persists conversations and the Outbound log through it. |
 | `indexing` | Pillion Host does not discover, hash or index repository files and does not create or open index databases (`index\<id>\index.db`, see `src/Pillion.Indexing/README.md`): opening an index fails with `PolicyDenied` and a message that names the flag, nothing is written to disk and the retention sweep does nothing. An index needs `localStore` as well, because it is a Local Store database. Nothing calls the indexing code yet; work item 2.9 wires the pipeline. |
 | `embeddings` | The embedding gateway (`IModelGateway.EmbedAsync`, work item 2.6) fails with `PolicyDenied` and a message that names the flag; it also needs `modelGateway`. Chat, autocomplete and model listing are unaffected. Embeddings never leave the machine unless `cloudSwitches.embedding` is turned on as well (it is off by default; Local-only always wins). |
+| `bundledEmbeddings` | The bundled embedding provider (`bundled`, work item 2.7) is not built or routed to: the ONNX model shipped with the extension (`bge-small-en-v1.5`) and the models downloaded on request stop being offered, and the Embedding task class uses Ollama or another configured local embedding model instead (or fails with `ModelNotInstalled` when there is none). Nothing else changes. |
 
 A repository can switch flags off for everyone who opens it with `disabledFeatures` in `.pillion/policy.json`, next to
 `localOnly`, `disabledTools`, `exclude` and `denyCommands`:

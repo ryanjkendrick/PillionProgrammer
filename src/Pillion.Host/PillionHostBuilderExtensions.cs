@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Pillion.Common;
 using Pillion.Common.Connectivity;
 using Pillion.Common.Settings;
 using Pillion.Contracts;
@@ -13,6 +14,7 @@ using Pillion.Host.Rpc;
 using Pillion.Host.Settings;
 using Pillion.LocalStore;
 using Pillion.ModelGateway;
+using Pillion.ModelGateway.Providers.Bundled;
 
 namespace Pillion.Host;
 
@@ -88,7 +90,14 @@ internal static class PillionHostBuilderExtensions
 
         // Model Gateway (work items 0.7 and 0.8): providers, routing and the IModelService RPC target. It also
         // replaces the settings' NoProviderTester with one that probes the named provider (Test connection).
+        // The bundled embedding models (work item 2.7) are downloaded into the same data root as the settings, and their
+        // files are verified once in the background when the host starts.
+        builder.Services.TryAddSingleton(sp => new BundledModelOptions
+        {
+            UserModelsDirectory = sp.GetService<PillionPaths>()?.ModelsDirectory ?? BundledModelOptions.DefaultUserModelsDirectory(),
+        });
         builder.Services.AddPillionModelGateway();
+        builder.Services.AddHostedService<BundledModelWarmup>();
         builder.Services.AddSingleton<ModelRpcService>();
         builder.Services.AddRpcTarget<IModelService>(sp => sp.GetRequiredService<ModelRpcService>());
         builder.Services.AddPillionInlineEdit(); // Inline edits (work item 1.8): IInlineEditService over the gateway.

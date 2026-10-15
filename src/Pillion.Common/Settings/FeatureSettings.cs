@@ -53,6 +53,9 @@ public static class FeatureNames
     /// <summary>The embedding gateway: <c>IModelGateway.EmbedAsync</c> and the embedding adapters (work item 2.6). It also needs <see cref="ModelGateway"/>.</summary>
     public const string Embeddings = "embeddings";
 
+    /// <summary>The bundled embedding provider: the in-process ONNX Runtime model shipped with the extension and the models downloaded on request (work item 2.7). It also needs <see cref="Embeddings"/>.</summary>
+    public const string BundledEmbeddings = "bundledEmbeddings";
+
     /// <summary>Gets every feature flag name, in the order they are written to <c>settings.json</c>.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
@@ -73,6 +76,7 @@ public static class FeatureNames
         LocalStore,
         Indexing,
         Embeddings,
+        BundledEmbeddings,
     ];
 }
 
@@ -141,6 +145,7 @@ public sealed class FeatureSettings : SettingsNode
             "localstore" => LocalStore,
             "indexing" => Indexing,
             "embeddings" => Embeddings,
+            "bundledembeddings" => BundledEmbeddings,
             _ => true,
         };
     }
@@ -203,6 +208,9 @@ public sealed class FeatureSettings : SettingsNode
             case "embeddings":
                 Embeddings = false;
                 break;
+            case "bundledembeddings":
+                BundledEmbeddings = false;
+                break;
         }
     }
 
@@ -222,4 +230,10 @@ public sealed class FeatureSettings : SettingsNode
     public bool Indexing { get; set; } = true;
     /// <summary>Gets or sets a value indicating whether the embedding gateway answers requests. When off, <c>EmbedAsync</c> fails with a policy error. It also needs <see cref="ModelGateway"/>.</summary>
     public bool Embeddings { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the bundled embedding provider is available: the ONNX model shipped with the
+    /// extension (and models downloaded on request) runs in the host, with no network. When off, the provider is hidden from routing.
+    /// </summary>
+    public bool BundledEmbeddings { get; set; } = true;
 }

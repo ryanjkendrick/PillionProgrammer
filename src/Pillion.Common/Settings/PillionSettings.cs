@@ -35,6 +35,14 @@ public enum ProviderKind
     /// <summary>The Mistral API.</summary>
     [JsonStringEnumMemberName("mistral")]
     Mistral,
+
+    /// <summary>
+    /// The embedding models that run inside Pillion Host on ONNX Runtime (work item 2.7): the bundled default and the models
+    /// downloaded on request. Always local. The gateway adds a provider of this kind with the id <c>bundled</c> on its own; an
+    /// entry in <c>providers</c> is only needed to set its <c>proxy</c> or <c>caBundle</c> for downloads, or to disable it.
+    /// </summary>
+    [JsonStringEnumMemberName("bundled")]
+    Bundled,
 }
 
 /// <summary>How much the agent may do without asking.</summary>
