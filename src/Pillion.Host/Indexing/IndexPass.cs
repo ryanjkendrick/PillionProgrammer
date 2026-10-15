@@ -132,6 +132,12 @@ internal sealed class PassStatistics
 
     /// <summary>Gets or sets the time from the start of the run to the end of the first refresh (partial results searchable), or <see langword="null"/> when nothing was stored.</summary>
     public TimeSpan? FirstSearchable { get; set; }
+
+    /// <summary>Gets or sets, for an incremental run, the longest time from a save's arrival to its file being searchable.</summary>
+    public TimeSpan? SaveToSearchable { get; set; }
+
+    /// <summary>Gets or sets the saved files stored before all their chunks had vectors (the save budget ran out).</summary>
+    public int PartialFiles { get; set; }
 }
 
 /// <summary>
@@ -160,6 +166,8 @@ internal sealed partial class IndexPass
     private long _lastRefresh;
     private TimeSpan _lastRefreshCost;
     private bool _symbolWritesFailed;
+    private bool _incremental;
+    private TimeSpan _lastEmbedDuration;
 
     /// <summary>Initializes a new instance of the <see cref="IndexPass"/> class.</summary>
     /// <param name="root">The root; this host must own its index.</param>
@@ -204,12 +212,16 @@ internal sealed partial class IndexPass
     /// <summary>Gets what the run did.</summary>
     public PassStatistics Statistics { get; } = new();
 
+    /// <summary>Gets an action run when the sweep is about to start (after any pause): the watcher's queued paths are dropped, the sweep sees them.</summary>
+    public Action? BeforeSweep { get; init; }
+
     /// <summary>Runs the pass to the end.</summary>
     /// <param name="cancellationToken">Stops the run (files already stored stay stored).</param>
     /// <returns>A task that completes when the index is up to date with the tree.</returns>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         await _pause.WaitWhilePausedAsync(cancellationToken).ConfigureAwait(false);
+        BeforeSweep?.Invoke();
         Advance(IndexPhase.Discovering);
 
         // 1 and 2. Discover and hash (one walk: unchanged files are neither opened nor hashed).
@@ -649,34 +661,52 @@ internal sealed partial class IndexPass
         if (stored)
         {
             _changed();
-            await RefreshAsync(force: false, cancellationToken).ConfigureAwait(false);
+
+            // An incremental run's files are searchable once stored (their vectors go to the in-memory copy with the commit);
+            // its one refresh, for the symbol graph, comes at the end.
+            if (!_incremental)
+            {
+                await RefreshAsync(force: false, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
-    private async Task StoreAsync(PreparedFile file, CancellationToken cancellationToken)
+    /// <summary>
+    /// Stores a file's row, chunks (with the vectors it has) and symbols in one transaction. A file stored before all its
+    /// chunks have vectors (the save path's budget ran out) gets a modified time of 0 in its row until they do, so if the
+    /// rest never arrives (cancelled, failed) the next sweep sees the file as changed and indexes it again.
+    /// </summary>
+    /// <returns>The stored row and the new chunk ids, in order.</returns>
+    private async Task<(FileRecord Row, IReadOnlyList<long> ChunkIds)> StoreAsync(PreparedFile file, CancellationToken cancellationToken)
     {
         var chunks = new NewChunk[file.Chunks.Count];
         long tokens = 0;
+        var complete = true;
         for (var i = 0; i < chunks.Length; i++)
         {
             var chunk = file.Chunks[i];
             tokens += chunk.TokenCount;
+            var vector = file.Vectors[i];
+            complete &= vector is not null;
             chunks[i] = new NewChunk(chunk.StartLine, chunk.EndLine, KindName(chunk.Kind), chunk.Breadcrumb, chunk.Text, chunk.TokenCount)
             {
-                Embedding = file.Vectors[i]!.Quantized,
+                Embedding = vector is null ? ReadOnlyMemory<sbyte>.Empty : vector.Quantized,
             };
         }
 
+        var record = complete ? file.Record : file.Record with { ModifiedUnixMilliseconds = 0 };
         var symbols = ToSymbols(file.Symbols!);
         var files = _root.Store.Files;
-        var row = await _scheduler.RunAsync(
+        var incremental = _incremental;
+        var (row, ids) = await _scheduler.RunAsync(
             () => _root.Storage.WriteAsync(
                 (session, token) =>
                 {
-                    var stored = files.Upsert(session.Connection, session.Transaction, [file.Record], token)[0];
-                    session.ReplaceFileChunks(stored.Id, chunks);
+                    session.UpdateVectorCache = incremental;
+                    var stored = files.Upsert(session.Connection, session.Transaction, [record], token)[0];
+                    var chunkIds = session.ReplaceFileChunks(stored.Id, chunks);
                     session.ReplaceFileSymbols(stored.Id, symbols, token);
-                    return stored;
+                    return (stored, chunkIds);
                 },
                 cancellationToken),
             cancellationToken).ConfigureAwait(false);
@@ -689,6 +719,7 @@ internal sealed partial class IndexPass
         Statistics.Chunks += chunks.Length;
         Statistics.Tokens += tokens;
         Progress.ChunksDone += chunks.Length;
+        return (row, ids);
     }
 
     private bool IsRefreshDue()

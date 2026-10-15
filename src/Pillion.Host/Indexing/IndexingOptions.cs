@@ -58,6 +58,40 @@ internal sealed class IndexingOptions
     /// <summary>Gets the fraction of the memory cap below which a halved batch is doubled again.</summary>
     public double MemoryRecoverFraction { get; init; } = 0.75;
 
+    /// <summary>Gets a value indicating whether the roots this host owns are watched for changes (work item 2.10). Tests that drive runs by hand turn it off.</summary>
+    public bool WatchFileSystem { get; init; } = true;
+
+    /// <summary>Gets how long a path must be quiet before its change is indexed (design section 7: 500 ms debounce).</summary>
+    public TimeSpan WatcherDebounce { get; init; } = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>Gets how long a burst of changes may last before the paths that are ready are indexed anyway (1 s).</summary>
+    public TimeSpan WatcherCoalescingWindow { get; init; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>Gets the file-system watcher's buffer: 64 KiB, the most Windows allows for a watcher (the default is 8 KiB).</summary>
+    public int WatcherBufferBytes { get; init; } = 64 * 1024;
+
+    /// <summary>Gets how often a root whose watcher failed is swept (and the watcher started again), while it stays broken.</summary>
+    public TimeSpan WatcherFallbackInterval { get; init; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>Gets how long the git directory must be quiet (and <c>index.lock</c> gone) before a moved <c>HEAD</c> is acted on.</summary>
+    public TimeSpan GitSettleDelay { get; init; } = TimeSpan.FromMilliseconds(300);
+
+    /// <summary>Gets the longest the watcher holds file events back while git holds <c>index.lock</c> (a stale lock left by a crash).</summary>
+    public TimeSpan GitBusyMaxWait { get; init; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// Gets the save-to-searchable budget (Gate 2: 500 ms). A saved file's chunks are embedded in batches while the next
+    /// batch still fits the budget, less <see cref="SaveStoreReserve"/>; the file is then stored and searchable, and the
+    /// rest of its chunks get their vectors right after.
+    /// </summary>
+    public TimeSpan SaveSearchableBudget { get; init; } = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>Gets the part of <see cref="SaveSearchableBudget"/> kept for storing the file and updating the in-memory vectors.</summary>
+    public TimeSpan SaveStoreReserve { get; init; } = TimeSpan.FromMilliseconds(80);
+
+    /// <summary>Gets the chunks per embedding request on the save path: small, so the budget is checked often.</summary>
+    public int SaveEmbeddingBatchSize { get; init; } = 8;
+
     /// <summary>Gets an optional hook called on the pipeline thread after each file is chunked (tests check the thread's priority).</summary>
     public Action<string>? OnFilePrepared { get; init; }
 }

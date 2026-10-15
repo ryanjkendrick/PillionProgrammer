@@ -11,13 +11,17 @@ namespace Pillion.VisualStudio.Core.Signals;
 /// Tells the host what to index and when to hold back (work item 2.9, contract 1.3): calls
 /// <see cref="IContextService.SetWorkspaceAsync"/> with the open solution, projects or folder, and sends the
 /// <c>ideActivityChanged</c> notification with every IDE activity in progress (builds from <see cref="IIdeSignals"/>, the
-/// debugger and later test runs from <see cref="IIdeActivitySource"/>), so the host pauses indexing while any is set.
+/// debugger and later test runs from <see cref="IIdeActivitySource"/>), so the host pauses indexing while any is set; and
+/// sends the <c>documentSaved</c> notification for every document saved (work item 2.10), so the host indexes it at once
+/// instead of waiting for its file watcher's debounce.
 /// </summary>
 /// <remarks>
 /// <para>
 /// When it sends: after every transition of the host to Ready or Degraded (a new handshaken session), both the activity
 /// set and the workspace, whatever was sent before; afterwards the activity set whenever it actually differs from what this
-/// session last received, and the workspace after the workspace source reports a change and has been quiet for
+/// session last received, a saved document's path as soon as <see cref="IIdeSignals.DocumentSaved"/> reports it (directly,
+/// not through the pump: a save must not wait behind a slow workspace call), and the workspace after the workspace source
+/// reports a change and has been quiet for
 /// <see cref="WorkspaceQuietPeriod"/> (at most <see cref="WorkspaceMaxWait"/> after the first change of a burst), again
 /// only when it differs. Nothing is sent while the host is not connected; the next connection sends the current state.
 /// </para>
@@ -31,6 +35,9 @@ public sealed class IndexingRelay : IDisposable
 {
     /// <summary>The client-to-host notification with the IDE activity set (one positional argument, an <see cref="IdeActivity"/>).</summary>
     public const string IdeActivityChangedMethod = "ideActivityChanged";
+
+    /// <summary>The client-to-host notification for a saved document (one positional argument, its full path; contract 1.3, work item 2.10).</summary>
+    public const string DocumentSavedMethod = "documentSaved";
 
     /// <summary>How long the workspace source must be quiet before the workspace is read and sent again.</summary>
     public static readonly TimeSpan WorkspaceQuietPeriod = TimeSpan.FromMilliseconds(500);
@@ -101,6 +108,7 @@ public sealed class IndexingRelay : IDisposable
         if (_signals is not null)
         {
             _signals.BuildStateChanged += OnBuildStateChanged;
+            _signals.DocumentSaved += OnDocumentSaved;
         }
 
         if (_activity is not null)
@@ -137,6 +145,7 @@ public sealed class IndexingRelay : IDisposable
             if (_signals is not null)
             {
                 _signals.BuildStateChanged -= OnBuildStateChanged;
+                _signals.DocumentSaved -= OnDocumentSaved;
             }
 
             if (_activity is not null)
@@ -229,6 +238,41 @@ public sealed class IndexingRelay : IDisposable
     private void OnBuildStateChanged(object? sender, BuildStateChangedEventArgs e) => Schedule(activity: true, workspace: false);
 
     private void OnActivityChanged(object? sender, EventArgs e) => Schedule(activity: true, workspace: false);
+
+    private void OnDocumentSaved(object? sender, DocumentEventArgs e)
+    {
+        if (string.IsNullOrEmpty(e.Path))
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (_disposed || !_connected)
+            {
+                return; // The host sweeps what changed when it next opens the index; its watcher sees the file too.
+            }
+        }
+
+        _ = SendSavedAsync(e.Path!);
+    }
+
+    private async Task SendSavedAsync(string path)
+    {
+        try
+        {
+            if (!await _connection.NotifyAsync(DocumentSavedMethod, path).ConfigureAwait(false))
+            {
+                _log?.Debug("indexing.saved.not_sent", "The host is not connected; its file watcher picks the save up.");
+            }
+        }
+#pragma warning disable CA1031 // A failed notification only costs the save its head start; the host's watcher still sees the file.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            _log?.Warning("indexing.saved.failed", "Telling the host about a saved document failed.", ("error", ex.GetType().Name), ("detail", ex.Message));
+        }
+    }
 
     private void OnWorkspaceChanged(object? sender, EventArgs e)
     {
