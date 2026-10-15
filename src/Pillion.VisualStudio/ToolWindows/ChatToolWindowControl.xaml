@@ -62,6 +62,30 @@
                              AutomationProperties.Name="{Binding Text}" />
                     <!-- The reply, rendered as Markdown. -->
                     <local:MarkdownMessageView x:Name="Reply" Turn="{Binding}" />
+                    <!-- The spans the reply cites (work item 2.2 restores them with a saved reply), as plain file:line links. -->
+                    <StackPanel x:Name="CitationsPanel" Orientation="Horizontal" Margin="0,4,0,0" Visibility="Collapsed">
+                        <TextBlock Text="{x:Static core:ChatStrings.CitationsLabel}" Style="{StaticResource SecondaryText}" Margin="0,0,6,0" />
+                        <ItemsControl ItemsSource="{Binding Citations}" Focusable="False" AutomationProperties.Name="{x:Static core:ChatStrings.CitationsLabel}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type core:CitationItem}">
+                                    <TextBlock Margin="0,0,10,0">
+                                        <Hyperlink Command="{Binding OpenCommand}"
+                                                   CommandParameter="{Binding}"
+                                                   ToolTip="{Binding ToolTip}"
+                                                   Foreground="{DynamicResource {x:Static platformui:EnvironmentColors.ControlLinkTextBrushKey}}"
+                                                   AutomationProperties.Name="{Binding AutomationName}">
+                                            <Run Text="{Binding Text, Mode=OneWay}" />
+                                        </Hyperlink>
+                                    </TextBlock>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
                     <TextBlock x:Name="StateNote"
                                Text="{Binding StateText}"
                                Style="{StaticResource SecondaryText}"
@@ -90,6 +114,9 @@
                     <Setter TargetName="UserText" Property="Visibility" Value="Visible" />
                     <Setter TargetName="Reply" Property="Visibility" Value="Collapsed" />
                     <Setter TargetName="Reply" Property="Turn" Value="{x:Null}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding HasCitations}" Value="True">
+                    <Setter TargetName="CitationsPanel" Property="Visibility" Value="Visible" />
                 </DataTrigger>
                 <DataTrigger Binding="{Binding HasStateText}" Value="True">
                     <Setter TargetName="StateNote" Property="Visibility" Value="Visible" />
@@ -129,7 +156,11 @@
             </TextBlock.Style>
         </TextBlock>
 
-        <!-- Conversation list: kept in memory for the session (persistence arrives in phase 2). -->
+        <!--
+          Conversation list (work item 2.2): the conversations Pillion Host saved, newest first, read a page at a time as the list
+          is scrolled; Rename and Delete are also in each entry's context menu. When the host cannot save conversations the list
+          is the in-memory one and the notice below the row says so.
+        -->
         <Grid DockPanel.Dock="Top" Margin="0,0,0,4">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
@@ -144,6 +175,7 @@
                       Grid.Column="1"
                       ItemsSource="{Binding Conversations}"
                       SelectedItem="{Binding CurrentConversation, Mode=TwoWay}"
+                      ScrollViewer.ScrollChanged="OnConversationListScrollChanged"
                       AutomationProperties.Name="{x:Static core:ChatStrings.ConversationListName}">
                 <ComboBox.Style>
                     <Style TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
@@ -157,6 +189,14 @@
                 <ComboBox.ItemContainerStyle>
                     <Style TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
                         <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                        <Setter Property="ContextMenu">
+                            <Setter.Value>
+                                <ContextMenu>
+                                    <MenuItem Header="{x:Static core:ChatStrings.ConversationMenuRename}" Click="OnConversationRenameClick" />
+                                    <MenuItem Header="{x:Static core:ChatStrings.ConversationMenuDelete}" Click="OnConversationDeleteClick" />
+                                </ContextMenu>
+                            </Setter.Value>
+                        </Setter>
                     </Style>
                 </ComboBox.ItemContainerStyle>
                 <ComboBox.ItemTemplate>
@@ -181,6 +221,31 @@
             <Button Grid.Column="4" Content="{x:Static core:ChatStrings.DeleteConversationButton}" Command="{Binding DeleteConversationCommand}" Margin="4,0,0,0" MinWidth="50"
                     AutomationProperties.Name="{x:Static core:ChatStrings.DeleteConversationName}" ToolTip="{x:Static core:ChatStrings.DeleteConversationToolTip}" />
         </Grid>
+
+        <!-- Why conversations are not being saved, or that a rename or delete was not saved. -->
+        <TextBlock DockPanel.Dock="Top"
+                   Text="{Binding ConversationsNotice}"
+                   Style="{StaticResource SecondaryText}"
+                   Margin="0,0,0,4"
+                   Visibility="{Binding HasConversationsNotice, Converter={StaticResource VisibleWhenTrue}}"
+                   AutomationProperties.LiveSetting="Polite"
+                   AutomationProperties.Name="{Binding ConversationsNotice}" />
+
+        <!-- A saved conversation is being read, or could not be. -->
+        <TextBlock DockPanel.Dock="Top"
+                   Text="{x:Static core:ChatStrings.ConversationLoadingText}"
+                   Style="{StaticResource SecondaryText}"
+                   Margin="0,0,0,4"
+                   Visibility="{Binding CurrentConversation.IsLoading, Converter={StaticResource VisibleWhenTrue}}"
+                   AutomationProperties.LiveSetting="Polite" />
+        <DockPanel DockPanel.Dock="Top"
+                   Margin="0,0,0,4"
+                   Visibility="{Binding CurrentConversation.HasLoadError, Converter={StaticResource VisibleWhenTrue}}">
+            <Button DockPanel.Dock="Right" Content="{x:Static core:ChatStrings.ConversationRetryLoadButton}" Command="{Binding RetryLoadConversationCommand}" MinWidth="70" Margin="6,0,0,0"
+                    AutomationProperties.Name="{x:Static core:ChatStrings.ConversationRetryLoadButton}" />
+            <TextBlock Text="{Binding CurrentConversation.LoadError}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Assertive"
+                       AutomationProperties.Name="{Binding CurrentConversation.LoadError}" />
+        </DockPanel>
 
         <!-- Model picker and conversation commands. -->
         <Grid DockPanel.Dock="Top" Margin="0,0,0,4">
@@ -462,6 +527,8 @@
                                            AutomationProperties.Name="{x:Static core:ChatStrings.SensitiveGlyphName}" />
                                 <TextBlock Text="{Binding DisplayName}" VerticalAlignment="Center" />
                                 <TextBlock Text="{Binding TokenBadge}" VerticalAlignment="Center" Margin="6,0,0,0" Style="{StaticResource SecondaryText}" />
+                                <TextBlock x:Name="StaleNote" Text="{x:Static core:ChatStrings.PinStaleShort}" VerticalAlignment="Center" Margin="4,0,0,0" FontStyle="Italic"
+                                           Style="{StaticResource SecondaryText}" Visibility="Collapsed" />
                                 <Button Content="&#xE711;"
                                         FontFamily="Segoe MDL2 Assets"
                                         FontSize="9"
@@ -478,6 +545,9 @@
                         <DataTemplate.Triggers>
                             <DataTrigger Binding="{Binding IsSensitive}" Value="True">
                                 <Setter TargetName="Lock" Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsStale}" Value="True">
+                                <Setter TargetName="StaleNote" Property="Visibility" Value="Visible" />
                             </DataTrigger>
                         </DataTemplate.Triggers>
                     </DataTemplate>

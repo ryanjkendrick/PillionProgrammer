@@ -75,6 +75,12 @@ public sealed class PillionPackage : AsyncPackage
     /// <summary>Gets the loaded package, once <see cref="InitializeAsync"/> has created the supervisor (for the Options pages).</summary>
     internal static PillionPackage? Instance { get; private set; }
 
+    /// <summary>
+    /// Gets the events shared by the Chat window and the Privacy options page (Delete all conversations tells the open window to
+    /// forget the conversations it listed).
+    /// </summary>
+    internal ConversationEvents ConversationEvents { get; } = new();
+
     /// <summary>Gets the connection to Pillion Host, once initialization has created it.</summary>
     internal IHostConnection? HostConnection => _supervisor;
 
@@ -215,6 +221,8 @@ public sealed class PillionPackage : AsyncPackage
                 WorkspaceFiles = files,
                 EditorContext = new EditorChatContext(JoinableTaskFactory, () => _signals?.Hub, _log),
                 CopyText = ChatToolWindow.CopyToClipboard,
+                ConversationEvents = ConversationEvents,
+                OpenCitation = ChatToolWindow.OpenCitation,
             });
         return System.Threading.Tasks.Task.FromResult<object>(new ChatToolWindowState(viewModel, files));
     }

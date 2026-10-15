@@ -144,7 +144,22 @@ internal sealed class PrivacyOptionPage : HostSettingsDialogPage
 {
     /// <inheritdoc/>
     protected override OptionsPageViewModel CreateViewModel(IHostConnection connection, JoinableTaskFactory joinableTaskFactory, PillionLog? log) =>
-        new PrivacyOptionsViewModel(connection, joinableTaskFactory, log);
+        new PrivacyOptionsViewModel(connection, joinableTaskFactory, log, PillionPackage.Instance?.ConversationEvents)
+        {
+            ConfirmDeleteAll = ConfirmDeleteAllConversations,
+        };
+
+    private static bool ConfirmDeleteAllConversations(string message)
+    {
+        Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
+        return Microsoft.VisualStudio.Shell.VsShellUtilities.ShowMessageBox(
+            Microsoft.VisualStudio.Shell.ServiceProvider.GlobalProvider,
+            message,
+            "Delete all conversations",
+            Microsoft.VisualStudio.Shell.Interop.OLEMSGICON.OLEMSGICON_WARNING,
+            Microsoft.VisualStudio.Shell.Interop.OLEMSGBUTTON.OLEMSGBUTTON_OKCANCEL,
+            Microsoft.VisualStudio.Shell.Interop.OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_SECOND) == (int)Microsoft.VisualStudio.VSConstants.MessageBoxResult.IDOK;
+    }
 
     /// <inheritdoc/>
     protected override UIElement CreateView(OptionsPageViewModel viewModel) => new PrivacyOptionsControl((PrivacyOptionsViewModel)viewModel);

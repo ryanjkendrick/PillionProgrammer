@@ -66,10 +66,22 @@ public static class ConversationsSchema
         CREATE INDEX ix_outbound_log_time ON outbound_log (time);
         """;
 
+    /// <summary>
+    /// Version 2 (work item 2.2): a reply's citations (JSON) and whether it was stopped, and the pins' order and short names.
+    /// All additive, so older builds can keep reading the file (reader version stays 1).
+    /// </summary>
+    internal const string Version2 = """
+        ALTER TABLE messages ADD COLUMN citations TEXT NULL;
+        ALTER TABLE messages ADD COLUMN cancelled INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE pins ADD COLUMN ordinal INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE pins ADD COLUMN display_name TEXT NOT NULL DEFAULT '';
+        """;
+
     /// <summary>Gets the schema: every migration of <c>conversations.db</c>, in order.</summary>
     public static StoreSchema Schema { get; } = new(
         Name,
         [
             StoreMigration.Sql(1, 1, "conversations, messages, pins and the Outbound log", Version1),
+            StoreMigration.Sql(2, 1, "citations and the stopped marker on messages, order and names on pins", Version2),
         ]);
 }

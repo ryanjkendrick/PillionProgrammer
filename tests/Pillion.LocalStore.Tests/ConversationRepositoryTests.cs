@@ -59,7 +59,7 @@ public sealed class ConversationRepositoryTests : IDisposable
             Assert.Null(messages[0].Model);
             Assert.Equal(assistant, messages[1]);
             Assert.True(messages[0].Id < messages[1].Id);
-            Assert.Equal([new PinRecord("errors", "", 40), new PinRecord("file", "src/Parser.cs", 900)], await repository.GetPinsAsync("conv-1"));
+            Assert.Equal([new PinRecord("file", "src/Parser.cs", 900), new PinRecord("errors", "", 40)], await repository.GetPinsAsync("conv-1"));
 
             var log = await repository.GetRecentOutboundAsync();
             Assert.Equal(2, log.Count);
@@ -160,6 +160,6 @@ public sealed class ConversationRepositoryTests : IDisposable
         Assert.Empty(await repository.GetRecentOutboundAsync());
         Assert.Empty(await repository.GetMessagesAsync("c"));
         Assert.False(File.Exists(_temp.File("conversations.db.v1.bak")));
-        Assert.Equal("1", await database.ScalarAsync("SELECT value FROM meta WHERE key = 'schema_version'")); // The schema stays.
+        Assert.Equal("2", await database.ScalarAsync("SELECT value FROM meta WHERE key = 'schema_version'")); // The schema stays.
     }
 }

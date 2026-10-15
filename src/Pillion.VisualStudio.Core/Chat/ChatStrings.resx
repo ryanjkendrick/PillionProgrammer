@@ -536,4 +536,56 @@
     <value>Outcome</value>
     <comment>Outbound log column.</comment>
   </data>
+  <data name="PinStale" xml:space="preserve">
+    <value>Restored from a saved conversation and not read again: nothing is sent for it. Pin it again to refresh it.</value>
+    <comment>Pin tooltip line for a restored pin that could not be read again.</comment>
+  </data>
+  <data name="PinStaleShort" xml:space="preserve">
+    <value>stale</value>
+    <comment>Added to a stale pin's screen-reader name.</comment>
+  </data>
+  <data name="CitationNameFormat" xml:space="preserve">
+    <value>Open {0}</value>
+    <comment>Screen-reader name of a citation link; {0} is its text (file:line).</comment>
+  </data>
+  <data name="CitationsLabel" xml:space="preserve">
+    <value>Sources:</value>
+    <comment>Label before the cited spans under a reply.</comment>
+  </data>
+  <data name="ConversationsNotSavedOff" xml:space="preserve">
+    <value>Saved conversations are turned off (feature localStore): conversations last until Visual Studio closes.</value>
+    <comment>Notice under the conversation list while the localStore feature is off.</comment>
+  </data>
+  <data name="ConversationsNotSavedFormat" xml:space="preserve">
+    <value>Conversations are not being saved ({0}): they last until Visual Studio closes.</value>
+    <comment>Notice under the conversation list while the host cannot save conversations; {0} is the reason.</comment>
+  </data>
+  <data name="ConversationLoadingText" xml:space="preserve">
+    <value>Loading conversation...</value>
+    <comment>Shown while a saved conversation is read from the host.</comment>
+  </data>
+  <data name="ConversationLoadFailedFormat" xml:space="preserve">
+    <value>Could not open this conversation: {0}</value>
+    <comment>Shown when a saved conversation could not be read; {0} is the reason.</comment>
+  </data>
+  <data name="ConversationRetryLoadButton" xml:space="preserve">
+    <value>Try again</value>
+    <comment>Button that reads a saved conversation again.</comment>
+  </data>
+  <data name="ConversationSaveFailedFormat" xml:space="preserve">
+    <value>The change was not saved: {0}</value>
+    <comment>Notice when a rename or delete of a saved conversation did not reach the host; {0} is the reason.</comment>
+  </data>
+  <data name="ConversationMenuRename" xml:space="preserve">
+    <value>Rename</value>
+    <comment>Conversation list context menu item.</comment>
+  </data>
+  <data name="ConversationMenuDelete" xml:space="preserve">
+    <value>Delete</value>
+    <comment>Conversation list context menu item.</comment>
+  </data>
+  <data name="SavedReplyHeader" xml:space="preserve">
+    <value>Assistant</value>
+    <comment>Header of a saved reply that does not name its model.</comment>
+  </data>
 </root>

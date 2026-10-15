@@ -125,6 +125,13 @@ internal sealed class FakeModelService(FakeRecorder? recorder = null, FakeConver
                 catch (OperationCanceledException)
                 {
                     Console.Error.WriteLine("fakehost: chat " + request.RequestId + " cancelled");
+
+                    // Like Pillion Host: what had been sent is saved as a stopped reply, unless nothing had.
+                    if (sent > 0)
+                    {
+                        conversations?.Append(request, Chunk(request, model, string.Empty), string.Concat(pieces.Take(sent)), cancelled: true);
+                    }
+
                     throw;
                 }
 

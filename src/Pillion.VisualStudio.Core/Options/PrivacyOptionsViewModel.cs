@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Threading;
@@ -75,7 +76,9 @@ public sealed class CloudSwitchViewModel : ObservableObject
 
 /// <summary>
 /// The Tools &gt; Options &gt; Pillion Programmer &gt; Privacy page: the Local-only switch (<c>privacy.localOnly</c>) and one
-/// cloud switch per task class (<c>cloudSwitches.*</c>), saved through <see cref="ISettingsService.SetAsync"/>.
+/// cloud switch per task class (<c>cloudSwitches.*</c>), saved through <see cref="ISettingsService.SetAsync"/>; and Delete all
+/// conversations (work item 2.2), which asks the host to delete every saved conversation, message and pin and the whole
+/// Outbound log, after a confirmation.
 /// </summary>
 public sealed class PrivacyOptionsViewModel : OptionsPageViewModel
 {
@@ -83,16 +86,32 @@ public sealed class PrivacyOptionsViewModel : OptionsPageViewModel
     public const string LocalOnlyDescription =
         "Disables every cloud provider: nothing is sent to a model outside this machine and no connectivity probes run.";
 
+    private readonly ConversationEvents? _conversationEvents;
+    /// <summary>The text of the confirmation asked before Delete all.</summary>
+    public const string DeleteAllConfirmation =
+        "Delete every saved conversation, with its messages and pinned context, and the whole Outbound log? "
+        + "This cannot be undone. Settings and the code index are not touched.";
+
+    /// <summary>The one-line explanation beside the Delete all button.</summary>
+    public const string DeleteAllDescription =
+        "Conversations and the Outbound log are kept on this machine, encrypted, until you delete them. This removes all of them at once.";
+
     private bool _localOnly;
     private JObject _loadedSwitches = [];
+    private bool _isDeletingAll;
+    private string _deleteAllStatus = string.Empty;
+    private Func<string, bool>? _confirmDeleteAll;
 
     /// <summary>Initializes a new instance of the <see cref="PrivacyOptionsViewModel"/> class.</summary>
     /// <param name="connection">The connection to Pillion Host.</param>
     /// <param name="joinableTaskFactory">The package's joinable task factory.</param>
     /// <param name="log">The logger, or <see langword="null"/>.</param>
-    public PrivacyOptionsViewModel(IHostConnection connection, JoinableTaskFactory joinableTaskFactory, PillionLog? log = null)
+    /// <param name="conversationEvents">Told when Delete all succeeded, so an open Chat window forgets its conversations; <see langword="null"/> tells no one.</param>
+    public PrivacyOptionsViewModel(IHostConnection connection, JoinableTaskFactory joinableTaskFactory, PillionLog? log = null, ConversationEvents? conversationEvents = null)
         : base(connection, joinableTaskFactory, log)
     {
+        _conversationEvents = conversationEvents;
+        DeleteAllConversationsCommand = new DelegateCommand(() => Run(DeleteAllConversationsAsync), () => IsLoaded && !IsDeletingAll && ConfirmDeleteAll is not null);
         CloudSwitches =
         [
             new("chat", "Chat", "Chat conversations may use a cloud model. A cloud key enables chat only; the other task classes need their own switch.", defaultValue: true),
@@ -128,6 +147,112 @@ public sealed class PrivacyOptionsViewModel : OptionsPageViewModel
     public string LocalOnlyText => LocalOnlyDescription;
 #pragma warning restore CA1822
 
+    /// <summary>
+    /// Gets or sets the confirmation asked before Delete all: it receives <see cref="DeleteAllConfirmation"/> and returns
+    /// <see langword="true"/> to go ahead. Delete all is unavailable without it.
+    /// </summary>
+    public Func<string, bool>? ConfirmDeleteAll
+    {
+        get => _confirmDeleteAll;
+        set
+        {
+            _confirmDeleteAll = value;
+            DeleteAllConversationsCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    /// <summary>Gets the Delete all conversations command.</summary>
+    public DelegateCommand DeleteAllConversationsCommand { get; }
+
+    /// <summary>Gets a value indicating whether Delete all is running.</summary>
+    public bool IsDeletingAll
+    {
+        get => _isDeletingAll;
+        private set
+        {
+            if (SetProperty(ref _isDeletingAll, value))
+            {
+                DeleteAllConversationsCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>Gets the result of the last Delete all, or why it failed; empty before one.</summary>
+    public string DeleteAllStatus
+    {
+        get => _deleteAllStatus;
+        private set
+        {
+            if (SetProperty(ref _deleteAllStatus, value ?? string.Empty))
+            {
+                OnPropertyChanged(nameof(HasDeleteAllStatus));
+            }
+        }
+    }
+
+    /// <summary>Gets a value indicating whether <see cref="DeleteAllStatus"/> has text.</summary>
+    public bool HasDeleteAllStatus => _deleteAllStatus.Length > 0;
+
+    /// <summary>Gets the one-line explanation beside the Delete all button (an instance member so the view can bind to it).</summary>
+#pragma warning disable CA1822 // Bound from XAML.
+    public string DeleteAllText => DeleteAllDescription;
+#pragma warning restore CA1822
+
+    /// <summary>
+    /// Asks the host to delete every saved conversation, message and pin and the whole Outbound log, after
+    /// <see cref="ConfirmDeleteAll"/>. The result, or the reason it failed, is in <see cref="DeleteAllStatus"/>. Call on the UI thread.
+    /// </summary>
+    /// <returns>A task that completes when the host has answered or the developer declined.</returns>
+    public async Task DeleteAllConversationsAsync()
+    {
+        if (!IsLoaded || IsDeletingAll || ConfirmDeleteAll is not { } confirm || !confirm(DeleteAllConfirmation))
+        {
+            return;
+        }
+
+        IsDeletingAll = true;
+        DeleteAllStatus = "Deleting...";
+        await TaskScheduler.Default;
+        DeleteAllConversationsResult? result = null;
+        RpcFailure? failure = null;
+        try
+        {
+            // The host compacts the database after the delete, which takes a moment on a large one.
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(DisposalToken);
+            timeout.CancelAfter(TimeSpan.FromMinutes(2));
+            result = await Connection.GetProxy<IConversationService>().DeleteAllConversationsAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (DisposalToken.IsCancellationRequested)
+        {
+            return;
+        }
+#pragma warning disable CA1031 // Shown on the page.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            failure = RpcFailure.Describe(ex);
+            Log?.Warning("options.privacy.deleteall.failed", "Deleting all conversations failed.", ("error", ex.GetType().Name), ("code", failure.Code?.ToString()));
+        }
+
+        await JoinableTaskFactory.SwitchToMainThreadAsync(DisposalToken);
+        IsDeletingAll = false;
+        if (result is not null)
+        {
+            DeleteAllStatus = string.Format(
+                CultureInfo.CurrentCulture,
+                "Deleted {0:N0} conversations, {1:N0} messages, {2:N0} pins and {3:N0} Outbound log entries.",
+                result.Conversations,
+                result.Messages,
+                result.Pins,
+                result.OutboundEntries);
+            _conversationEvents?.RaiseAllDeleted();
+        }
+        else
+        {
+            DeleteAllStatus = failure!.HostLost ? HostNotReadyText + "; nothing was deleted." : "Could not delete: " + failure.Message;
+        }
+    }
+
     /// <summary>Gets the cloud switches, one per task class.</summary>
     public ObservableCollection<CloudSwitchViewModel> CloudSwitches { get; }
 
@@ -161,6 +286,13 @@ public sealed class PrivacyOptionsViewModel : OptionsPageViewModel
             await settings.SetAsync(SettingsJsonText.CloudSwitchesKey, switchesJson, cancellationToken).ConfigureAwait(false);
             return page => ((PrivacyOptionsViewModel)page)._loadedSwitches = switches;
         };
+    }
+
+    /// <inheritdoc/>
+    protected override void RaiseCommands()
+    {
+        base.RaiseCommands();
+        DeleteAllConversationsCommand?.RaiseCanExecuteChanged();
     }
 
     private void ApplyLoaded(bool localOnly, JObject switches)

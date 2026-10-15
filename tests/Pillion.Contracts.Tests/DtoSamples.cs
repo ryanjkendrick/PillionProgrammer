@@ -403,6 +403,7 @@ internal static class DtoSamples
         CompletionTokens = 60,
         CreatedUtc = new DateTime(2026, 10, 14, 9, 5, 0, DateTimeKind.Utc),
         Citations = [Cite(12)],
+        Cancelled = true,
     };
 
     private static ConversationPin Pin() => new() { Kind = MentionKinds.File, Target = @"C:\src\Program.cs", DisplayName = "Program.cs", TokenCount = 300 };

@@ -1,5 +1,7 @@
 using Pillion.Common.Settings;
 using Pillion.Contracts;
+using Pillion.Host.Conversations;
+using Pillion.LocalStore.Conversations;
 using Pillion.ModelGateway;
 
 namespace Pillion.Host.Models;
@@ -7,7 +9,8 @@ namespace Pillion.Host.Models;
 /// <summary>
 /// Implements <see cref="IDiagnosticsService"/>: a read-only view of the Model Gateway's autocomplete counters, of the
 /// Outbound log, and the Context Inspector's preview of a chat request. It reads what the gateway already keeps (the
-/// counters and the ring buffer) and holds no state of its own; it never returns prompt or completion text.
+/// counters and the ring buffer) and holds no state of its own; it never returns prompt or completion text. With the
+/// <c>localStore</c> feature on, the Outbound log is read from the Local Store, so it survives a restart (work item 2.2).
 /// </summary>
 /// <remarks>
 /// <see cref="GetOutboundRecordsAsync"/> needs the <see cref="FeatureNames.OutboundLogView"/> feature;
@@ -32,6 +35,7 @@ internal sealed class DiagnosticsRpcService : IDiagnosticsService
     private readonly LocalResidencyMap? _residency;
     private readonly ContextPreview? _preview;
     private readonly IFeatureFlags? _features;
+    private readonly StoreOutboundSink? _store;
 
     /// <summary>Initializes a new instance of the <see cref="DiagnosticsRpcService"/> class.</summary>
     /// <param name="counters">The gateway's autocomplete counters.</param>
@@ -40,13 +44,15 @@ internal sealed class DiagnosticsRpcService : IDiagnosticsService
     /// <param name="residency">The map of resident local models; the report lists none without it.</param>
     /// <param name="preview">Assembles the Context Inspector's preview; without it <see cref="PreviewContextAsync"/> fails.</param>
     /// <param name="features">The feature flags; <see langword="null"/> means every feature is on.</param>
+    /// <param name="store">The Outbound log's store; <see cref="GetOutboundRecordsAsync"/> reads from it while the <c>localStore</c> feature is on. <see langword="null"/> reads the in-memory log only.</param>
     public DiagnosticsRpcService(
         AutocompleteCounters counters,
         IOutboundLog outbound,
         TimeProvider time,
         LocalResidencyMap? residency = null,
         ContextPreview? preview = null,
-        IFeatureFlags? features = null)
+        IFeatureFlags? features = null,
+        StoreOutboundSink? store = null)
     {
         ArgumentNullException.ThrowIfNull(counters);
         ArgumentNullException.ThrowIfNull(outbound);
@@ -57,13 +63,28 @@ internal sealed class DiagnosticsRpcService : IDiagnosticsService
         _residency = residency;
         _preview = preview;
         _features = features;
+        _store = store;
     }
 
     /// <inheritdoc/>
-    public Task<OutboundRecordDto[]> GetOutboundRecordsAsync(int maxCount, CancellationToken cancellationToken)
+    public async Task<OutboundRecordDto[]> GetOutboundRecordsAsync(int maxCount, CancellationToken cancellationToken)
     {
         EnsureEnabled(FeatureNames.OutboundLogView, OutboundLogViewDisabledMessage);
-        return Task.FromResult(ToDtos(_outbound.GetRecent(), maxCount));
+        if (_store is not null)
+        {
+            var count = maxCount > 0 ? maxCount : DefaultOutboundCount;
+            if (await _store.GetRecentAsync(count, cancellationToken).ConfigureAwait(false) is { } entries)
+            {
+                // Autocomplete cache hits never reached a model and are not stored: this session's come from the in-memory log.
+                var stored = ToDtos(entries, count);
+                var oldestStored = entries.Count >= count && entries.Count > 0 ? entries[0].Timestamp.UtcDateTime : DateTime.MinValue;
+                var hits = ToDtos(_outbound.GetRecent().Where(r => r.CacheHit).ToList(), count).Where(d => d.TimestampUtc >= oldestStored);
+                return [.. stored.Concat(hits).OrderByDescending(d => d.TimestampUtc).Take(count)];
+            }
+        }
+
+        // The store is off or cannot be read: the records of this host session.
+        return ToDtos(_outbound.GetRecent(), maxCount);
     }
 
     /// <inheritdoc/>
@@ -113,6 +134,41 @@ internal sealed class DiagnosticsRpcService : IDiagnosticsService
                 Outcome = record.Outcome.ToString(),
                 ErrorCode = record.ErrorCode,
                 CacheHit = record.CacheHit,
+            });
+        }
+
+        return [.. result];
+    }
+
+    /// <summary>Maps stored Outbound entries to their DTOs, newest first.</summary>
+    /// <param name="entries">The entries, oldest first (as the store returns them).</param>
+    /// <param name="maxCount">The most to return; 0 or less means <see cref="DefaultOutboundCount"/>.</param>
+    /// <returns>The DTOs.</returns>
+    internal static OutboundRecordDto[] ToDtos(IReadOnlyList<OutboundLogEntry> entries, int maxCount)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        var count = maxCount > 0 ? maxCount : DefaultOutboundCount;
+        var result = new List<OutboundRecordDto>(Math.Min(count, entries.Count));
+        for (var i = entries.Count - 1; i >= 0 && result.Count < count; i--)
+        {
+            var entry = entries[i];
+            result.Add(new OutboundRecordDto
+            {
+                TimestampUtc = entry.Timestamp.UtcDateTime,
+                RequestId = entry.RequestId,
+                ProviderId = entry.ProviderId,
+                ModelId = entry.ModelId,
+                TaskClass = entry.TaskClass,
+                IsLocal = entry.IsLocal,
+                PromptTokens = entry.PromptTokens,
+                CompletionTokens = entry.CompletionTokens,
+                RedactionCount = entry.RedactionCount,
+                ContextItems = entry.ContextItems,
+                ContextTrimmed = entry.ContextTrimmed,
+                DurationMs = (long)entry.Duration.TotalMilliseconds,
+                Outcome = entry.Outcome,
+                ErrorCode = entry.ErrorCode,
+                CacheHit = entry.CacheHit,
             });
         }
 
