@@ -16,7 +16,7 @@ public sealed class ChunkerRegressionTests
     [Fact(Skip = "Open: the TSX chunker takes minutes on this input (docs/gate-2-report.md, open issue 1)")]
     public void Tsx_RandomTokens_ChunkWithinTwoSeconds()
     {
-        var text = Fixture.Read("regressions/tsx-slow-parse.txt");
+        var text = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Regressions", "tsx-slow-parse.txt"));
 
         var watch = Stopwatch.StartNew();
         var chunks = new FileChunker().Chunk("dir/sub/file.tsx", text, ChunkOptions.Default with { MaxTokens = 117 });

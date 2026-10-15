@@ -19,6 +19,9 @@
     <Compile Remove="Fixtures\**" />
     <None Remove="Fixtures\**" />
     <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Inputs a chunker handled badly; outside Fixtures, which the retrieval evaluation's fixtures set indexes. -->
+    <None Remove="Regressions\**" />
+    <None Include="Regressions\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
