@@ -83,7 +83,7 @@ public sealed partial class PillionPackageTests
         var onUi = timings.Where(t => t.ThreadId == uiThreadId).ToList();
         Output.WriteLine($"UiThreadTimings: {timings.Count} query stretches, {onUi.Count} on the UI thread ({onUi.Sum(t => t.Duration.TotalMilliseconds):0.0} ms); threads {string.Join(", ", timings.Select(t => t.ThreadId).Distinct())}, UI thread {uiThreadId}.");
         var queryOperations = watched.Operations
-            .Where(o => o.Start >= windowStart && o.Start <= windowEnd && o.Description.IndexOf("WorkspaceQuer", StringComparison.Ordinal) >= 0)
+            .Where(o => o.IsPillion && o.Start >= windowStart && o.Start <= windowEnd && o.Description.IndexOf("WorkspaceQuer", StringComparison.Ordinal) >= 0)
             .ToList();
         var pillionOperations = watched.Operations.Where(o => o.IsPillion && o.Start >= windowStart && o.Start <= windowEnd).ToList();
         Output.WriteLine($"Dispatcher: {watched.Operations.Count} operations in the window, {pillionOperations.Count} of Pillion's ({pillionOperations.Sum(o => o.Duration.TotalMilliseconds):0.0} ms), {queryOperations.Count} of the workspace queries.");

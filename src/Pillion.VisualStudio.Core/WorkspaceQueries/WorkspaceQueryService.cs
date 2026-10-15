@@ -303,7 +303,8 @@ public sealed class WorkspaceQueryService : IWorkspaceQueryService
             var elapsed = Elapsed(started);
             Statistics.OnCompleted(elapsed, timedOut);
             var response = respond(timedOut);
-            _log?.Info(
+            // Debug: the log file only. An Info line would also go to the Output pane, whose flush visits the UI thread.
+            _log?.Debug(
                 "workspace.query",
                 "Workspace query answered.",
                 ("query", name),
@@ -321,7 +322,7 @@ public sealed class WorkspaceQueryService : IWorkspaceQueryService
         catch (PillionRpcException ex)
         {
             Statistics.OnFailed();
-            _log?.Info("workspace.query.refused", "Workspace query refused by the engine.", ("query", name), ("code", ex.Error.Code), ("detail", ex.Error.Details));
+            _log?.Debug("workspace.query.refused", "Workspace query refused by the engine.", ("query", name), ("code", ex.Error.Code), ("detail", ex.Error.Details));
             throw;
         }
         catch (Exception ex)
