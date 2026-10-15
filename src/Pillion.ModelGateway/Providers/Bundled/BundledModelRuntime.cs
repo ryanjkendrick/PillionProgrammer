@@ -19,6 +19,7 @@ public sealed partial class BundledModelRuntime : IDisposable
     private readonly Dictionary<string, OnnxEmbeddingModel> _loaded = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, EmbeddingTokenizer> _tokenizers = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, long> _lastUsed = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> _inFlight = new(StringComparer.OrdinalIgnoreCase);
     private readonly Func<GpuTier> _gpuTier;
     private readonly TimeProvider _time;
     private readonly ILogger _logger;
@@ -135,7 +136,22 @@ public sealed partial class BundledModelRuntime : IDisposable
         ArgumentNullException.ThrowIfNull(modelId);
         ArgumentNullException.ThrowIfNull(texts);
 
-        Touch(modelId);
+        Enter(modelId);
+        try
+        {
+            return EmbedCore(modelId, texts, cancellationToken);
+        }
+        finally
+        {
+            Leave(modelId);
+        }
+    }
+
+    /// <summary>Forgets every verification verdict, so that files downloaded or replaced since are hashed again on the next lookup.</summary>
+    public void Invalidate() => Locator.Invalidate();
+
+    private (float[][] Vectors, int Tokens) EmbedCore(string modelId, IReadOnlyList<string> texts, CancellationToken cancellationToken)
+    {
         var model = GetOrLoad(modelId, cancellationToken);
         try
         {
@@ -159,14 +175,7 @@ public sealed partial class BundledModelRuntime : IDisposable
         {
             throw new OperationCanceledException("The embedding run was cancelled.", ex, cancellationToken);
         }
-        finally
-        {
-            Touch(modelId);
-        }
     }
-
-    /// <summary>Forgets every verification verdict, so that files downloaded or replaced since are hashed again on the next lookup.</summary>
-    public void Invalidate() => Locator.Invalidate();
 
     /// <inheritdoc/>
     public void Dispose()
@@ -346,10 +355,20 @@ public sealed partial class BundledModelRuntime : IDisposable
         model.Dispose();
     }
 
-    private void Touch(string modelId)
+    private void Enter(string modelId)
     {
         lock (_gate)
         {
+            _inFlight[modelId] = _inFlight.GetValueOrDefault(modelId) + 1;
+        }
+    }
+
+    /// <summary>Ends a call: the model's idle time starts now, and the idle timer is armed.</summary>
+    private void Leave(string modelId)
+    {
+        lock (_gate)
+        {
+            _inFlight[modelId] = Math.Max(0, _inFlight.GetValueOrDefault(modelId) - 1);
             if (_disposed)
             {
                 return;
@@ -368,7 +387,8 @@ public sealed partial class BundledModelRuntime : IDisposable
         {
             foreach (var (id, model) in _loaded.ToList())
             {
-                if (!_lastUsed.TryGetValue(id, out var last) || _time.GetElapsedTime(last) >= Options.IdleUnloadAfter)
+                if (_inFlight.GetValueOrDefault(id) == 0 &&
+                    (!_lastUsed.TryGetValue(id, out var last) || _time.GetElapsedTime(last) >= Options.IdleUnloadAfter))
                 {
                     _loaded.Remove(id);
                     released.Add(model);
