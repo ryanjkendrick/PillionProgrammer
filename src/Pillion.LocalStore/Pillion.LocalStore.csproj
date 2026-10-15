@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The Local Store (work item 2.1, design section 10): Pillion Host's encrypted SQLite databases. SQLite3 Multiple
+    Ciphers (SQLitePCLRaw.bundle_e_sqlite3mc) under Microsoft.Data.Sqlite.Core, one DPAPI-protected key per database,
+    WAL, a meta table with schema versions, migrations that back the file up first, and the conversations database.
+    A separate library so the phase 2 index can share it. See README.md.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Pillion.LocalStore</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3mc" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Pillion.Contracts\Pillion.Contracts.csproj" />
+    <ProjectReference Include="..\Pillion.Common\Pillion.Common.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Pillion.LocalStore.Tests" />
+  </ItemGroup>
+
+</Project>
