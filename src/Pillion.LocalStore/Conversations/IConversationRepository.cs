@@ -12,6 +12,33 @@ public interface IConversationRepository
     /// <returns>A task that completes when it is stored.</returns>
     Task SaveConversationAsync(ConversationRecord conversation, CancellationToken cancellationToken = default);
 
+    /// <summary>Creates a conversation unless one with that id exists; an existing one is left exactly as it is.</summary>
+    /// <param name="conversation">The conversation.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns><see langword="true"/> when the conversation was created; <see langword="false"/> when it already existed.</returns>
+    Task<bool> TryCreateConversationAsync(ConversationRecord conversation, CancellationToken cancellationToken = default);
+
+    /// <summary>Changes a conversation's title only; its updated time stays, so a rename does not move it in the list.</summary>
+    /// <param name="id">The conversation id.</param>
+    /// <param name="title">The new title.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns><see langword="true"/> when the conversation exists.</returns>
+    Task<bool> RenameConversationAsync(string id, string title, CancellationToken cancellationToken = default);
+
+    /// <summary>Sets the model a conversation last used (the host stores <c>provider/model</c>) without touching its title or updated time.</summary>
+    /// <param name="id">The conversation id.</param>
+    /// <param name="model">The model, or <see langword="null"/> for none.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns><see langword="true"/> when the conversation exists.</returns>
+    Task<bool> SetConversationModelAsync(string id, string? model, CancellationToken cancellationToken = default);
+
+    /// <summary>Lists one page of conversations with their message counts, most recently updated first.</summary>
+    /// <param name="offset">How many conversations to skip.</param>
+    /// <param name="limit">The most to return.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns>The conversations.</returns>
+    Task<IReadOnlyList<ConversationListItem>> ListConversationPageAsync(int offset, int limit, CancellationToken cancellationToken = default);
+
     /// <summary>Gets a conversation.</summary>
     /// <param name="id">The conversation id.</param>
     /// <param name="cancellationToken">Cancels the call.</param>
@@ -43,7 +70,13 @@ public interface IConversationRepository
     /// <returns>The messages; empty for an unknown conversation.</returns>
     Task<IReadOnlyList<MessageRecord>> GetMessagesAsync(string conversationId, CancellationToken cancellationToken = default);
 
-    /// <summary>Replaces the pins of a conversation.</summary>
+    /// <summary>Gets the newest message of a conversation.</summary>
+    /// <param name="conversationId">The conversation id.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns>The message, or <see langword="null"/> when there are none (or no such conversation).</returns>
+    Task<MessageRecord?> GetLastMessageAsync(string conversationId, CancellationToken cancellationToken = default);
+
+    /// <summary>Replaces the pins of a conversation; they come back in the order given.</summary>
     /// <param name="conversationId">The conversation id; it must exist.</param>
     /// <param name="pins">The pins; a repeated kind and target keeps the last.</param>
     /// <param name="cancellationToken">Cancels the call.</param>
@@ -51,7 +84,7 @@ public interface IConversationRepository
     /// <exception cref="KeyNotFoundException">The conversation does not exist.</exception>
     Task ReplacePinsAsync(string conversationId, IReadOnlyList<PinRecord> pins, CancellationToken cancellationToken = default);
 
-    /// <summary>Gets the pins of a conversation, ordered by kind and target.</summary>
+    /// <summary>Gets the pins of a conversation in the order they were stored.</summary>
     /// <param name="conversationId">The conversation id.</param>
     /// <param name="cancellationToken">Cancels the call.</param>
     /// <returns>The pins; empty for an unknown conversation.</returns>

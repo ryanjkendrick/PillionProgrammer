@@ -11,6 +11,9 @@ public sealed class ConversationRepository : IConversationRepository
         "id, time, request_id, provider, model, task_class, locality, prompt_tokens, prompt_tokens_counted, completion_tokens, "
         + "cache_hit, first_token_ms, duration_ms, outcome, error_code, redactions, context_items, context_trimmed, spans";
 
+    private const string MessageColumns =
+        "id, conversation_id, role, content, created, model, provider, tokens_in, tokens_out, cost, citations, cancelled";
+
     private readonly EncryptedDatabase _database;
 
     /// <summary>Initializes a new instance of the <see cref="ConversationRepository"/> class.</summary>
@@ -41,6 +44,63 @@ public sealed class ConversationRepository : IConversationRepository
                 ("$updated", ToUnixMs(conversation.Updated)),
                 ("$model", conversation.Model)),
             cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public Task<bool> TryCreateConversationAsync(ConversationRecord conversation, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(conversation);
+        ArgumentException.ThrowIfNullOrEmpty(conversation.Id);
+        return _database.WriteAsync(
+            async (connection, transaction, token) =>
+                await ExecuteAsync(
+                    connection,
+                    transaction,
+                    "INSERT INTO conversations (id, title, created, updated, model) VALUES ($id, $title, $created, $updated, $model) ON CONFLICT (id) DO NOTHING",
+                    token,
+                    ("$id", conversation.Id),
+                    ("$title", conversation.Title ?? string.Empty),
+                    ("$created", ToUnixMs(conversation.Created)),
+                    ("$updated", ToUnixMs(conversation.Updated)),
+                    ("$model", conversation.Model)).ConfigureAwait(false) > 0,
+            cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public Task<bool> RenameConversationAsync(string id, string title, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        ArgumentNullException.ThrowIfNull(title);
+        return _database.WriteAsync(
+            async (connection, transaction, token) =>
+                await ExecuteAsync(connection, transaction, "UPDATE conversations SET title = $title WHERE id = $id", token, ("$id", id), ("$title", title)).ConfigureAwait(false) > 0,
+            cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public Task<bool> SetConversationModelAsync(string id, string? model, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        return _database.WriteAsync(
+            async (connection, transaction, token) =>
+                await ExecuteAsync(connection, transaction, "UPDATE conversations SET model = $model WHERE id = $id", token, ("$id", id), ("$model", model)).ConfigureAwait(false) > 0,
+            cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public Task<IReadOnlyList<ConversationListItem>> ListConversationPageAsync(int offset, int limit, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        ArgumentOutOfRangeException.ThrowIfNegative(limit);
+        return QueryAsync(
+            """
+            SELECT c.id, c.title, c.created, c.updated, c.model, (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id)
+            FROM conversations c ORDER BY c.updated DESC, c.id LIMIT $limit OFFSET $offset
+            """,
+            reader => new ConversationListItem(ReadConversation(reader), reader.GetInt32(5)),
+            cancellationToken,
+            ("$limit", limit),
+            ("$offset", offset));
     }
 
     /// <inheritdoc/>
@@ -104,8 +164,8 @@ public sealed class ConversationRepository : IConversationRepository
                     connection,
                     transaction,
                     """
-                    INSERT INTO messages (conversation_id, role, content, model, provider, tokens_in, tokens_out, cost, created)
-                    VALUES ($conversation, $role, $content, $model, $provider, $in, $out, $cost, $created)
+                    INSERT INTO messages (conversation_id, role, content, model, provider, tokens_in, tokens_out, cost, created, citations, cancelled)
+                    VALUES ($conversation, $role, $content, $model, $provider, $in, $out, $cost, $created, $citations, $cancelled)
                     RETURNING id
                     """,
                     ("$conversation", message.ConversationId),
@@ -116,7 +176,9 @@ public sealed class ConversationRepository : IConversationRepository
                     ("$in", message.TokensIn),
                     ("$out", message.TokensOut),
                     ("$cost", message.Cost),
-                    ("$created", created));
+                    ("$created", created),
+                    ("$citations", message.Citations),
+                    ("$cancelled", message.Cancelled));
                 var id = Convert.ToInt64(await command.ExecuteScalarAsync(token).ConfigureAwait(false), CultureInfo.InvariantCulture);
 
                 return new MessageRecord(
@@ -129,7 +191,9 @@ public sealed class ConversationRepository : IConversationRepository
                     message.Provider,
                     message.TokensIn,
                     message.TokensOut,
-                    message.Cost);
+                    message.Cost,
+                    message.Citations,
+                    message.Cancelled);
             },
             cancellationToken);
     }
@@ -139,20 +203,22 @@ public sealed class ConversationRepository : IConversationRepository
     {
         ArgumentNullException.ThrowIfNull(conversationId);
         return QueryAsync(
-            "SELECT id, conversation_id, role, content, created, model, provider, tokens_in, tokens_out, cost FROM messages WHERE conversation_id = $id ORDER BY id",
-            reader => new MessageRecord(
-                reader.GetInt64(0),
-                reader.GetString(1),
-                reader.GetString(2),
-                reader.GetString(3),
-                FromUnixMs(reader.GetInt64(4)),
-                NullableString(reader, 5),
-                NullableString(reader, 6),
-                reader.IsDBNull(7) ? null : reader.GetInt32(7),
-                reader.IsDBNull(8) ? null : reader.GetInt32(8),
-                reader.IsDBNull(9) ? null : reader.GetDouble(9)),
+            $"SELECT {MessageColumns} FROM messages WHERE conversation_id = $id ORDER BY id",
+            ReadMessage,
             cancellationToken,
             ("$id", conversationId));
+    }
+
+    /// <inheritdoc/>
+    public async Task<MessageRecord?> GetLastMessageAsync(string conversationId, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(conversationId);
+        var rows = await QueryAsync(
+            $"SELECT {MessageColumns} FROM messages WHERE conversation_id = $id ORDER BY id DESC LIMIT 1",
+            ReadMessage,
+            cancellationToken,
+            ("$id", conversationId)).ConfigureAwait(false);
+        return rows.Count == 0 ? null : rows[0];
     }
 
     /// <inheritdoc/>
@@ -171,21 +237,26 @@ public sealed class ConversationRepository : IConversationRepository
                 }
 
                 await ExecuteAsync(connection, transaction, "DELETE FROM pins WHERE conversation_id = $id", token, ("$id", conversationId)).ConfigureAwait(false);
+                var ordinal = 0;
                 foreach (var pin in pins)
                 {
                     ArgumentNullException.ThrowIfNull(pin);
+
+                    // A repeated kind and target keeps the last one's values, in the position of the first.
                     await ExecuteAsync(
                         connection,
                         transaction,
                         """
-                        INSERT INTO pins (conversation_id, kind, target, token_count) VALUES ($id, $kind, $target, $tokens)
-                        ON CONFLICT (conversation_id, kind, target) DO UPDATE SET token_count = excluded.token_count
+                        INSERT INTO pins (conversation_id, kind, target, token_count, display_name, ordinal) VALUES ($id, $kind, $target, $tokens, $name, $ordinal)
+                        ON CONFLICT (conversation_id, kind, target) DO UPDATE SET token_count = excluded.token_count, display_name = excluded.display_name
                         """,
                         token,
                         ("$id", conversationId),
                         ("$kind", pin.Kind),
                         ("$target", pin.Target),
-                        ("$tokens", pin.TokenCount)).ConfigureAwait(false);
+                        ("$tokens", pin.TokenCount),
+                        ("$name", pin.DisplayName ?? string.Empty),
+                        ("$ordinal", ordinal++)).ConfigureAwait(false);
                 }
             },
             cancellationToken);
@@ -196,8 +267,8 @@ public sealed class ConversationRepository : IConversationRepository
     {
         ArgumentNullException.ThrowIfNull(conversationId);
         return QueryAsync(
-            "SELECT kind, target, token_count FROM pins WHERE conversation_id = $id ORDER BY kind, target",
-            reader => new PinRecord(reader.GetString(0), reader.GetString(1), reader.GetInt32(2)),
+            "SELECT kind, target, token_count, display_name FROM pins WHERE conversation_id = $id ORDER BY ordinal, kind, target",
+            reader => new PinRecord(reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.GetString(3)),
             cancellationToken,
             ("$id", conversationId));
     }
@@ -292,6 +363,20 @@ public sealed class ConversationRepository : IConversationRepository
         FromUnixMs(reader.GetInt64(2)),
         FromUnixMs(reader.GetInt64(3)),
         NullableString(reader, 4));
+
+    private static MessageRecord ReadMessage(SqliteDataReader reader) => new(
+        reader.GetInt64(0),
+        reader.GetString(1),
+        reader.GetString(2),
+        reader.GetString(3),
+        FromUnixMs(reader.GetInt64(4)),
+        NullableString(reader, 5),
+        NullableString(reader, 6),
+        reader.IsDBNull(7) ? null : reader.GetInt32(7),
+        reader.IsDBNull(8) ? null : reader.GetInt32(8),
+        reader.IsDBNull(9) ? null : reader.GetDouble(9),
+        NullableString(reader, 10),
+        reader.GetBoolean(11));
 
     private static OutboundLogEntry ReadOutbound(SqliteDataReader reader) => new(
         FromUnixMs(reader.GetInt64(1)),

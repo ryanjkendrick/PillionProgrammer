@@ -72,28 +72,48 @@ public interface IOutboundLog
     /// <summary>Gets the most recent records, oldest first.</summary>
     /// <returns>A copy of the records.</returns>
     IReadOnlyList<OutboundRecord> GetRecent();
+
+    /// <summary>Forgets every record kept in memory (Delete all on the Privacy page). The default does nothing.</summary>
+    void Clear()
+    {
+    }
+}
+
+/// <summary>
+/// A place the Outbound log also writes each record to as it is produced (the host's Local Store keeps them across restarts).
+/// <see cref="Write"/> runs on the thread that records the request, so it must return quickly and never throw.
+/// </summary>
+public interface IOutboundSink
+{
+    /// <summary>Writes a record.</summary>
+    /// <param name="record">The record.</param>
+    void Write(OutboundRecord record);
 }
 
 /// <summary>
 /// An <see cref="IOutboundLog"/> that keeps the last <see cref="ModelGatewayOptions.OutboundLogCapacity"/> records in a
-/// ring buffer and writes one structured log line per record. A later work item persists it with the audit trail.
+/// ring buffer and writes one structured log line per record. Each record is also handed to the <see cref="IOutboundSink"/>s,
+/// which keep it beyond the buffer (work item 2.2: the host's Local Store).
 /// </summary>
 public sealed partial class InMemoryOutboundLog : IOutboundLog
 {
     private readonly object _gate = new();
     private readonly OutboundRecord?[] _buffer;
     private readonly ILogger _logger;
+    private readonly IOutboundSink[] _sinks;
     private int _next;
     private int _count;
 
     /// <summary>Initializes a new instance of the <see cref="InMemoryOutboundLog"/> class.</summary>
     /// <param name="options">The gateway options (capacity).</param>
     /// <param name="logger">The logger for the structured line.</param>
-    public InMemoryOutboundLog(ModelGatewayOptions options, ILogger<InMemoryOutboundLog>? logger = null)
+    /// <param name="sinks">The sinks each record is also written to, or <see langword="null"/> for none.</param>
+    public InMemoryOutboundLog(ModelGatewayOptions options, ILogger<InMemoryOutboundLog>? logger = null, IEnumerable<IOutboundSink>? sinks = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         _buffer = new OutboundRecord?[Math.Max(1, options.OutboundLogCapacity)];
         _logger = logger ?? NullLogger<InMemoryOutboundLog>.Instance;
+        _sinks = sinks is null ? [] : [.. sinks];
     }
 
     /// <summary>Gets the capacity of the ring buffer.</summary>
@@ -108,6 +128,20 @@ public sealed partial class InMemoryOutboundLog : IOutboundLog
             _buffer[_next] = record;
             _next = (_next + 1) % _buffer.Length;
             _count = Math.Min(_count + 1, _buffer.Length);
+        }
+
+        foreach (var sink in _sinks)
+        {
+            try
+            {
+                sink.Write(record);
+            }
+#pragma warning disable CA1031 // A sink that fails must not fail the request it describes.
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                LogSinkFailed(_logger, sink.GetType().Name, ex.GetType().Name);
+            }
         }
 
         var errorCode = record.ErrorCode is { } code ? code.ToString() : "none";
@@ -132,6 +166,17 @@ public sealed partial class InMemoryOutboundLog : IOutboundLog
     }
 
     /// <inheritdoc/>
+    public void Clear()
+    {
+        lock (_gate)
+        {
+            Array.Clear(_buffer);
+            _next = 0;
+            _count = 0;
+        }
+    }
+
+    /// <inheritdoc/>
     public IReadOnlyList<OutboundRecord> GetRecent()
     {
         lock (_gate)
@@ -146,6 +191,9 @@ public sealed partial class InMemoryOutboundLog : IOutboundLog
             return result;
         }
     }
+
+    [LoggerMessage(EventId = 421, Level = LogLevel.Warning, Message = "Outbound sink {Sink} failed ({Error}); the record is in the in-memory log only.")]
+    private static partial void LogSinkFailed(ILogger logger, string sink, string error);
 
     [LoggerMessage(
         EventId = 420,

@@ -117,6 +117,16 @@ internal static class PillionHostBuilderExtensions
         builder.Services.AddPillionLocalStore();
         builder.Services.AddRpcTarget<IConversationService, ConversationRpcService>();
 
+        // Persistence (work item 2.2): chat requests that name a conversation are saved as they run, and the Outbound log's
+        // records are written to the store as they are produced (the gateway's in-memory log feeds the sink), so the
+        // conversation list and the Outbound log view survive a restart. The sink is also a hosted service, so it drains
+        // its queue when the host stops.
+        builder.Services.TryAddSingleton<ConversationRecorder>();
+        builder.Services.TryAddSingleton<StoreOutboundSink>();
+        builder.Services.AddSingleton<IOutboundSink>(sp => sp.GetRequiredService<StoreOutboundSink>());
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<StoreOutboundSink>());
+        builder.Services.AddHostedService<ConversationRetentionService>();
+
         // RPC targets for the agent service are registered here by a later work item.
         return builder;
     }

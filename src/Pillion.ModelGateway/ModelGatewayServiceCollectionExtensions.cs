@@ -128,7 +128,8 @@ public static class ModelGatewayServiceCollectionExtensions
         services.TryAddSingleton<AutocompleteCache>();
         services.TryAddSingleton<IOutboundLog>(sp => new InMemoryOutboundLog(
             sp.GetRequiredService<ModelGatewayOptions>(),
-            sp.GetService<ILogger<InMemoryOutboundLog>>()));
+            sp.GetService<ILogger<InMemoryOutboundLog>>(),
+            sp.GetServices<IOutboundSink>()));
         services.TryAddSingleton<IModelRouter, ModelRouter>();
         services.TryAddSingleton<IModelGateway>(sp => new ModelGateway(
             sp.GetRequiredService<IProviderRegistry>(),
