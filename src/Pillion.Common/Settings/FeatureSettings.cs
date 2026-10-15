@@ -277,6 +277,8 @@ public sealed class FeatureSettings : SettingsNode
     public bool WorkspaceQueries { get; set; } = true;
     /// <summary>Gets or sets a value indicating whether the Pillion Index window, the status bar indexing indicator and the Indexing options page are available in Visual Studio. The host indexes either way; this only hides the views.</summary>
     public bool IndexWindow { get; set; } = true;
+
+    /// <summary>
     /// Gets or sets a value indicating whether Pillion Host answers workspace searches with hybrid retrieval (lexical,
     /// vector and symbol candidates fused with Reciprocal Rank Fusion). When off, <c>SearchAsync</c> and
     /// <c>SearchDetailedAsync</c> fail with a policy error.
