@@ -715,6 +715,7 @@ internal sealed partial class IndexPass
 
         var started = Stopwatch.GetTimestamp();
         var graph = await _scheduler.Run(() => _root.Symbols.Build(), cancellationToken).ConfigureAwait(false);
+        _root.Graph = graph;
         var byFile = new Dictionary<string, List<SymbolEdge>>(StringComparer.Ordinal);
         foreach (var edge in graph.Edges)
         {

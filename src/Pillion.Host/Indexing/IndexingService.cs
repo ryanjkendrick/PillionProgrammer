@@ -40,6 +40,9 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         "DELETE FROM meta WHERE key IN ('symbols_version', 'vector_dimensions')",
     ];
 
+    /// <summary>How many reader connections are opened ahead of the first search (the Local Store keeps up to four).</summary>
+    private const int WarmReaderConnections = 2;
+
     private readonly IndexStoreFactory _factory;
     private readonly IndexRetention _retention;
     private readonly IIndexEmbedder _embedder;
@@ -120,7 +123,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         _vsix = vsix;
         loggerFactory ??= NullLoggerFactory.Instance;
         _logger = loggerFactory.CreateLogger<IndexingService>();
-        _memory = new MemoryGovernor(memory, _pause, MemoryCapBytes, options, _time, _logger);
+        _memory = new MemoryGovernor(memory, _pause, MemoryCapBytes, options, _time, _logger, embedder.ReleaseMemory);
         _scheduler = new PipelineScheduler(options.MaxDegreeOfParallelism);
     }
 
@@ -727,12 +730,42 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             var root = new RootIndex(repository, store, model, projects);
             await root.RefreshCountsAsync(stopping).ConfigureAwait(false);
             LogOpened(_logger, store.Identity.Id, root.Path, root.IsWriter ? "writer" : "reader");
+            _ = WarmAsync(root, stopping);
             return root;
         }
         catch (Exception ex) when (ex is LocalStoreException or IOException or UnauthorizedAccessException)
         {
             Fail(ex);
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Opens the index's reader connections (each pays the cipher's key derivation once) and loads the in-memory vector copy,
+    /// off the query path, so the first search after the workspace opens is not slowed down by either.
+    /// </summary>
+    private async Task WarmAsync(RootIndex root, CancellationToken stopping)
+    {
+        try
+        {
+            await Task.Yield();
+            var readers = Enumerable.Range(0, WarmReaderConnections).Select(_ => root.Store.Database.ReadAsync(
+                (connection, _) =>
+                {
+                    using var command = connection.CreateCommand();
+                    command.CommandText = "SELECT count(*) FROM files";
+                    return Task.FromResult(command.ExecuteScalar());
+                },
+                stopping));
+            await Task.WhenAll(readers).ConfigureAwait(false);
+            var bytes = await root.Storage.WarmVectorCacheAsync(stopping).ConfigureAwait(false);
+            LogWarmed(_logger, root.Store.Identity.Id, bytes);
+        }
+#pragma warning disable CA1031 // Warming is an optimisation: a failure (the index closed meanwhile) only costs the first search.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            LogWarmFailed(_logger, ex);
         }
     }
 
@@ -1006,6 +1039,12 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
 
     [LoggerMessage(EventId = 2913, Level = LogLevel.Information, Message = "Index {IndexId} is wiped for a rebuild.")]
     private static partial void LogRebuild(ILogger logger, string indexId);
+
+    [LoggerMessage(EventId = 2915, Level = LogLevel.Debug, Message = "Index {IndexId} is warmed for search ({Bytes} bytes of vectors in memory).")]
+    private static partial void LogWarmed(ILogger logger, string indexId, long bytes);
+
+    [LoggerMessage(EventId = 2916, Level = LogLevel.Debug, Message = "Warming an index for search failed; the first search pays for it.")]
+    private static partial void LogWarmFailed(ILogger logger, Exception exception);
 
     [LoggerMessage(EventId = 2914, Level = LogLevel.Debug, Message = "The battery saver state could not be read; indexing is not paused for it.")]
     private static partial void LogPowerFailed(ILogger logger, Exception exception);

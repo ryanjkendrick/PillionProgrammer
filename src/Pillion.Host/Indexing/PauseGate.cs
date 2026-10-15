@@ -134,6 +134,7 @@ internal sealed class PauseGate
 /// </summary>
 internal sealed partial class MemoryGovernor : IDisposable
 {
+    private readonly Action? _releaseMemory;
     private readonly IMemorySampler _sampler;
     private readonly PauseGate _pause;
     private readonly Func<long> _capBytes;
@@ -152,8 +153,10 @@ internal sealed partial class MemoryGovernor : IDisposable
     /// <param name="options">The batch sizes and thresholds.</param>
     /// <param name="time">The clock for the polling timer.</param>
     /// <param name="logger">The logger.</param>
-    public MemoryGovernor(IMemorySampler sampler, PauseGate pause, Func<long> capBytes, IndexingOptions options, TimeProvider time, ILogger logger)
+    /// <param name="releaseMemory">Gives back memory held outside the managed heap (the embedding model's arena); part of the first step. Optional.</param>
+    public MemoryGovernor(IMemorySampler sampler, PauseGate pause, Func<long> capBytes, IndexingOptions options, TimeProvider time, ILogger logger, Action? releaseMemory = null)
     {
+        _releaseMemory = releaseMemory;
         _sampler = sampler;
         _pause = pause;
         _capBytes = capBytes;
@@ -180,8 +183,9 @@ internal sealed partial class MemoryGovernor : IDisposable
         {
             if (used > cap && !_collected)
             {
-                // First step: drop what the runtime can give back (caches, garbage), then look again.
+                // First step: drop what can be given back (the embedding model's arena, caches, garbage), then look again.
                 _collected = true;
+                _releaseMemory?.Invoke();
                 GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
                 used = _sampler.WorkingSetBytes();
             }
@@ -198,6 +202,7 @@ internal sealed partial class MemoryGovernor : IDisposable
                 if (!_pause.Has(IndexPauseReason.Memory))
                 {
                     LogPaused(_logger, used / 1048576, cap / 1048576);
+                    _releaseMemory?.Invoke(); // Nothing runs while paused: the model's memory can go back now.
                     _pause.Set(IndexPauseReason.Memory, true);
                     _poll ??= _time.CreateTimer(_ => Poll(), null, _options.MemoryPollInterval, _options.MemoryPollInterval);
                 }

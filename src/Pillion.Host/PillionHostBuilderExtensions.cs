@@ -115,6 +115,14 @@ internal static class PillionHostBuilderExtensions
 
         // Mentions and context (work item 1.10): IContextService resolves @-mentions; search and indexing arrive in phase 2.
         // The indexStatusChanged notification (contract 1.3), throttled to twice a second; the pipeline (2.9) publishes to it.
+        // The indexing pipeline's open indexes (work item 2.9) serve retrieval and the workspace queries' fallback; registered
+        // before AddPillionRetrieval and the empty symbol graph provider, whose TryAdd defaults then stay out.
+        builder.Services.TryAddSingleton(sp => new LiveIndexCatalog(
+            sp.GetRequiredService<IndexingService>(),
+            sp.GetRequiredService<IFeatureFlags>(),
+            new ReadOnlyIndexCatalog(sp.GetRequiredService<PillionPaths>(), sp.GetRequiredService<IFeatureFlags>(), sp.GetService<ILoggerFactory>())));
+        builder.Services.TryAddSingleton<IIndexCatalog>(sp => sp.GetRequiredService<LiveIndexCatalog>());
+        builder.Services.TryAddSingleton<ISymbolGraphProvider>(sp => sp.GetRequiredService<LiveIndexCatalog>());
         builder.Services.AddPillionRetrieval(); // Work item 2.11: hybrid retrieval behind SearchAsync and SearchDetailedAsync.
         builder.Services.AddRpcTarget<IContextService, ContextRpcService>();
         builder.Services.TryAddSingleton<INotificationSender, VsixNotificationSender>();

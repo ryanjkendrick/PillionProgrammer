@@ -119,6 +119,7 @@ public sealed class IndexingResourceTests : IDisposable
         var paused = await harness.WaitForAsync(s => s.Phase == IndexPhase.Paused, what: "the memory pause");
         Assert.Equal(IndexPauseReason.Memory, paused.PauseReason);
         Assert.Equal(4, harness.Service.Memory.BatchSize);
+        Assert.True(embedder.MemoryReleases >= 2, $"{embedder.MemoryReleases} releases"); // the first step, and again on pausing
 
         // Halved 32 -> 16 -> 8 -> 4 before pausing; the batches sent so far are no larger than the halved sizes.
         Assert.All(embedder.BatchSizes, size => Assert.True(size <= 16, $"batch of {size}"));

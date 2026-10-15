@@ -50,9 +50,25 @@ public sealed class BundledModelOptions
     /// <summary>
     /// Gets or sets the attention budget of one inference: texts per run times the square of the padded length. A batch is
     /// split into runs that stay within it, so that memory does not grow with the square of a long input (design section 13,
-    /// 1.5 GB while indexing). Default 32 x 512 x 512: a full batch of 32 at the bundled model's 512 tokens in one run.
+    /// 1.5 GB while indexing). Default 512 x 512: one 512-token text, or several shorter ones (sixteen of 128 tokens), per
+    /// run. Measured by the indexing pipeline (work item 2.9) on this repository's own source with bge-small on the CPU,
+    /// smaller runs are faster as well as smaller: 50 chunks/s and a 315 MB process at 512 x 512, against 33 chunks/s and
+    /// 2 GB at 32 x 512 x 512 (with the memory pattern on).
     /// </summary>
-    public long MaxAttentionCells { get; set; } = 32L * 512 * 512;
+    public long MaxAttentionCells { get; set; } = 512L * 512;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether ONNX Runtime plans memory per input shape on the CPU (its memory pattern).
+    /// Indexing sends batches of many different shapes, and a plan is kept for each, so it is off by default to keep the
+    /// host under its indexing memory cap; DirectML always runs without it.
+    /// </summary>
+    public bool CpuMemoryPattern { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether ONNX Runtime keeps a growing CPU memory arena that it never returns to the
+    /// system. Default on (ONNX Runtime's default).
+    /// </summary>
+    public bool CpuMemoryArena { get; set; } = true;
 
     /// <summary>Gets or sets how long a loaded model may sit unused before its session is released (the host's idle budget is 150 MB). Default 5 minutes; <see cref="TimeSpan.Zero"/> never releases.</summary>
     public TimeSpan IdleUnloadAfter { get; set; } = TimeSpan.FromMinutes(5);

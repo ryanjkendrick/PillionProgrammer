@@ -141,9 +141,11 @@ a `providers` entry of kind `bundled` replaces the implicit one (to set `proxy` 
   provisional until the retrieval benchmark (work item 2.16). The bundled families report a context window of 1,048,576
   because the provider truncates every input to the model's limit itself; `maxInputTokens` is the chunk cap.
 - **Inference.** `OnnxEmbeddingModel` tokenises (truncating the content and keeping the end token, like the Python
-  tokenizer), sorts a batch longest first, splits it into runs within `MaxAttentionCells` (32 x 512 x 512, so a long Jina
-  input does not need gigabytes), pads, runs, pools (CLS or masked mean) and normalises. Threads: `IntraOpThreads`, half
-  the logical processors; idle intra-op threads do not spin. Inference is serialised per model, and calls go through the
+  tokenizer), sorts a batch longest first, splits it into runs within `MaxAttentionCells` (512 x 512 since work item 2.9: one 512-token text or
+  several shorter ones per run, which measured both faster and far smaller than 32 x 512 x 512, see the host README,
+  Indexing pipeline), pads, runs, pools (CLS or masked mean) and normalises. Threads: `IntraOpThreads`, half
+  the logical processors; idle intra-op threads do not spin. ONNX Runtime's memory pattern is off on the CPU (`CpuMemoryPattern`;
+  it kept a plan per input shape and took the host past 2 GB while indexing); its arena stays on (`CpuMemoryArena`). Inference is serialised per model, and calls go through the
   gateway's Embedding lane. A session unused for `IdleUnloadAfter` (5 minutes) is released.
 - **DirectML.** With `ExecutionProvider` `Auto`, a model loads on DirectML when the GPU tier (`models.gpuTier`, else
   detected) is not `cpu`: the FP16 graph when its optional file is present and verified, else the int8 graph. If DirectML

@@ -15,6 +15,8 @@ namespace Pillion.Host.Indexing;
 /// </summary>
 internal sealed class RootIndex : IAsyncDisposable
 {
+    private SymbolGraph? _graph;
+
     /// <summary>Initializes a new instance of the <see cref="RootIndex"/> class.</summary>
     /// <param name="root">The repository root.</param>
     /// <param name="store">The open index.</param>
@@ -56,6 +58,16 @@ internal sealed class RootIndex : IAsyncDisposable
 
     /// <summary>Gets or sets the builder holding every stored file's latest symbol extraction (pipeline thread only).</summary>
     public SymbolGraphBuilder Symbols { get; set; }
+
+    /// <summary>
+    /// Gets or sets the symbol graph built at the pipeline's last refresh (immutable and thread-safe), for retrieval and the
+    /// workspace queries' fallback; <see langword="null"/> before the first refresh of a session and on a reader.
+    /// </summary>
+    public SymbolGraph? Graph
+    {
+        get => Volatile.Read(ref _graph);
+        set => Volatile.Write(ref _graph, value);
+    }
 
     /// <summary>Gets or sets a value indicating whether <see cref="Symbols"/> holds every indexed file (it is filled on the first run of a session).</summary>
     public bool SymbolsLoaded { get; set; }
@@ -102,6 +114,7 @@ internal sealed class RootIndex : IAsyncDisposable
         FilePartitions.Clear();
         EdgeFingerprints.Clear();
         EdgeFingerprintsKnown = false;
+        Graph = null;
     }
 
     /// <summary>Counts the stored files and chunks again from the database.</summary>

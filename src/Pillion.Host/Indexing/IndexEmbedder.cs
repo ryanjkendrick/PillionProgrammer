@@ -29,6 +29,9 @@ internal interface IIndexEmbedder
     /// <returns>One unit-length int8 vector per text, in order.</returns>
     /// <exception cref="PillionRpcException">The batch could not be embedded.</exception>
     Task<IReadOnlyList<EmbeddedVector>> EmbedAsync(IndexEmbeddingModel model, IReadOnlyList<string> texts, CancellationToken cancellationToken);
+
+    /// <summary>Gives back memory the embedder holds between batches (a loaded model's arena); the first step under memory pressure.</summary>
+    void ReleaseMemory();
 }
 
 /// <summary>
@@ -78,6 +81,9 @@ internal sealed class GatewayIndexEmbedder : IIndexEmbedder
             info is { MaxInputTokens: > 0 } ? info.MaxInputTokens : ChunkOptions.DefaultMaxTokens,
             info?.TokenizerFamily ?? EmbeddingModelInfo.UnknownTokenizer);
     }
+
+    /// <inheritdoc/>
+    public void ReleaseMemory() => _bundled?.ReleaseUnused();
 
     /// <inheritdoc/>
     public async Task<IReadOnlyList<EmbeddedVector>> EmbedAsync(IndexEmbeddingModel model, IReadOnlyList<string> texts, CancellationToken cancellationToken)

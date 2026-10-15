@@ -49,6 +49,10 @@ internal sealed class FakeEmbedder : IIndexEmbedder
         return EmbeddingVectors.Process(raw, keepFloat32: false);
     }
 
+    public int MemoryReleases { get; private set; }
+
+    public void ReleaseMemory() => MemoryReleases++;
+
     public IndexEmbeddingModel ResolveModel() => new(ModelId, TokenCounters.ApproximateWordPiece, 512, "bert-wordpiece");
 
     public async Task<IReadOnlyList<EmbeddedVector>> EmbedAsync(IndexEmbeddingModel model, IReadOnlyList<string> texts, CancellationToken cancellationToken)
