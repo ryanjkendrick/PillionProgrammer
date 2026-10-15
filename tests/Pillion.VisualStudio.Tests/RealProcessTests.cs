@@ -398,6 +398,71 @@ public sealed class RealProcessTests : IDisposable
         return count;
     }
 
+    [Fact]
+    public async Task ContractOnePointThree_TheFakeHostServesConversationsCitationsAndTheIndex_AndPushesIndexStatus()
+    {
+        Assert.True(File.Exists(FakeHostPath), "Build tests/Pillion.FakeHost first: " + FakeHostPath);
+        Environment.SetEnvironmentVariable(ModeVariable, "quiet");
+        Environment.SetEnvironmentVariable(ChunkDelayVariable, "1");
+        using var supervisor = CreateSupervisor(new RestartPolicy());
+        var statuses = new ConcurrentQueue<IndexStatus>();
+        supervisor.IndexStatusChanged += (_, e) => statuses.Enqueue(e.Status);
+        supervisor.Start();
+        await supervisor.WhenReadyAsync(CancellationToken.None).WithTimeout(TimeSpan.FromSeconds(30));
+
+        // Conversations: the canned two, newest first, then a chat with a conversation id is appended with its citations.
+        var conversations = supervisor.GetProxy<IConversationService>();
+        var page = await conversations.ListConversationsAsync(new ConversationListRequest { Limit = 1 }, CancellationToken.None);
+        Assert.Equal("Fix the build", Assert.Single(page.Items).Title);
+        Assert.True(page.HasMore);
+
+        var reply = new System.Collections.Generic.List<ChatChunk>();
+        var request = new ChatRequest { RequestId = "c13", ConversationId = "conv-13", Messages = [new ChatMessage { Role = ChatRole.User, Content = "Where is Main? /cite" }] };
+        await foreach (var chunk in supervisor.GetProxy<IModelService>().ChatAsync(request, CancellationToken.None))
+        {
+            reply.Add(chunk);
+        }
+
+        Assert.Equal(2, reply.Last().Citations.Length);
+        Assert.All(reply.Take(reply.Count - 1), c => Assert.Empty(c.Citations));
+        var detail = await conversations.GetConversationAsync("conv-13", CancellationToken.None);
+        Assert.NotNull(detail);
+        Assert.Equal([ChatRole.User, ChatRole.Assistant], detail.Messages.Select(m => m.Role));
+        Assert.Equal(2, detail.Messages[1].Citations.Length);
+        Assert.True(await conversations.RenameConversationAsync("conv-13", "Main", CancellationToken.None));
+        Assert.True(await conversations.SetPinsAsync("conv-13", [new ConversationPin { Kind = MentionKinds.File, Target = @"C:\fake\src\Program.cs", DisplayName = "Program.cs", TokenCount = 9 }], CancellationToken.None));
+        Assert.False(await conversations.SetPinsAsync("no-such-conversation", [], CancellationToken.None));
+        Assert.Null(await conversations.GetConversationAsync("no-such-conversation", CancellationToken.None));
+        var deleted = await conversations.DeleteAllConversationsAsync(CancellationToken.None);
+        Assert.Equal(3, deleted.Conversations);
+        Assert.Empty((await conversations.ListConversationsAsync(new ConversationListRequest(), CancellationToken.None)).Items);
+
+        // The index: nothing at first; pause and rebuild drive indexStatusChanged, at most twice a second.
+        var context = supervisor.GetProxy<IContextService>();
+        Assert.Empty((await context.SearchDetailedAsync(new SearchRequest { Query = "Main" }, CancellationToken.None)).Results);
+        await context.PauseIndexingAsync(true, CancellationToken.None);
+        await Wait.UntilAsync(() => statuses.Any(s => s.Phase == IndexPhase.Paused && s.PauseReason == IndexPauseReason.User), "a Paused status was pushed");
+        await context.PauseIndexingAsync(false, CancellationToken.None);
+        await context.RebuildIndexAsync(@"C:\fake", CancellationToken.None);
+        await Wait.UntilAsync(() => statuses.Any(s => s.Phase == IndexPhase.Idle && s.Roots.Length == 1), "the rebuild finished", timeoutMs: 20000);
+        Assert.Contains(statuses, s => s.Phase == IndexPhase.Embedding && s.Progress is { FilesTotal: 40 });
+
+        var status = await context.GetIndexStatusAsync(CancellationToken.None);
+        var root = Assert.Single(status.Roots);
+        Assert.Equal(IndexRole.Writer, root.Role);
+        Assert.Equal(2, status.ExcludedSecretFileCount);
+        var excluded = await context.ListExcludedFilesAsync(new ExcludedFilesRequest { RootPath = root.RootPath, Limit = 2 }, CancellationToken.None);
+        Assert.All(excluded.Items, f => Assert.True(f.IsSecretBearing));
+        Assert.True(excluded.HasMore);
+        var search = await context.SearchDetailedAsync(new SearchRequest { Query = "Main", IncludeText = true }, CancellationToken.None);
+        Assert.NotNull(search.Results[0].Text);
+        Assert.Equal(root.IndexId + ":7", search.Results[0].ChunkId);
+        var indexes = await context.ListIndexesAsync(CancellationToken.None);
+        Assert.Contains(indexes, i => i.RootExists == false);
+        Assert.True(await context.DeleteIndexAsync(root.IndexId, CancellationToken.None));
+        await Wait.UntilAsync(() => statuses.Last().Roots.Length == 0, "the deletion was pushed");
+    }
+
     private HostProcessLauncher CreateLauncher() => new(
         new HostLauncherOptions(FakeHostPath, typeof(HostSupervisor).Assembly.Location, HostLocalTargets.CreateNotImplemented())
         {

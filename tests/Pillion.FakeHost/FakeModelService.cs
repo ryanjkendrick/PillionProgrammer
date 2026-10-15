@@ -22,8 +22,11 @@ namespace Pillion.FakeHost;
 /// rendering checks. A request without a model id
 /// (Auto) is answered by the local model. The delay between chunks is <c>PILLION_FAKEHOST_CHUNK_DELAY_MS</c> (120 ms by
 /// default). Only ids and counts are written to stderr, never text.
+/// From contract 1.3: a last user message containing <c>/cite</c> gets a final chunk with two canned
+/// <see cref="ChatChunk.Citations"/> (<see cref="CannedCitations"/>), and every request with a
+/// <see cref="ChatRequest.ConversationId"/> is appended to the conversation service, as Pillion Host does.
 /// </remarks>
-internal sealed class FakeModelService(FakeRecorder? recorder = null) : IModelService
+internal sealed class FakeModelService(FakeRecorder? recorder = null, FakeConversationService? conversations = null) : IModelService
 {
     public const string LocalModelId = "ollama/fake-local-coder";
     public const string CloudModelId = "fake-cloud/fake-cloud-chat";
@@ -63,6 +66,19 @@ internal sealed class FakeModelService(FakeRecorder? recorder = null) : IModelSe
     /// <param name="modelId">The request's model id.</param>
     /// <returns>The model.</returns>
     public static ModelDescriptor Find(string? modelId) => Models.FirstOrDefault(m => m.Id == modelId) ?? Models[0];
+
+    /// <summary>The citations a <c>/cite</c> reply ends with: the start of the current file (or a canned path), applying at offset 10, and a span for the whole reply.</summary>
+    /// <param name="request">The chat request.</param>
+    /// <returns>The citations.</returns>
+    public static Citation[] CannedCitations(ChatRequest request)
+    {
+        var file = request.CurrentFile.Length > 0 ? request.CurrentFile : Path.Combine(FakeContextService.CannedRoot, "src", "Program.cs");
+        return
+        [
+            new Citation { FilePath = file, StartLine = 0, EndLine = 4, ChunkId = FakeContextService.CannedIndexId + ":1", Breadcrumb = Path.GetFileName(file), ReplyOffset = 10 },
+            new Citation { FilePath = Path.Combine(FakeContextService.CannedRoot, "src", "Runner.cs"), StartLine = 3, EndLine = 9, ChunkId = FakeContextService.CannedIndexId + ":12", Breadcrumb = "src/Runner.cs > Fake > Runner > Run", ReplyOffset = -1 },
+        ];
+    }
 
     public Task<ModelDescriptor[]> ListModelsAsync(CancellationToken cancellationToken)
     {
@@ -130,7 +146,14 @@ internal sealed class FakeModelService(FakeRecorder? recorder = null) : IModelSe
                 };
             }
 
+            if (lastUser.Contains("/cite", StringComparison.OrdinalIgnoreCase))
+            {
+                final.Citations = CannedCitations(request);
+            }
+
             recorder?.Finished(request, model, final.PromptTokens, final.CompletionTokens, started.ElapsedMilliseconds, partial ? "Failed" : "Succeeded");
+            conversations?.CountOutbound();
+            conversations?.Append(request, final, string.Concat(partial ? pieces.Take(2) : pieces));
             yield return final;
             Console.Error.WriteLine("fakehost: chat " + request.RequestId + (partial ? " failed part way" : " complete"));
         }
