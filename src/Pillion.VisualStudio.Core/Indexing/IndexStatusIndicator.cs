@@ -194,6 +194,20 @@ public sealed class IndexStatusIndicator : IDisposable
             return;
         }
 
+        try
+        {
+            RecomputeCore();
+        }
+#pragma warning disable CA1031 // Runs on a timer or notification thread: a failure must never take Visual Studio down.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            _log?.Warning("index.statusbar.recompute.failed", "The indexing indicator could not be updated.", ("error", ex.GetType().Name));
+        }
+    }
+
+    private void RecomputeCore()
+    {
         string text;
         string tooltip;
         lock (_gate)

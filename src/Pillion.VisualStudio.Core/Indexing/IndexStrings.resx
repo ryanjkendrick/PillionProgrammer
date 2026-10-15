@@ -83,7 +83,7 @@
     <comment>Tooltip of the Pause button.</comment>
   </data>
   <data name="ResumeButton" xml:space="preserve">
-    <value>_Resume</value>
+    <value>Res_ume</value>
     <comment>Button that resumes indexing.</comment>
   </data>
   <data name="ResumeName" xml:space="preserve">
@@ -407,7 +407,7 @@
     <comment>Shown when a delete failed or was refused; {0} root, {1} reason.</comment>
   </data>
   <data name="ExcludedRootLabel" xml:space="preserve">
-    <value>_Root:</value>
+    <value>Roo_t:</value>
     <comment>Label of the root picker on the Excluded files tab.</comment>
   </data>
   <data name="ExcludedRootName" xml:space="preserve">
@@ -423,7 +423,7 @@
     <comment>Screen-reader name of the check box.</comment>
   </data>
   <data name="PreviousPageButton" xml:space="preserve">
-    <value>_Previous</value>
+    <value>Pre_vious</value>
     <comment>Button that shows the previous page of excluded files.</comment>
   </data>
   <data name="PreviousPageName" xml:space="preserve">

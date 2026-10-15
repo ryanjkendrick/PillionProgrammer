@@ -443,8 +443,7 @@ public sealed class IndexWindowViewModel : ObservableObject, IDisposable
             }
         }
 
-        _disposal.Cancel();
-        _disposal.Dispose();
+        _disposal.Cancel(); // Not disposed: work still on its way reads the token, and a disposed source throws from Token.
     }
 
     internal bool CanRebuild(IndexRootRowViewModel row) => CanAct && !IsIndexing && !string.IsNullOrEmpty(row.RootPath);

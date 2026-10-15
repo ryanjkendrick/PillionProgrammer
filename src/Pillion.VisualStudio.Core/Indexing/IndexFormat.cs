@@ -277,6 +277,6 @@ public static class IndexFormat
             return text;
         }
 
-        return status.Roots.Length == 0 ? IndexStrings.SummaryNoIndex : IndexStrings.SummaryIdle;
+        return (status.Roots?.Length ?? 0) == 0 ? IndexStrings.SummaryNoIndex : IndexStrings.SummaryIdle;
     }
 }
