@@ -10,7 +10,8 @@ namespace Pillion.VisualStudio.Core;
 /// Whether chat is available, according to the host's effective feature flags (the <c>chat</c> flag after the user
 /// settings and repository policies are applied; read through <c>ISettingsService.GetAsync("effective.features")</c>),
 /// and whether the chat window's mentions (<c>mentions</c>) and Context Inspector and Outbound log (<c>outboundLogView</c>)
-/// are.
+/// are, and whether the Index window, its status bar indicator and the Indexing Options page (<c>indexWindow</c>, work item
+/// 2.15) are.
 /// Chat is available until the host says otherwise: before the first answer, when the host is not connected, when
 /// the host is older than the flags, and when the answer cannot be read. The last answer is kept while the host
 /// restarts and refreshed when it is ready again.
@@ -26,6 +27,7 @@ public sealed class ChatAvailability : IDisposable
     private const string ChatFlag = "chat";
     private const string MentionsFlag = "mentions";
     private const string OutboundLogViewFlag = "outboundLogView";
+    private const string IndexWindowFlag = "indexWindow";
 
     private readonly IHostConnection _connection;
     private readonly PillionLog? _log;
@@ -33,6 +35,7 @@ public sealed class ChatAvailability : IDisposable
     private volatile bool _isEnabled = true;
     private volatile bool _isMentionsEnabled = true;
     private volatile bool _isOutboundLogEnabled = true;
+    private volatile bool _isIndexWindowEnabled = true;
     private bool _started;
     private bool _disposed;
 
@@ -45,7 +48,7 @@ public sealed class ChatAvailability : IDisposable
         _log = log;
     }
 
-    /// <summary>Raised, on any thread, when <see cref="IsEnabled"/>, <see cref="IsMentionsEnabled"/> or <see cref="IsOutboundLogEnabled"/> changed.</summary>
+    /// <summary>Raised, on any thread, when <see cref="IsEnabled"/>, <see cref="IsMentionsEnabled"/>, <see cref="IsOutboundLogEnabled"/> or <see cref="IsIndexWindowEnabled"/> changed.</summary>
     public event EventHandler? Changed;
 
     /// <summary>Gets a value indicating whether chat is available. Safe to read on any thread.</summary>
@@ -56,6 +59,9 @@ public sealed class ChatAvailability : IDisposable
 
     /// <summary>Gets a value indicating whether the chat window shows the Context Inspector and the Outbound log (the <c>outboundLogView</c> flag). Safe to read on any thread.</summary>
     public bool IsOutboundLogEnabled => _isOutboundLogEnabled;
+
+    /// <summary>Gets a value indicating whether the Index window, its status bar indicator and the Indexing Options page are available (the <c>indexWindow</c> flag). Safe to read on any thread.</summary>
+    public bool IsIndexWindowEnabled => _isIndexWindowEnabled;
 
     /// <summary>Starts following the host: the flags are read every time the host becomes ready.</summary>
     public void Start()
@@ -87,12 +93,14 @@ public sealed class ChatAvailability : IDisposable
         bool enabled;
         bool mentions;
         bool outboundLog;
+        bool indexWindow;
         try
         {
             var json = await _connection.GetProxy<ISettingsService>().GetAsync(EffectiveFeaturesKey, cancellationToken).ConfigureAwait(false);
             enabled = ReadChatFlag(json);
             mentions = ReadFlag(json, MentionsFlag);
             outboundLog = ReadFlag(json, OutboundLogViewFlag);
+            indexWindow = ReadFlag(json, IndexWindowFlag);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -111,7 +119,7 @@ public sealed class ChatAvailability : IDisposable
             return; // A newer read is on its way.
         }
 
-        Apply(enabled, mentions, outboundLog);
+        Apply(enabled, mentions, outboundLog, indexWindow);
     }
 
     /// <summary>Reads the <c>chat</c> flag from the JSON the host returned.</summary>
@@ -145,9 +153,9 @@ public sealed class ChatAvailability : IDisposable
 
     private static bool IsUsable(HostState state) => state is HostState.Ready or HostState.Degraded;
 
-    private void Apply(bool enabled, bool mentions, bool outboundLog)
+    private void Apply(bool enabled, bool mentions, bool outboundLog, bool indexWindow)
     {
-        if (_isEnabled == enabled && _isMentionsEnabled == mentions && _isOutboundLogEnabled == outboundLog)
+        if (_isEnabled == enabled && _isMentionsEnabled == mentions && _isOutboundLogEnabled == outboundLog && _isIndexWindowEnabled == indexWindow)
         {
             return;
         }
@@ -160,6 +168,7 @@ public sealed class ChatAvailability : IDisposable
         _isEnabled = enabled;
         _isMentionsEnabled = mentions;
         _isOutboundLogEnabled = outboundLog;
+        _isIndexWindowEnabled = indexWindow;
         Changed?.Invoke(this, EventArgs.Empty);
     }
 
