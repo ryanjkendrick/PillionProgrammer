@@ -6,6 +6,12 @@ internal sealed class IndexingOptions
     /// <summary>Gets the chunks per embedding request (design section 7: batches of 32). The memory governor halves it under pressure.</summary>
     public int EmbeddingBatchSize { get; init; } = 32;
 
+    /// <summary>
+    /// Gets how many batches of chunks are gathered and sorted by length before they are embedded, so each request holds
+    /// chunks of similar length (the model pads a batch to its longest text). 1 embeds chunks in file order.
+    /// </summary>
+    public int EmbeddingSortWindow { get; init; } = 8;
+
     /// <summary>Gets the smallest batch the memory governor halves down to before it pauses indexing instead.</summary>
     public int MinimumEmbeddingBatchSize { get; init; } = 4;
 

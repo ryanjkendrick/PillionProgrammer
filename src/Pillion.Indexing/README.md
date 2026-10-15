@@ -4,7 +4,7 @@ Repository discovery, hashing and index ownership for the code index (design doc
 2.3). It decides which files of a repository are indexed and why the others are not, hashes them, keeps the `files`
 table of `index.db`, and elects the one host that owns each index. Chunking, embeddings, storage of chunks and the
 pipeline that ties them together are later work items (2.4 to 2.9). Behind the `indexing` feature flag (see the
-repository README, Feature flags); nothing in Pillion Host calls this library yet, item 2.9 wires it in.
+repository README, Feature flags). Pillion Host's indexing pipeline (item 2.9, `src/Pillion.Host/Indexing`) uses it.
 
 ## Layout of an index
 
@@ -87,13 +87,19 @@ Notes:
 the hash, the bytes read and the modified time from the same pass. The time is read from the open handle before the first
 byte, so a file written during the pass keeps the older time and is hashed again next time.
 
-`RepositorySweeper.SweepAsync(root, storedRows, partitions)` compares the tree with the stored `files` rows and returns a
+`RepositorySweeper.SweepAsync(root, storedRows, partitions[, progress])` compares the tree with the stored `files` rows and returns a
 `SweepResult` with disjoint sets: `Added`, `Changed` (hash differs; keeps the row id), `Touched` (same hash, but size, time,
 language, partition or path casing differ), `Unchanged` (size and time match: the file is not opened at all, and not even
 content-checked) and `Deleted` (no indexed file left: removed, renamed, or newly excluded), plus `Excluded`, `SecretFiles`
 and `Unreadable` (a locked file keeps its stored row). Nothing is written; the pipeline stores added and changed files
 after chunking them, `FilesRepository.CommitAsync(sweep)` applies the whole sweep in one transaction. A branch switch is
 this sweep, not a rebuild.
+
+`ScanOptions.TaskScheduler` runs the content checks and the hashing on a given scheduler (the pipeline's below-normal
+threads) instead of the thread pool; the overload with an `IProgress<SweepProgress>` reports the entries seen and the files
+hashed every 256 entries, at the first hash and at the end (the pipeline turns it into its Discovering and Hashing phases).
+`FilesRepository.Upsert(connection, transaction, records)` and `FilesRepository.Delete(connection, transaction, paths)` write
+inside a transaction the caller holds, so the pipeline stores a file's row with its chunks and symbols at once.
 
 A row stored within 2 seconds of its file's modified time is hashed again even if size and time match (git's "racily
 clean" rule), so a file written twice inside the time resolution cannot keep a stale hash.
@@ -135,7 +141,7 @@ migrations append after version 2; leave the earlier SQL alone.
    writes the `meta` identity rows and `state.json`. `IndexStore.Writer` is its own endpoint.
 3. Everyone else (`IndexRole.Reader`): opens `index.db` read-only (`EncryptedDatabaseOptions.ReadOnly`: nothing created,
    journal mode and schema untouched, writes throw) and gets `IndexStore.Writer`, an `IndexWriterEndpoint` with the
-   owner's pipe name. Item 2.9 forwards update requests there. While the owner has not finished creating or migrating the
+   owner's pipe name. Item 2.9 does not forward to it yet (a reader re-sweeps when it becomes the writer; see the host README, Readers). While the owner has not finished creating or migrating the
    database the reader retries (20 times, 250 ms apart by default), electing again each round, then gives up with the
    `LocalStoreException` that stopped it.
 4. A lock is stale when its process id does not exist, or exists but started more than 2 seconds away from the recorded
@@ -159,7 +165,8 @@ use is the latest of `state.json`'s last-opened time and the modification times 
 deleted: an index whose lock belongs to a live process; a root on a drive or share that is not available right now (the
 root is then "unknown", not missing); anything in `index\` whose name is not a 32-digit hex id. With `features.indexing`
 off the sweep does nothing. `GetUsage()` lists every index with its root, model, chunker, disk use and last use for the
-Index window.
+Index window. `Delete(indexId)` deletes one folder on request (`Deleted`, `NotFound`, `InUse` while a live host holds its
+lock, or `Failed` when a file in it is open elsewhere).
 
 ## Tests
 

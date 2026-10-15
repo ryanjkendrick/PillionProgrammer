@@ -652,8 +652,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         if (wanted.Count == 0)
         {
             _appliedWorkspaceVersion = version;
-            _failed = false;
-            _lastError = null;
+            ClearFailure();
             return;
         }
 
@@ -699,9 +698,12 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             }
 
             var identity = new IndexIdentity(repository.Path, model.ModelId, ContextEngineVersions.ChunkerVersion);
-            if (_suppressed.Contains(identity.Id))
+            lock (_gate)
             {
-                continue;
+                if (_suppressed.Contains(identity.Id))
+                {
+                    continue;
+                }
             }
 
             var opened = await OpenAsync(repository, model, projects, stopping).ConfigureAwait(false);
@@ -715,10 +717,6 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         }
 
         _appliedWorkspaceVersion = version;
-        if (!_failed)
-        {
-            _lastError = null;
-        }
     }
 
     private async Task<RootIndex?> OpenAsync(RepositoryRoot repository, IndexEmbeddingModel model, IReadOnlyList<IndexedProject> projects, CancellationToken stopping)
@@ -770,9 +768,9 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
                 lock (_gate)
                 {
                     _currentPass = pass;
-                    _failed = false;
-                    _lastError = null;
                 }
+
+                ClearFailure();
 
                 Publish();
                 await pass.RunAsync(token).ConfigureAwait(false);
@@ -901,6 +899,15 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             }
 
             await Task.Delay(20, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private void ClearFailure()
+    {
+        lock (_gate)
+        {
+            _failed = false;
+            _lastError = null;
         }
     }
 

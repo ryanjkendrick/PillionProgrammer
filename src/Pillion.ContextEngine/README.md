@@ -2,9 +2,9 @@
 
 The Context Engine library (design section 7). Today it holds the **chunkers** (phase 2, work item 2.4) and **symbols
 and the repo map** (work item 2.5, [below](#symbols-and-the-repo-map)); storage and retrieval join it in later phase 2
-items. It is a .NET 10 class library with no Visual Studio dependency. Nothing references it yet except
-`tests/Pillion.ContextEngine.Tests`; the host wires it into the indexing pipeline in work item 2.9, where it ships
-behind the `features.indexing` flag. Until then it has no flag of its own, because nothing calls it.
+items. It is a .NET 10 class library with no Visual Studio dependency. Pillion Host references it: the indexing pipeline (work item 2.9, `src/Pillion.Host/Indexing`) chunks files and
+extracts their symbols with it, behind the `features.indexing` flag; it has no flag of its own. The tree-sitter native
+libraries reach the host's output and its published `runtimes\<rid>\native\` folder through the project reference.
 
 ## Versions
 

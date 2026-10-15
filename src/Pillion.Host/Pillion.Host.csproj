@@ -37,4 +37,17 @@
     <InternalsVisibleTo Include="Pillion.Host.Tests" />
   </ItemGroup>
 
+  <!--
+    The Context Engine copies its tree-sitter libraries for win-x64 and win-arm64 into every project that references it. A
+    publish for one runtime keeps only that runtime's copy (about 13 MB each), so the win-x64 host in the VSIX carries no
+    Arm64 grammars.
+  -->
+  <Target Name="PillionKeepOneTreeSitterRuntime" AfterTargets="ComputeResolvedFilesToPublishList" Condition="'$(RuntimeIdentifier)' != ''">
+    <ItemGroup>
+      <_PillionTreeSitterPublished Include="@(ResolvedFileToPublish)" Condition="$([System.String]::Copy('%(Filename)').StartsWith('tree-sitter'))" />
+      <_PillionOtherTreeSitter Include="@(_PillionTreeSitterPublished)" Condition="!$([System.String]::Copy('%(RelativePath)').Replace('/', '\').StartsWith('runtimes\$(RuntimeIdentifier)\'))" />
+      <ResolvedFileToPublish Remove="@(_PillionOtherTreeSitter)" />
+    </ItemGroup>
+  </Target>
+
 </Project>

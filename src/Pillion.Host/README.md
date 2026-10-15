@@ -11,6 +11,7 @@ Lifecycle/                          HostStateMachine, HostShutdown (exit code), 
 Context/                            ContextRpcService (IContextService): @file, @folder, @selection, @clipboard, @errors;
                                     IndexStatusNotifier (indexStatusChanged, contract 1.3)
 Conversations/                      ConversationRpcService (IConversationService, contract 1.3): a stub until work item 2.2
+Indexing/                           IndexingService (the indexing pipeline, work item 2.9), IndexPass, the pause and memory rules
 Rpc/                                RpcServer, RpcConnection, PillionJsonRpc, handshake, IRpcTarget, IVsixConnection
 Logging/                            Rolling JSON-lines file sink and retention
 ```
@@ -95,6 +96,10 @@ builder.Services.AddRpcTarget<ISettingsService>(sp => new SettingsService(/* ...
 - Streaming methods return `IAsyncEnumerable<T>`; mark the token `[EnumeratorCancellation]` in async iterators.
 - Registering the same contract twice, a non-interface, or `IHostLifecycleService` throws at start-up.
 
+A notification from the VSIX (client to host, no response) is registered the same way, with
+`AddRpcNotification(name, sp => handlerDelegate)`: the delegate's parameters are the notification's positional arguments,
+and like a request it is only dispatched after the handshake (`ideActivityChanged` is the first, see Indexing pipeline).
+
 To call the VSIX, inject `IVsixConnection` and ask for a proxy per operation:
 `vsix.GetEditorService()`, `GetApprovalService()`, `GetWorkspaceQueryService()`. They throw
 `PillionRpcException` with `HostRestarting` while no VSIX is connected. Never dispose a proxy (that closes the
@@ -122,8 +127,9 @@ the built-in secret rules (`.env`, `.env.*` except examples, `*.pfx`, `*.p12`, `
 `Password`) resolve as unresolved with `RequiresApproval`; the client asks the user and asks again with `ApprovedSensitive`.
 An approved file comes back with `IsSensitive`, and the gateway never sends such a pin to a cloud model.
 
-`SearchAsync` returns an empty array and `GetIndexStatusAsync` reports nothing indexed (the index arrives in phase 2);
-`PauseIndexingAsync` does nothing. The chat side of context (pins, current file, rules, history summary) is in the Model
+`SearchAsync` returns an empty array until hybrid retrieval (work item 2.11). `GetIndexStatusAsync`, `PauseIndexingAsync`,
+`SetWorkspaceAsync`, `ListExcludedFilesAsync`, `RebuildIndexAsync`, `DeleteIndexAsync` and `ListIndexesAsync` are served by
+the indexing pipeline (below). The chat side of context (pins, current file, rules, history summary) is in the Model
 Gateway README, Context assembly.
 
 ### Contract 1.3 stubs
@@ -132,9 +138,7 @@ Contract 1.3 added methods whose behaviour later phase 2 work items implement. U
 
 | Method | Answer now | Implemented by |
 | --- | --- | --- |
-| `IContextService.GetIndexStatusAsync` | `Phase` `Idle`, no `Roots`, no `Progress`: this host builds no index yet | 2.9 |
 | `IContextService.SearchDetailedAsync` | No hits and zero timings, like `SearchAsync` | 2.11 |
-| `IContextService.ListExcludedFilesAsync`, `RebuildIndexAsync`, `DeleteIndexAsync`, `ListIndexesAsync` | `PillionRpcException`, code `NotImplemented`, `Details` `work item 2.15` | 2.9, 2.15 |
 | `IConversationService` (every method) | `PolicyDenied` naming the flag while `localStore` is off; otherwise `NotImplemented`, `Details` `work item 2.2` | 2.2 |
 
 `RpcErrors.NotImplemented(feature, workItem)` builds that error; a work item that implements a method removes its stub and
@@ -146,8 +150,82 @@ Host to client, a JSON-RPC notification with one positional argument, an `IndexS
 (a singleton) sends it: the first status after a quiet spell at once, later ones at most once per 500 ms, coalesced so the
 latest status of the window is the one sent. It goes over the same path as `connectivityChanged` and `settingsChanged`
 (`INotificationSender`), only to a client whose handshake was accepted, and is not replayed to a client that connects later
-(the client calls `GetIndexStatusAsync`). Nothing publishes yet; the indexing pipeline (work item 2.9) calls
-`IndexStatusNotifier.Publish` whenever its status changes. In the VSIX it surfaces as `IHostConnection.IndexStatusChanged`.
+(the client calls `GetIndexStatusAsync`). The indexing pipeline publishes to it whenever its phase, progress or roots change
+(below). In the VSIX it surfaces as `IHostConnection.IndexStatusChanged`.
+
+## Indexing pipeline (`Indexing/`)
+
+Work item 2.9, design sections 7, 10 and 13, behind `features.indexing` (an index also needs `features.localStore`).
+`IndexingService` is a hosted singleton; `ContextRpcService` delegates the index methods of `IContextService` to it.
+
+1. **Workspace.** The extension calls `SetWorkspaceAsync` (contract 1.3) after every handshake and when the solution, its
+   projects or the opened folder change. The service resolves the repository roots (`RepositoryRoots.Resolve`: the git
+   top-level of each path, or the folder) and opens each root's index through `IndexStoreFactory` with the embedding model
+   the `Embedding` task class routes to (`GatewayIndexEmbedder`: the bundled `bge-small-en-v1.5` by default, its own WordPiece
+   tokenizer for the chunk cap) and `ContextEngineVersions.ChunkerVersion`. Roots that are no longer wanted are closed (the
+   writer releases `writer.lock`); the same roots sent again restart nothing. A changed embedding model opens another index.
+2. **Run.** For each root this host owns, one at a time, an `IndexPass`:
+   - *Discovering, Hashing*: `RepositorySweeper` with the effective `indexing.exclude` (one walk; unchanged files are neither
+     opened nor hashed). Rows of deleted files go in one transaction (chunks, vectors and symbols by cascade); touched files
+     get their new metadata. The sweep's excluded and secret-bearing entries are kept for `ListExcludedFilesAsync`.
+   - *Chunking*: added and changed files are read, chunked (`FileChunker`, cap `min(model input, 512)` tokens in the
+     model's tokenizer, breadcrumb included) and their symbols extracted (`FileSymbolExtractor`) on the pipeline threads.
+     On the first run of a session the unchanged files are read for their symbols only (the symbol graph needs every
+     file); when the stored `symbols_version` differs, their symbols are stored again (no re-chunking, no re-embedding).
+   - *Embedding*: chunks go to `IModelGateway.EmbedAsync` in batches of 32 (`EmbeddingPurpose.Document`, the model pinned by
+     id so an index never mixes models; Local-only and the cloud switch are the gateway's rules). A failed batch is
+     retried three times (1, 2, 4 s); then the run stops as `Failed` with the error, keeping every file already stored.
+   - *Storing*: each file's `files` row, chunks (with FTS5 rows and int8 vectors) and symbols (with `SymbolDefinition.Id`
+     as the stored id, so edges from other files survive edits) in **one transaction per file**
+     (`IndexStorage.WriteAsync`). After the first stored batch, and then at most every
+     `max(10 s, 10 x the last refresh)`, the symbol graph is rebuilt (`SymbolGraphBuilder`, which holds every file's
+     latest extraction), the reference edges of the files whose edges changed are written in one transaction, and the
+     in-memory vector copy is reloaded (`WarmVectorCacheAsync`), so partial results are searchable while the run goes on.
+   - At the end: a last refresh, `meta` rows `symbols_version`, `embedding_tokenizer`, `embedding_max_tokens` and
+     `chunk_max_tokens` (beside `embedding_model`, `chunker_version` and `vector_dimensions`, which the factory and the
+     storage write), and `state.json`'s last full sweep (`IndexStore.RecordFullSweep`).
+3. **Status.** `GetIndexStatusAsync` and `indexStatusChanged`: the phase only moves forward within a run (Discovering,
+   Hashing, Chunking, Embedding, Storing, then Idle; `Paused` with its reason on top, `Failed` with `LastError`), files
+   done of total, chunks stored, and an estimate from the bytes done since embedding started. Each root reports its id,
+   role, files indexed and found, excluded and secret-bearing counts, chunks, disk use (from `GetIndexStatusAsync`; the
+   notification leaves it 0 to stay cheap), last full sweep, model, chunker and schema versions.
+4. **Controls.** `PauseIndexingAsync` (pause reason `User`); `RebuildIndexAsync(root)` cancels a run on that root, deletes
+   every `files` row (cascading to everything else), clears `symbols_version` and `vector_dimensions`, vacuums and runs
+   again (for a workspace root whose index was deleted it opens a new one); `DeleteIndexAsync(id)` closes the index if
+   this host has it open, deletes the folder through `IndexRetention.Delete` (refused with `PolicyDenied` while another
+   live host owns it) and does not reopen that root until a rebuild or the next workspace change; `ListIndexesAsync` maps
+   `IndexRetention.GetUsage()`; `ListExcludedFilesAsync` pages the last sweep's list, secret-bearing first. With the flag
+   off the status is `Idle` with no roots, nothing is opened, and these controls are refused with `PolicyDenied`.
+
+### Resource rules (design section 13)
+
+- **Threads.** `PipelineScheduler`: `Environment.ProcessorCount / 2` dedicated threads at `ThreadPriority.BelowNormal`.
+  The sweep's hashing, reading, chunking, symbol extraction, the graph rebuild and the database writes run there. The
+  bundled model's ONNX Runtime intra-op threads are ONNX Runtime's own (normal priority, capped at half the logical
+  processors by `BundledModelOptions.IntraOpThreads`); the gateway runs one embedding batch at a time per provider.
+- **Memory.** `MemoryGovernor` samples `Environment.WorkingSet` before every batch. Over `indexing.maxMemoryMb` (1,536 by
+  default): a forced, compacting garbage collection first (once per episode), then the batch is halved (32, 16, 8, 4),
+  then indexing pauses with reason `Memory`, sampling every second and resuming below 90% of the cap; below 75% the batch
+  doubles back to 32.
+- **IDE activity.** The notification `ideActivityChanged` (client to host, contract 1.3, an `IdeActivity` set) feeds
+  `IdeActivityMonitor`: pause reasons `Build`, `Test`, `Debug` while the flags are set; the set is forgotten when the
+  extension disconnects, so a crashed Visual Studio cannot leave indexing paused.
+- **Battery.** `Win32PowerStatus` reads `GetSystemPowerStatus` (`SystemStatusFlag` 1 = battery saver) every 15 s and on a
+  settings change; with `indexing.pauseOnBattery` (default on) it pauses with reason `Battery`.
+- Pauses take effect at the next checkpoint: before each file is read and before each embedding batch. Reported in the
+  order User, Memory, Build, Test, Debug, Battery when several hold.
+
+### Readers
+
+A host that opened an index read-only (another Visual Studio owns it) does not index it, and **forwards nothing**: forwarding
+"file changed" or "rebuild" requests to the owner's pipe needs a host-to-host handshake (the pipe and its token are bound
+to the owner's own extension), which is not cheap to add here. Instead the reader checks every 30 s whether the owner is
+still alive (`IndexStore.GetLiveWriter`); when it is gone the reader opens the index again, reclaiming the stale lock, and
+as the new writer runs a full sweep, which picks up whatever changed meanwhile. A reader still searches the index. A
+rebuild requested on a reader is refused with `PolicyDenied` naming the other instance. The watcher (work item 2.10) can
+add forwarding later through the same `IndexWriterEndpoint`.
+
+Event ids 2900-2999 (the indexing libraries use 2300-2399).
 
 ## Diagnostics (`Models/DiagnosticsRpcService.cs`)
 
@@ -266,7 +344,7 @@ deleted, then the oldest are deleted until the remaining ones total at most 100 
 never touched. The default minimum level is Information (Microsoft.* at Warning); set the environment variable
 `Logging__LogLevel__Default=Debug` for more. Never log tokens or request payloads at Information or above.
 
-Event id ranges: 100-199 lifecycle, 200-299 RPC, 600-609 inline edits.
+Event id ranges: 100-199 lifecycle, 200-299 RPC, 600-609 inline edits, 2900-2999 the indexing pipeline.
 
 ## Connectivity
 

@@ -559,7 +559,7 @@ internal sealed partial class IndexPass
             for (var i = 0; i < file.Chunks.Count; i++)
             {
                 batch.Add((file, i));
-                if (batch.Count >= _memory.BatchSize)
+                if (batch.Count >= _memory.BatchSize * Math.Max(1, _options.EmbeddingSortWindow))
                 {
                     await EmbedAsync(batch, cancellationToken).ConfigureAwait(false);
                     batch.Clear();
@@ -581,8 +581,10 @@ internal sealed partial class IndexPass
         await StoreReadyAsync(waiting, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task EmbedAsync(List<(PreparedFile File, int Index)> batch, CancellationToken cancellationToken)
+    private async Task EmbedAsync(List<(PreparedFile File, int Index)> window, CancellationToken cancellationToken)
     {
+        // Chunks of similar length go in the same request: the model pads every text of a batch to the longest one.
+        var batch = window.OrderBy(item => item.File.Chunks[item.Index].TokenCount).ToList();
         var offset = 0;
         while (offset < batch.Count)
         {

@@ -39,7 +39,7 @@ ones), and must not clash with a notification name (`ContractV13Tests`).
 Additive only, batched at the boundary of phase 2's first wave into one minor bump (`ContractVersion` says 1.3; decision
 of 2026-10-15 in `docs/phase-2-plan.md`). A 1.2 peer is still accepted by the handshake: a 1.2 host answers the new
 methods with StreamJsonRpc's method-not-found error, a 1.2 client never calls them and registers no handler for
-`indexStatusChanged`, and each side reads the new fields' defaults from the other (`ContractV13Tests`, and over the real
+`indexStatusChanged` (nor sends `ideActivityChanged`), and each side reads the new fields' defaults from the other (`ContractV13Tests`, and over the real
 pipe `ContractV13RpcTests` and `HandshakeCompatibilityTests` in the host tests). Every new DTO is round-tripped by
 `DtoRoundTripTests`. Until the consuming work items land, Pillion Host answers most new methods with
 `PillionErrorCode.NotImplemented` (see the host README, Contract 1.3 stubs); the fake host serves them all with canned data.
@@ -94,6 +94,23 @@ pipe `ContractV13RpcTests` and `HandshakeCompatibilityTests` in the host tests).
   replayed to a client that connects later, which calls `GetIndexStatusAsync`. Like `connectivityChanged` it is not a
   method on a contract interface; a 1.2 client registers no handler and ignores it. In the VSIX it surfaces as
   `IHostConnection.IndexStatusChanged`.
+
+- **Workspace and IDE activity (work item 2.9, added within 1.3).** The host could not learn what is open or when the IDE
+  is building, so the pipeline needed two additions; both are additive and the version stays 1.3. A host without them (an
+  earlier 1.3 build or 1.2) answers `SetWorkspaceAsync` with method-not-found and ignores the notification; the extension
+  logs that and carries on.
+
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `IContextService` | `SetWorkspaceAsync(WorkspaceDescription)` | | What is open; the host resolves the repository roots and indexes them in the background (behind `features.indexing`). Called after every handshake and when the solution, its projects or the opened folder change; the same roots again restart nothing; an empty description closes the indexes |
+  | `WorkspaceDescription` (new) | `SolutionPath`, `ProjectPaths`, `FolderPath` | 0-2 | Full paths: the `.sln`/`.slnx` (or `null`), the loaded projects' files (or folders), the Open Folder folder (or `null`) |
+  | `IdeActivity` (new, `[Flags]`) | `None` 0, `Build` 1, `Debug` 2, `Test` 4 | | An integer on the wire |
+
+  Notification `ideActivityChanged`, **client to host**, one positional argument: the `IdeActivity` holding every activity
+  in progress (a set, so a lost or repeated notification cannot leave the host out of step). Sent after every handshake and
+  whenever the set changes. The host pauses indexing while any flag is set (pause reasons `Build`, `Debug`, `Test`) and
+  forgets the set when the client disconnects. It is the first client-to-host notification: the host registers it on every
+  connection like an RPC target, and only after the handshake (`ContractV13Tests` keeps it from clashing with method names).
 
 - **Search (work item 2.11).** `SearchAsync` is unchanged (a 1.2 client keeps calling it); the new
   `SearchDetailedAsync(SearchRequest)` returns the hits with timings.
