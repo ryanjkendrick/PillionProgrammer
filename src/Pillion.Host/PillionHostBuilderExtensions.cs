@@ -7,6 +7,7 @@ using Pillion.Common.Settings;
 using Pillion.Contracts;
 using Pillion.Host.Connectivity;
 using Pillion.Host.Context;
+using Pillion.Host.Conversations;
 using Pillion.Host.Lifecycle;
 using Pillion.Host.Logging;
 using Pillion.Host.Models;
@@ -105,11 +106,16 @@ internal static class PillionHostBuilderExtensions
         builder.Services.TryAddSingleton<ContextPreview>(); // Work item 1.13: the Context Inspector's preview behind IDiagnosticsService.
 
         // Mentions and context (work item 1.10): IContextService resolves @-mentions; search and indexing arrive in phase 2.
+        // The indexStatusChanged notification (contract 1.3), throttled to twice a second; the pipeline (2.9) publishes to it.
         builder.Services.AddRpcTarget<IContextService, ContextRpcService>();
+        builder.Services.TryAddSingleton<INotificationSender, VsixNotificationSender>();
+        builder.Services.TryAddSingleton<IndexStatusNotifier>();
 
-        // Local Store (work item 2.1): the encrypted conversations.db, opened lazily behind the localStore flag. No RPC
-        // service uses it yet; work item 2.2 persists conversations and the Outbound log through it.
+        // Local Store (work item 2.1): the encrypted conversations.db, opened lazily behind the localStore flag. Work item
+        // 2.2 persists conversations and the Outbound log through it, behind IConversationService (contract 1.3, a stub
+        // until then).
         builder.Services.AddPillionLocalStore();
+        builder.Services.AddRpcTarget<IConversationService, ConversationRpcService>();
 
         // RPC targets for the agent service are registered here by a later work item.
         return builder;

@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Pillion.Contracts;
+using Pillion.Host.Rpc;
 using Pillion.ModelGateway;
 
 namespace Pillion.Host.Context;
@@ -14,6 +15,13 @@ namespace Pillion.Host.Context;
 /// there is no index yet, so <see cref="SearchAsync"/> returns an empty array, <see cref="GetIndexStatusAsync"/> reports that
 /// nothing is indexed and <see cref="PauseIndexingAsync"/> does nothing (the index arrives in phase 2).
 /// </summary>
+/// <remarks>
+/// Contract 1.3 methods: <see cref="SearchDetailedAsync"/> answers like <see cref="SearchAsync"/> (no index, no hits, zero
+/// timings) until work item 2.11; <see cref="ListExcludedFilesAsync"/>, <see cref="RebuildIndexAsync"/>,
+/// <see cref="DeleteIndexAsync"/> and <see cref="ListIndexesAsync"/> fail with <see cref="PillionErrorCode.NotImplemented"/>
+/// until work items 2.9 and 2.15 wire <c>Pillion.Indexing</c> into the host. The status reports
+/// <see cref="IndexPhase.Idle"/> with no roots, which is true: this host builds no index yet.
+/// </remarks>
 /// <remarks>
 /// Files honour the effective <c>indexing.exclude</c> globs and the built-in secret-file rules
 /// (<see cref="FileAccessPolicy"/>): such a file resolves as unresolved with <see cref="MentionResolution.RequiresApproval"/>
@@ -66,6 +74,36 @@ internal sealed partial class ContextRpcService : IContextService
 
     /// <inheritdoc/>
     public Task PauseIndexingAsync(bool pause, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    // TODO(2.11): hybrid retrieval with timings; until then there is no index, so there are no hits.
+
+    /// <inheritdoc/>
+    public Task<SearchResponse> SearchDetailedAsync(SearchRequest request, CancellationToken cancellationToken) =>
+        Task.FromResult(new SearchResponse());
+
+    // TODO(2.9, 2.15): the excluded files of the root's last sweep (RepositorySweeper's Excluded and SecretFiles).
+
+    /// <inheritdoc/>
+    public Task<ExcludedFilesPage> ListExcludedFilesAsync(ExcludedFilesRequest request, CancellationToken cancellationToken) =>
+        Task.FromException<ExcludedFilesPage>(RpcErrors.NotImplemented("Listing the files the index excluded", "2.15"));
+
+    // TODO(2.9, 2.15): drop and rebuild the root's index in the background (forwarded to the writer on a reader).
+
+    /// <inheritdoc/>
+    public Task RebuildIndexAsync(string rootPath, CancellationToken cancellationToken) =>
+        Task.FromException(RpcErrors.NotImplemented("Rebuilding an index", "2.15"));
+
+    // TODO(2.15): delete the index folder (refused while another live host owns it).
+
+    /// <inheritdoc/>
+    public Task<bool> DeleteIndexAsync(string indexId, CancellationToken cancellationToken) =>
+        Task.FromException<bool>(RpcErrors.NotImplemented("Deleting an index", "2.15"));
+
+    // TODO(2.15): IndexRetention.GetUsage() mapped to IndexInfo, ordered by root path.
+
+    /// <inheritdoc/>
+    public Task<IndexInfo[]> ListIndexesAsync(CancellationToken cancellationToken) =>
+        Task.FromException<IndexInfo[]>(RpcErrors.NotImplemented("Listing the indexes on this machine", "2.15"));
 
     /// <inheritdoc/>
     public async Task<MentionResolution> ResolveMentionAsync(MentionRequest request, CancellationToken cancellationToken)
