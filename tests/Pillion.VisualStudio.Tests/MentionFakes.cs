@@ -38,6 +38,16 @@ internal sealed class FakeMentionService : IContextService
     public Task<IndexStatus> GetIndexStatusAsync(CancellationToken cancellationToken) => Task.FromResult(new IndexStatus());
 
     public Task PauseIndexingAsync(bool pause, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task<SearchResponse> SearchDetailedAsync(SearchRequest request, CancellationToken cancellationToken) => Task.FromResult(new SearchResponse());
+
+    public Task<ExcludedFilesPage> ListExcludedFilesAsync(ExcludedFilesRequest request, CancellationToken cancellationToken) => Task.FromResult(new ExcludedFilesPage());
+
+    public Task RebuildIndexAsync(string rootPath, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task<bool> DeleteIndexAsync(string indexId, CancellationToken cancellationToken) => Task.FromResult(false);
+
+    public Task<IndexInfo[]> ListIndexesAsync(CancellationToken cancellationToken) => Task.FromResult<IndexInfo[]>([]);
 }
 
 /// <summary>An <see cref="IDiagnosticsService"/> whose preview and Outbound records are set by the test.</summary>

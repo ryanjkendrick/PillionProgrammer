@@ -8,7 +8,9 @@ editor, approval and workspace operations.
 Program.cs                          Parses the command line, composes the host, returns the exit code
 PillionHostBuilderExtensions.cs     AddPillionHost: logging + lifecycle + RPC server (used by Program and tests)
 Lifecycle/                          HostStateMachine, HostShutdown (exit code), ParentProcessWatcher
-Context/                            ContextRpcService (IContextService): @file, @folder, @selection, @clipboard, @errors
+Context/                            ContextRpcService (IContextService): @file, @folder, @selection, @clipboard, @errors;
+                                    IndexStatusNotifier (indexStatusChanged, contract 1.3)
+Conversations/                      ConversationRpcService (IConversationService, contract 1.3): a stub until work item 2.2
 Rpc/                                RpcServer, RpcConnection, PillionJsonRpc, handshake, IRpcTarget, IVsixConnection
 Logging/                            Rolling JSON-lines file sink and retention
 ```
@@ -123,6 +125,29 @@ An approved file comes back with `IsSensitive`, and the gateway never sends such
 `SearchAsync` returns an empty array and `GetIndexStatusAsync` reports nothing indexed (the index arrives in phase 2);
 `PauseIndexingAsync` does nothing. The chat side of context (pins, current file, rules, history summary) is in the Model
 Gateway README, Context assembly.
+
+### Contract 1.3 stubs
+
+Contract 1.3 added methods whose behaviour later phase 2 work items implement. Until then the host answers them honestly:
+
+| Method | Answer now | Implemented by |
+| --- | --- | --- |
+| `IContextService.GetIndexStatusAsync` | `Phase` `Idle`, no `Roots`, no `Progress`: this host builds no index yet | 2.9 |
+| `IContextService.SearchDetailedAsync` | No hits and zero timings, like `SearchAsync` | 2.11 |
+| `IContextService.ListExcludedFilesAsync`, `RebuildIndexAsync`, `DeleteIndexAsync`, `ListIndexesAsync` | `PillionRpcException`, code `NotImplemented`, `Details` `work item 2.15` | 2.9, 2.15 |
+| `IConversationService` (every method) | `PolicyDenied` naming the flag while `localStore` is off; otherwise `NotImplemented`, `Details` `work item 2.2` | 2.2 |
+
+`RpcErrors.NotImplemented(feature, workItem)` builds that error; a work item that implements a method removes its stub and
+its row here.
+
+## Index status notification (`indexStatusChanged`)
+
+Host to client, a JSON-RPC notification with one positional argument, an `IndexStatus` (contract 1.3). `IndexStatusNotifier`
+(a singleton) sends it: the first status after a quiet spell at once, later ones at most once per 500 ms, coalesced so the
+latest status of the window is the one sent. It goes over the same path as `connectivityChanged` and `settingsChanged`
+(`INotificationSender`), only to a client whose handshake was accepted, and is not replayed to a client that connects later
+(the client calls `GetIndexStatusAsync`). Nothing publishes yet; the indexing pipeline (work item 2.9) calls
+`IndexStatusNotifier.Publish` whenever its status changes. In the VSIX it surfaces as `IHostConnection.IndexStatusChanged`.
 
 ## Diagnostics (`Models/DiagnosticsRpcService.cs`)
 

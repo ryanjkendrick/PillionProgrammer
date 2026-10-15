@@ -10,17 +10,26 @@ public class InterfaceShapeTests
     {
         // VSIX to host.
         [typeof(IModelService)] = ["CompleteAsync", "ChatAsync", "CancelAsync", "ListModelsAsync"],
-        [typeof(IContextService)] = ["SearchAsync", "ResolveMentionAsync", "GetIndexStatusAsync", "PauseIndexingAsync"],
+        [typeof(IContextService)] =
+        [
+            "SearchAsync", "ResolveMentionAsync", "GetIndexStatusAsync", "PauseIndexingAsync",
+            "SearchDetailedAsync", "ListExcludedFilesAsync", "RebuildIndexAsync", "DeleteIndexAsync", "ListIndexesAsync",
+        ],
         [typeof(IAgentService)] = ["StartSessionAsync", "ApproveAsync", "DenyAsync", "StopAsync", "RevertAsync"],
         [typeof(ISettingsService)] = ["GetAsync", "SetAsync", "TestProviderAsync"],
         [typeof(IHostLifecycleService)] = ["HandshakeAsync", "GetStateAsync", "ShutdownAsync"],
         [typeof(IInlineEditService)] = ["EditAsync", "CancelEditAsync"],
         [typeof(IDiagnosticsService)] = ["GetAutocompleteCountersAsync", "GetOutboundRecordsAsync", "PreviewContextAsync"],
+        [typeof(IConversationService)] =
+        [
+            "ListConversationsAsync", "GetConversationAsync", "CreateConversationAsync", "RenameConversationAsync",
+            "DeleteConversationAsync", "DeleteAllConversationsAsync", "SetPinsAsync",
+        ],
 
         // Host to VSIX.
         [typeof(IEditorService)] = ["ApplyChangesetAsync", "ShowPreviewAsync", "GetOpenDocumentsAsync"],
         [typeof(IApprovalService)] = ["RequestApprovalAsync"],
-        [typeof(IWorkspaceQueryService)] = ["FindReferencesAsync", "GetDiagnosticsAsync", "GetSymbolAsync", "RenameSymbolAsync", "RunTestsAsync"],
+        [typeof(IWorkspaceQueryService)] = ["FindReferencesAsync", "GetDiagnosticsAsync", "GetSymbolAsync", "RenameSymbolAsync", "RunTestsAsync", "CallersOfAsync"],
     };
 
     public static TheoryData<Type> Interfaces => new(ExpectedMethods.Keys);
@@ -105,8 +114,38 @@ public class InterfaceShapeTests
     public void PillionErrorCode_HasExpectedMembers()
     {
         Assert.Equal(
-            ["ProviderUnavailable", "ModelNotInstalled", "ContextOverflow", "PolicyDenied", "ApprovalDenied", "HostRestarting", "Cancelled"],
+            ["ProviderUnavailable", "ModelNotInstalled", "ContextOverflow", "PolicyDenied", "ApprovalDenied", "HostRestarting", "Cancelled", "StorageUnavailable", "NotImplemented"],
             Enum.GetNames<PillionErrorCode>());
+    }
+
+    [Fact]
+    public void IndexPhase_HasExpectedMembers()
+    {
+        Assert.Equal(["Idle", "Discovering", "Hashing", "Chunking", "Embedding", "Storing", "Paused", "Failed"], Enum.GetNames<IndexPhase>());
+    }
+
+    [Fact]
+    public void IndexPauseReason_HasExpectedMembers()
+    {
+        Assert.Equal(["None", "User", "Build", "Test", "Debug", "Battery", "Memory", "LowDisk"], Enum.GetNames<IndexPauseReason>());
+    }
+
+    [Fact]
+    public void IndexRole_HasExpectedMembers()
+    {
+        Assert.Equal(["Unknown", "Writer", "Reader"], Enum.GetNames<IndexRole>());
+    }
+
+    [Fact]
+    public void SearchMode_HasExpectedMembers()
+    {
+        Assert.Equal(["Hybrid", "Lexical", "Vector", "Symbol"], Enum.GetNames<SearchMode>());
+    }
+
+    [Fact]
+    public void RetrievalMode_HasExpectedMembers()
+    {
+        Assert.Equal(["Auto", "On", "Off"], Enum.GetNames<RetrievalMode>());
     }
 
     [Fact]

@@ -69,7 +69,7 @@ Retention (`ConversationRetention`): conversations and the Outbound log are kept
 - `meta.schema_version` is the schema the file has; `meta.min_reader_version` is the oldest schema whose code can still
   use it. On open, inside `BEGIN IMMEDIATE`:
   - `min_reader_version` newer than this build's schema: refused with `LocalStoreErrorKind.NewerSchema` (a
-    `PillionRpcException`, code `PolicyDenied`, message naming both versions); the file is not touched.
+    `PillionRpcException`, code `StorageUnavailable`, message naming both versions); the file is not touched.
   - `schema_version` newer but `min_reader_version` still within this build: opened as is, without migrating.
   - `schema_version` older: the file and its WAL are copied to `<file>.v<old>.bak` (and `.bak-wal`), then every missing
     migration runs in the same transaction, which also writes the new versions. A failure rolls everything back
@@ -96,8 +96,9 @@ Retention (`ConversationRetention`): conversations and the Outbound log are kept
 
 ## Errors
 
-`LocalStoreException` derives from `PillionRpcException`, so it can cross the RPC boundary unchanged. The contract has
-no storage error code yet, so every kind uses `PolicyDenied`; `Kind` (`FeatureDisabled`, `CipherUnavailable`,
+`LocalStoreException` derives from `PillionRpcException`, so it can cross the RPC boundary unchanged. Every kind uses
+the contract 1.3 code `StorageUnavailable`, except `FeatureDisabled`, which uses `PolicyDenied` like every other feature
+flag that is off (before contract 1.3 every kind used `PolicyDenied`); `Kind` (`FeatureDisabled`, `CipherUnavailable`,
 `KeyMissing`, `KeyUnreadable`, `KeyMismatch`, `NewerSchema`, `MigrationFailed`, `DatabaseMissing`, `NeedsMigration`) carries the precise reason. Messages are
 written for the user and never contain key material; `Details` holds the file path.
 

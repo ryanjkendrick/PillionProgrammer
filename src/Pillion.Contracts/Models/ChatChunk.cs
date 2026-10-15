@@ -40,4 +40,11 @@ public sealed class ChatChunk
     /// </summary>
     [DataMember(Order = 7)]
     public PillionError? Error { get; set; }
+
+    /// <summary>
+    /// Gets or sets the <c>file:line</c> spans the reply cites, sent with the final chunk when the reply used retrieved
+    /// chunks or pins with a location; empty on every other chunk and from a 1.2 host. Added in contract 1.3 (work item 2.12).
+    /// </summary>
+    [DataMember(Order = 8)]
+    public Citation[] Citations { get; set; } = [];
 }

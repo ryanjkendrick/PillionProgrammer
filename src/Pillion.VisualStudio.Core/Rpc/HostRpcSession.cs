@@ -33,6 +33,12 @@ internal sealed class HostRpcSession : IHostSession
     /// </summary>
     public const string SettingsChangedMethod = "settingsChanged";
 
+    /// <summary>
+    /// The JSON-RPC notification the host sends with the latest <see cref="IndexStatus"/> (one positional argument) whenever
+    /// the index state changes, at most twice a second (contract 1.3).
+    /// </summary>
+    public const string IndexStatusChangedMethod = "indexStatusChanged";
+
     private static readonly TimeSpan ExitCodeGrace = TimeSpan.FromMilliseconds(500);
 
     private readonly HostProcess _process;
@@ -72,6 +78,7 @@ internal sealed class HostRpcSession : IHostSession
         // Registered before the handshake: the host may send it before the handshake response arrives.
         _rpc.AddLocalRpcMethod(ConnectivityChangedMethod, new Action<ConnectivityState>(OnConnectivityChanged));
         _rpc.AddLocalRpcMethod(SettingsChangedMethod, new Action<string[]>(OnSettingsChanged));
+        _rpc.AddLocalRpcMethod(IndexStatusChangedMethod, new Action<IndexStatus>(OnIndexStatusChanged));
         _rpc.Disconnected += OnDisconnected;
 
         _ = _process.Exited.ContinueWith(
@@ -92,6 +99,9 @@ internal sealed class HostRpcSession : IHostSession
 
     /// <inheritdoc/>
     public event EventHandler<HostSettingsChangedEventArgs>? SettingsChanged;
+
+    /// <inheritdoc/>
+    public event EventHandler<HostIndexStatusChangedEventArgs>? IndexStatusChanged;
 
     /// <summary>Creates the wire framing and serializer shared with Pillion Host.</summary>
     /// <param name="pipe">The connected pipe.</param>
@@ -321,6 +331,13 @@ internal sealed class HostRpcSession : IHostSession
         var changed = new HostSettingsChangedEventArgs(sections);
         _log.Debug("host.settings_changed", "The host reported changed settings.", ("pid", _process.Id), ("sections", string.Join(",", changed.Sections)));
         SettingsChanged?.Invoke(this, changed);
+    }
+
+    private void OnIndexStatusChanged(IndexStatus? status)
+    {
+        var changed = new HostIndexStatusChangedEventArgs(status);
+        _log.Debug("host.index_status", "The host reported the index status.", ("pid", _process.Id), ("phase", changed.Status.Phase));
+        IndexStatusChanged?.Invoke(this, changed);
     }
 
     private void OnDisconnected(object? sender, JsonRpcDisconnectedEventArgs e)

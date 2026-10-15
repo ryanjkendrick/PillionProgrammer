@@ -94,7 +94,7 @@ public sealed class MigrationTests : IDisposable
 
         Assert.Equal(LocalStoreErrorKind.NewerSchema, error.Kind);
         var rpc = Assert.IsAssignableFrom<PillionRpcException>(error);
-        Assert.Equal(PillionErrorCode.PolicyDenied, rpc.Error.Code);
+        Assert.Equal(PillionErrorCode.StorageUnavailable, rpc.Error.Code);
         Assert.Contains("newer Pillion Programmer", error.Message, StringComparison.Ordinal);
         Assert.Contains("schema version 5", error.Message, StringComparison.Ordinal);
         Assert.Contains("reader of version 4", error.Message, StringComparison.Ordinal);

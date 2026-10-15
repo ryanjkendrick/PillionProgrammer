@@ -37,6 +37,15 @@ internal sealed class FakeHostConnection : IHostConnection
         return Task.Run(() => SettingsChanged?.Invoke(this, args));
     }
 
+    public event EventHandler<HostIndexStatusChangedEventArgs>? IndexStatusChanged;
+
+    /// <summary>Raises <see cref="IndexStatusChanged"/> on a thread-pool thread, as the supervisor does.</summary>
+    public Task RaiseIndexStatusChangedAsync(IndexStatus status)
+    {
+        var args = new HostIndexStatusChangedEventArgs(status);
+        return Task.Run(() => IndexStatusChanged?.Invoke(this, args));
+    }
+
     public ConnectivityState? Connectivity
     {
         get
