@@ -180,6 +180,7 @@ public sealed class ContextAssemblyV2Tests : IAsyncDisposable
         _provider.Reply = $"Stock is added in `src/Inventory/StockRoom.cs:{restock}` when a delivery arrives.";
         await using var host = await StartAsync();
         await using var client = await host.ConnectAndHandshakeAsync();
+        await RetrievalTests.OpenWorkspaceAsync(client.Attach<IContextService>(), _repo.Path); // retrieval reads the open workspace's indexes only (issue #98)
 
         var chunks = new List<ChatChunk>();
         await foreach (var chunk in client.Attach<IModelService>().ChatAsync(Chat("c1", "Where do we Restock a product in the StockRoom?"), CancellationToken.None))
@@ -221,6 +222,7 @@ public sealed class ContextAssemblyV2Tests : IAsyncDisposable
         _provider.Reply = "Somewhere in the inventory code.";
         await using var host = await StartAsync();
         await using var client = await host.ConnectAndHandshakeAsync();
+        await RetrievalTests.OpenWorkspaceAsync(client.Attach<IContextService>(), _repo.Path);
         var models = client.Attach<IModelService>();
 
         var implicitChunks = await CollectAsync(models.ChatAsync(Chat("c1", "Where do we Restock a product?"), CancellationToken.None));
@@ -290,6 +292,7 @@ public sealed class ContextAssemblyV2Tests : IAsyncDisposable
         services.Replace(ServiceDescriptor.Singleton<ISecretStore>(new InMemorySecretStore()));
         services.Replace(ServiceDescriptor.Singleton<IFeatureFlags>(_flags));
         services.Replace(ServiceDescriptor.Singleton<IGatewaySettingsSource>(new StaticGatewaySettingsSource(settings)));
+        services.Replace(ServiceDescriptor.Singleton<Pillion.Host.Indexing.IIndexEmbedder>(new Pillion.Host.Tests.Indexing.FakeEmbedder { ModelId = "test/none" })); // the pipeline opens the test index itself
         services.AddSingleton<IModelProviderFactory>(new ScriptedFactory(_provider));
         services.AddSingleton(RetrievalOptions.Default with { TimeBudget = TimeSpan.FromSeconds(10) }); // correctness, not latency
         var inventory = new ModelInventory();
