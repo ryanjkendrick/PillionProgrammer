@@ -202,7 +202,7 @@ public sealed partial class HybridRetriever
 
         var k = _options.LexicalCandidates;
         var perIndex = await Task.WhenAll(indexes.Select((index, i) => Task.Run(
-            async () => (await index.Chunks.SearchLexicalAsync(analysis.LexicalQuery, k, filter, cancellationToken).ConfigureAwait(false))
+            async () => (await index.Chunks.SearchLexicalAsync(analysis.LexicalQuery, k, LexicalSearchOptions.Question, filter, cancellationToken).ConfigureAwait(false))
                 .Select(h => (Key: new Key(i, h.ChunkId), h.Score)),
             cancellationToken))).ConfigureAwait(false);
 
