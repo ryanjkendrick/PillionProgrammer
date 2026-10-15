@@ -77,7 +77,7 @@ index (the Embed step of the pipeline, design section 7) and for search queries.
 - **Batches.** Inputs go out in batches of `ModelGatewayOptions.EmbeddingBatchSize` (32; `EmbeddingRequest.BatchSize`
   overrides it), one provider request and one Outbound record per batch (`{RequestId}/b{n}`: task class `Embedding`,
   locality, estimated prompt tokens, duration, outcome, redaction count). Each batch takes a circuit-breaker permit and a
-  concurrency slot (the chat lane: two per provider) and is retried on 429 and 5xx like a chat request. Results come back
+  concurrency slot (a lane of its own, one batch per provider, `EmbeddingConcurrency`, so indexing cannot crowd out chat) and is retried on 429 and 5xx like a chat request. Results come back
   in input order. Fallback candidates are tried only until a batch has succeeded: vectors of two models cannot be
   compared, so the rest of the call stays on that model and a batch that fails then is reported, not moved.
 - **Failures.** A batch that fails is listed in `EmbeddingResult.Failures` (first input, count, error) and its vectors

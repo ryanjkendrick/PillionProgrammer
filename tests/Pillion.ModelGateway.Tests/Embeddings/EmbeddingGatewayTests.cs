@@ -599,8 +599,57 @@ public class EmbeddingGatewayTests
         await Task.WhenAll(calls);
 
         Assert.Equal(6, harness.Local.EmbedCalls);
-        Assert.True(harness.Local.MaxInFlight <= harness.Limiter.LimitFor(ConcurrencyLane.Chat), $"{harness.Local.MaxInFlight} in flight");
-        Assert.Equal(harness.Limiter.LimitFor(ConcurrencyLane.Chat), harness.Limiter.Available("local", ConcurrencyLane.Chat));
+        Assert.Equal(1, harness.Local.MaxInFlight);
+        Assert.Equal(1, harness.Limiter.LimitFor(ConcurrencyLane.Embedding));
+        Assert.Equal(1, harness.Limiter.Available("local", ConcurrencyLane.Embedding));
+    }
+
+    [Fact]
+    public async Task Embed_TheLaneIsConfigurable()
+    {
+        using var harness = Harness(options: o => o.EmbeddingConcurrency = 3);
+        harness.Local!.Embed = async (texts, _, ct) =>
+        {
+            await Task.Delay(50, ct);
+            return [.. texts.Select(t => FakeProvider.DefaultVector(t))];
+        };
+
+        await Task.WhenAll(Enumerable.Range(0, 6).Select(i => harness.Gateway.EmbedAsync(Request([$"t{i}"], id: $"c{i}"), CancellationToken.None)));
+
+        Assert.Equal(3, harness.Local.MaxInFlight);
+        Assert.Equal(ConcurrencyLane.Embedding, ConcurrencyLimiter.LaneFor(TaskClass.Embedding));
+        Assert.Equal(ConcurrencyLane.Chat, ConcurrencyLimiter.LaneFor(TaskClass.Summarise));
+    }
+
+    [Fact]
+    public async Task Embed_ABatchWaitsWhileAnotherEmbeddingBatchRuns_ButChatIsNotBlocked()
+    {
+        using var harness = Harness();
+        var release = new TaskCompletionSource();
+        var started = new TaskCompletionSource();
+        harness.Local!.Embed = async (texts, _, ct) =>
+        {
+            started.TrySetResult();
+            await release.Task.WaitAsync(ct);
+            return [.. texts.Select(t => FakeProvider.DefaultVector(t))];
+        };
+
+        var first = harness.Gateway.EmbedAsync(Request(["first"], id: "e1"), CancellationToken.None);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var second = harness.Gateway.EmbedAsync(Request(["second"], id: "e2"), CancellationToken.None);
+
+        // Chat on the same provider gets its answer while the embedding lane is full.
+        var chat = await harness.Gateway.ChatAsync(GatewayHarness.ChatRequest("hi", modelId: "local/qwen2.5-coder:14b"), TaskClass.Chat, CancellationToken.None).CollectAsync();
+        Assert.True(chat[^1].IsFinal);
+        Assert.Equal(1, harness.Local.EmbedCalls);
+        Assert.Equal(0, harness.Limiter.Available("local", ConcurrencyLane.Embedding));
+        Assert.False(second.IsCompleted);
+
+        release.SetResult();
+        await Task.WhenAll(first, second);
+        Assert.Equal(2, harness.Local.EmbedCalls);
+        Assert.Equal(1, harness.Limiter.Available("local", ConcurrencyLane.Embedding));
+        Assert.Equal(2, harness.Limiter.Available("local", ConcurrencyLane.Chat));
     }
 
     [Fact]

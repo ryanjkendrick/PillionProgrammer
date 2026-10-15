@@ -61,6 +61,9 @@ public sealed class ModelGatewayOptions
     /// </summary>
     public int EmbeddingMaxConsecutiveFailures { get; set; } = 3;
 
+    /// <summary>Gets or sets the embedding batches in flight per provider, in a lane of their own so that indexing cannot crowd out chat. Default 1.</summary>
+    public int EmbeddingConcurrency { get; set; } = 1;
+
     /// <summary>Gets or sets the number of entries in the autocomplete cache. Default 256.</summary>
     public int AutocompleteCacheCapacity { get; set; } = 256;
 
