@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.VisualStudio.Threading;
 using Pillion.Contracts;
 
 namespace Pillion.VisualStudio.Core.WorkspaceQueries;
@@ -278,6 +279,10 @@ public sealed class WorkspaceQueryService : IWorkspaceQueryService
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
+
+        // Leave the caller's thread before waiting: when the search has already finished, an await of a completed task would
+        // carry on synchronously, and the response would be built on the caller's thread (the UI thread, for a caller there).
+        await TaskScheduler.Default;
 
         try
         {

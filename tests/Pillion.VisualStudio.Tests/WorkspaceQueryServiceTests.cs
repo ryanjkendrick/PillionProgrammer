@@ -16,6 +16,12 @@ namespace Pillion.VisualStudio.Tests;
 /// the 2 s budget with partial results, and that no part of a query runs on the UI thread. The Roslyn calls are behind
 /// <see cref="IWorkspaceQueryEngine"/>; the real engine is covered by the IDE tests.
 /// </summary>
+/// <remarks>
+/// In the UI thread timings collection: <see cref="WorkspaceQueryService"/> records <c>workspace.query.*</c> timings while
+/// the process-wide switch is on, and one test here switches it on; run beside <see cref="UiThreadTimingsTests"/> or
+/// <see cref="IndexWindowTests"/>, either side saw the other's timings, or had the switch turned off under it.
+/// </remarks>
+[Collection(UiThreadTimingsTests.GroupName)]
 public sealed class WorkspaceQueryServiceTests
 {
     private static readonly TimeSpan ShortBudget = TimeSpan.FromMilliseconds(300);

@@ -73,8 +73,13 @@ public sealed class ConversationRealHostTests : IDisposable
         var fresh = chat.Conversations[0];
         chat.CurrentConversation = fresh;
         chat.InputText = "Where is Main? /cite";
+
+        // SendAsync does nothing until the window can send (the model list read, the conversation loaded); on a loaded CI runner
+        // the models had not arrived yet, the send was a no-op and the transcript stayed empty.
+        await Wait.UntilAsync(() => chat.SendCommand.CanExecute(null), "the window to be able to send", timeoutMs: 30000);
         await chat.SendAsync().WithTimeout(Timeout);
-        Assert.True(fresh.IsPersisted);
+        var reply = chat.Turns.Last();
+        Assert.True(fresh.IsPersisted, $"reply {reply.State} ({reply.ErrorMessage}); storage {chat.Storage}; text '{reply.Text}'");
         Assert.Equal(2, chat.Turns.Last().Citations.Count);
 
         // The next session: a new window reads the list the host kept.

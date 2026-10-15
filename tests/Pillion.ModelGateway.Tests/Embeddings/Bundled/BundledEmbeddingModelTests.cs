@@ -167,7 +167,8 @@ public class BundledEmbeddingModelTests(ITestOutputHelper output)
 
         var provider = gpu.ExecutionProviderOf(TestModels.Bge);
         output.WriteLine($"DirectML in this build: {DirectMLBuilt}; the model runs on {provider}.");
-        if (DirectMLBuilt && OperatingSystem.IsWindows())
+        // DirectML needs a hardware adapter; without one (a CI runner) the runtime falls back to the CPU, as the name says.
+        if (DirectMLBuilt && OperatingSystem.IsWindows() && new Pillion.Common.Hardware.DxgiProbe().Probe() is { Count: > 0 })
         {
             Assert.Equal(LoadedExecutionProvider.DirectML, provider);
         }

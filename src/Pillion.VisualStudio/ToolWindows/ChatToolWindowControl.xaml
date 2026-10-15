@@ -235,11 +235,14 @@
                 <ComboBox.ItemContainerStyle>
                     <Style TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
                         <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                        <!-- The menu items get their Click handlers in code when the menu opens: an event attribute on an element inside a
+                             setter value is compiled to the wrong connection id, and the window failed to build ("Set connectionId threw"). -->
+                        <EventSetter Event="ContextMenuOpening" Handler="OnConversationItemContextMenuOpening" />
                         <Setter Property="ContextMenu">
                             <Setter.Value>
                                 <ContextMenu>
-                                    <MenuItem Header="{x:Static core:ChatStrings.ConversationMenuRename}" Click="OnConversationRenameClick" />
-                                    <MenuItem Header="{x:Static core:ChatStrings.ConversationMenuDelete}" Click="OnConversationDeleteClick" />
+                                    <MenuItem Header="{x:Static core:ChatStrings.ConversationMenuRename}" Tag="rename" />
+                                    <MenuItem Header="{x:Static core:ChatStrings.ConversationMenuDelete}" Tag="delete" />
                                 </ContextMenu>
                             </Setter.Value>
                         </Setter>

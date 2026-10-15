@@ -99,6 +99,7 @@ internal sealed class FakeCompletionModel : IModelService
     private readonly ConcurrentQueue<CompletionRequest> _requests = new();
     private readonly ConcurrentQueue<string> _cancelled = new();
     private readonly SemaphoreSlim _released = new(0);
+    private int _waitsForRelease;
 
     /// <summary>Gets or sets the chunks each request streams (text pieces; a final chunk is added).</summary>
     public Func<CompletionRequest, IReadOnlyList<string>> Respond { get; set; } = _ => ["42;"];
@@ -123,6 +124,13 @@ internal sealed class FakeCompletionModel : IModelService
 
     public void Release(int chunks = 1) => _released.Release(chunks);
 
+    /// <summary>
+    /// Gets how many times a stream has started waiting for <see cref="Release"/> (manual mode). A stream asks for its next
+    /// chunk only after the consumer has handled the previous one, so a test that released chunk n waits for this to reach
+    /// n + 1 instead of sleeping (a signalled wait, not a timed one).
+    /// </summary>
+    public int WaitsForRelease => Volatile.Read(ref _waitsForRelease);
+
     public async IAsyncEnumerable<CompletionChunk> CompleteAsync(CompletionRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         _requests.Enqueue(request);
@@ -139,6 +147,7 @@ internal sealed class FakeCompletionModel : IModelService
             {
                 if (Manual)
                 {
+                    Interlocked.Increment(ref _waitsForRelease);
                     await _released.WaitAsync(cancellationToken).ConfigureAwait(false);
                 }
                 else if (ChunkDelay > TimeSpan.Zero)

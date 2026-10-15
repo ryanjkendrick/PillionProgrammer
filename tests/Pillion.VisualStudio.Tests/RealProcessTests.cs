@@ -304,7 +304,7 @@ public sealed class RealProcessTests : IDisposable
         providers.SelectedProvider!.Id = "work-gateway";
         providers.SelectedProvider.ApiKey = "sk-test-not-a-real-key";
         await providers.SaveAsync();
-        providersStatus.AssertSaved();
+        await providersStatus.WaitForSavedAsync();
         Assert.Equal("sk-test-not-a-real-key", credentials.Keys["work-gateway"]);
         await providers.TestSelectedAsync();
         Assert.Equal("Connection succeeded. The fake host reached provider 'work-gateway'.", providers.SelectedProvider.TestResult);
@@ -314,7 +314,7 @@ public sealed class RealProcessTests : IDisposable
         var privacyStatus = new StatusRecorder(privacy);
         privacy.LocalOnly = true;
         await privacy.SaveAsync();
-        privacyStatus.AssertSaved();
+        await privacyStatus.WaitForSavedAsync();
         await Wait.UntilAsync(() => changedSections.Contains("privacy"), "the host's settingsChanged reached the supervisor");
 
         // The Models and routing page over the same wire: Chat to Local-strong, the autocomplete cloud switch on.
@@ -326,7 +326,7 @@ public sealed class RealProcessTests : IDisposable
         routing.TaskRoutes.Single(r => r.TaskClass == TaskClass.Autocomplete).CloudSwitchOn = true;
         var routingStatus = new StatusRecorder(routing);
         await routing.SaveAsync();
-        routingStatus.AssertSaved();
+        await routingStatus.WaitForSavedAsync();
         await Wait.UntilAsync(() => changedSections.Contains("routing") && changedSections.Contains("cloudSwitches"), "settingsChanged named routing and cloudSwitches");
 
         using var routingAgain = new RoutingOptionsViewModel(supervisor, uiContext.Factory, _log);
@@ -362,7 +362,8 @@ public sealed class RealProcessTests : IDisposable
             };
         }
 
-        public void AssertSaved() => Assert.Contains("Saved.", _seen);
+        /// <summary>Waits for the page to have said "Saved." (the status can be set on the UI thread just after the save returns).</summary>
+        public Task WaitForSavedAsync() => Wait.UntilAsync(() => _seen.Contains("Saved."), "the page to say Saved. (it said: " + string.Join(" | ", _seen) + ")", timeoutMs: 30000);
     }
 
     /// <summary>Reads the log while the logger may be appending to it (File.ReadAllText would deny it write access).</summary>
