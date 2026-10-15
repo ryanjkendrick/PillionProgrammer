@@ -718,6 +718,10 @@
     <value>There is no index to build</value>
     <comment>Summary sentence.</comment>
   </data>
+  <data name="OptionsDisabledMessage" xml:space="preserve">
+    <value>Indexing options are disabled by settings or policy</value>
+    <comment>Shown instead of the Indexing page while the indexWindow feature flag is off.</comment>
+  </data>
   <data name="OptionsPageName" xml:space="preserve">
     <value>Pillion Programmer indexing</value>
     <comment>Screen-reader name of the Indexing Options page.</comment>

@@ -18,6 +18,7 @@ using Pillion.VisualStudio.Core.Signals;
 using Pillion.VisualStudio.InlineChat;
 using Pillion.VisualStudio.Options;
 using Pillion.VisualStudio.Signals;
+using Pillion.VisualStudio.Statusbar;
 using Pillion.VisualStudio.ToolWindows;
 using Task = System.Threading.Tasks.Task;
 
@@ -27,8 +28,9 @@ namespace Pillion.VisualStudio;
 /// The Pillion Programmer package. Loads in the background when a solution or folder is opened, starts and supervises
 /// Pillion Host (one per devenv.exe), shows its state in the status bar, registers <see cref="IHostConnection"/> as a
 /// service, and adds the Tools menu commands "Pillion: Open Chat", "Pillion: Show Status", "Pillion: Retry" and
-/// "Pillion: Open Logs". Provides the Pillion Chat tool window (also under View &gt; Other Windows) and the
-/// Tools &gt; Options &gt; Pillion Programmer pages "Providers and keys" and "Privacy".
+/// "Pillion: Open Logs". Provides the Pillion Chat tool window (also under View &gt; Other Windows), the Pillion Index tool
+/// window and the status bar's indexing indicator (behind the <c>indexWindow</c> flag), and the
+/// Tools &gt; Options &gt; Pillion Programmer pages "Providers and keys", "Privacy", "Models and routing", "Autocomplete" and "Indexing".
 /// </summary>
 [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
 [ProvideMenuResource("Menus.ctmenu", 1)]
@@ -37,10 +39,12 @@ namespace Pillion.VisualStudio;
 [ProvideService(typeof(IHostConnection), IsAsyncQueryable = true)]
 [ProvideService(typeof(IIdeSignals), IsAsyncQueryable = true)]
 [ProvideToolWindow(typeof(ChatToolWindow), Style = VsDockStyle.Tabbed, Window = SolutionExplorerWindow, Orientation = ToolWindowOrientation.Right)]
+[ProvideToolWindow(typeof(IndexToolWindow), Style = VsDockStyle.Tabbed, Window = SolutionExplorerWindow, Orientation = ToolWindowOrientation.Right)]
 [ProvideOptionPage(typeof(ProvidersOptionPage), ProductName, "Providers and keys", 0, 0, supportsAutomation: false)]
 [ProvideOptionPage(typeof(PrivacyOptionPage), ProductName, "Privacy", 0, 0, supportsAutomation: false)]
 [ProvideOptionPage(typeof(RoutingOptionPage), ProductName, "Models and routing", 0, 0, supportsAutomation: false)]
 [ProvideOptionPage(typeof(AutocompleteOptionPage), ProductName, "Autocomplete", 0, 0, supportsAutomation: false)]
+[ProvideOptionPage(typeof(IndexingOptionPage), ProductName, "Indexing", 0, 0, supportsAutomation: false)]
 [Guid(PackageGuids.PackageString)]
 public sealed class PillionPackage : AsyncPackage
 {
@@ -61,6 +65,8 @@ public sealed class PillionPackage : AsyncPackage
     private PillionLog? _log;
     private HostSupervisor? _supervisor;
     private ChatAvailability? _chatAvailability;
+    private IndexStatusIndicator? _indexIndicator;
+    private IndexStatusBarItem? _indexStatusItem;
     private OutputPaneWriter? _output;
     private IVsStatusbar? _statusBar;
     private AutocompleteFeature? _autocomplete;
@@ -77,6 +83,9 @@ public sealed class PillionPackage : AsyncPackage
 
     /// <summary>Gets the connection to Pillion Host, once initialization has created it.</summary>
     internal IHostConnection? HostConnection => _supervisor;
+
+    /// <summary>Gets the host's effective feature flags (chat, mentions, Outbound log view, Index window), once initialization has created them.</summary>
+    internal ChatAvailability? Availability => _chatAvailability;
 
     /// <summary>Gets the extension log, once initialization has created it.</summary>
     internal PillionLog? Log => _log;
@@ -115,6 +124,9 @@ public sealed class PillionPackage : AsyncPackage
         _supervisor = supervisor;
         var chatAvailability = new ChatAvailability(supervisor, log);
         _chatAvailability = chatAvailability;
+        var indexIndicator = new IndexStatusIndicator(supervisor, chatAvailability, log);
+        _indexIndicator = indexIndicator;
+        _indexStatusItem = new IndexStatusBarItem(OpenIndexFromStatusBar, log);
         var autocomplete = new AutocompleteFeature(supervisor, log);
         _autocomplete = autocomplete;
         var inlineChat = new InlineChatFeature(this, supervisor, log, output: null);
@@ -154,6 +166,8 @@ public sealed class PillionPackage : AsyncPackage
                 commandService.AddCommand(new MenuCommand(OnOpenLogs, new CommandID(PackageGuids.CommandSet, PackageIds.OpenLogsCommand)));
                 commandService.AddCommand(CreateOpenChatCommand(PackageIds.OpenChatCommand));
                 commandService.AddCommand(CreateOpenChatCommand(PackageIds.ViewChatCommand));
+                commandService.AddCommand(CreateOpenIndexCommand(PackageIds.OpenIndexCommand));
+                commandService.AddCommand(CreateOpenIndexCommand(PackageIds.ViewIndexCommand));
                 commandService.AddCommand(inlineChat.CreateCommand());
             }
         }
@@ -173,10 +187,12 @@ public sealed class PillionPackage : AsyncPackage
         supervisor.StateChanged += OnHostStateChanged;
         supervisor.ConnectivityChanged += OnConnectivityChanged;
         autocomplete.StatusChanged += (_, _) => _ = JoinableTaskFactory.RunAsync(RefreshStatusBarAsync);
+        indexIndicator.Changed += (_, _) => _ = JoinableTaskFactory.RunAsync(RefreshStatusBarAsync);
 
         // Returns at once: launching, connecting and the handshake run on the thread pool. Availability follows the
         // host's effective feature flags: it reads them whenever the host becomes ready.
         chatAvailability.Start();
+        indexIndicator.Start();
         autocomplete.Start();
         inlineChat.Start();
         _ = JoinableTaskFactory.RunAsync(() => signals.StartAsync(this, DisposalToken, startupOver));
@@ -186,17 +202,36 @@ public sealed class PillionPackage : AsyncPackage
     }
 
     /// <inheritdoc/>
-    /// <remarks>Only Pillion Chat is created asynchronously; the base implementation returns <see langword="null"/> too.</remarks>
+    /// <remarks>Only Pillion Chat and Pillion Index are created asynchronously; the base implementation returns <see langword="null"/> too.</remarks>
     public override IVsAsyncToolWindowFactory? GetAsyncToolWindowFactory(Guid toolWindowType) =>
-        toolWindowType == typeof(ChatToolWindow).GUID ? this : null;
+        toolWindowType == typeof(ChatToolWindow).GUID || toolWindowType == typeof(IndexToolWindow).GUID ? this : null;
 
     /// <inheritdoc/>
     protected override string? GetToolWindowTitle(Type toolWindowType, int id) =>
-        toolWindowType == typeof(ChatToolWindow) ? ChatToolWindow.Title : base.GetToolWindowTitle(toolWindowType, id);
+        toolWindowType == typeof(ChatToolWindow) ? ChatToolWindow.Title
+        : toolWindowType == typeof(IndexToolWindow) ? IndexToolWindow.Title
+        : base.GetToolWindowTitle(toolWindowType, id);
 
     /// <inheritdoc/>
     protected override System.Threading.Tasks.Task<object> InitializeToolWindowAsync(Type toolWindowType, int id, CancellationToken cancellationToken)
     {
+        if (toolWindowType == typeof(IndexToolWindow))
+        {
+            // The view model starts on the UI thread, in the window.
+            var indexViewModel = new IndexWindowViewModel(
+                _supervisor!,
+                JoinableTaskFactory,
+                new IndexWindowOptions
+                {
+                    Log = _log,
+                    Availability = _chatAvailability,
+                    CopyText = ChatToolWindow.CopyToClipboard,
+                    Confirm = IndexToolWindow.Confirm,
+                    OpenPillionIgnore = IndexToolWindow.OpenPillionIgnore,
+                });
+            return System.Threading.Tasks.Task.FromResult<object>(new IndexToolWindowState(indexViewModel));
+        }
+
         if (toolWindowType != typeof(ChatToolWindow))
         {
             return base.InitializeToolWindowAsync(toolWindowType, id, cancellationToken);
@@ -231,6 +266,9 @@ public sealed class PillionPackage : AsyncPackage
         {
             _chatAvailability?.Dispose();
             _chatAvailability = null;
+            _indexIndicator?.Dispose();
+            _indexIndicator = null;
+            _indexStatusItem = null;
             _autocomplete?.Dispose();
             _autocomplete = null;
             _inlineChat?.Dispose();
@@ -327,7 +365,15 @@ public sealed class PillionPackage : AsyncPackage
     private string StatusBarText(HostSupervisor supervisor) =>
         HostStatusText.Format(supervisor.State, supervisor.RestartAttempt, supervisor.MaxRestartAttempts, supervisor.Connectivity)
         + (supervisor.State is HostState.Ready or HostState.Degraded ? _autocomplete?.StatusBarSuffix : null)
+        + (supervisor.State is HostState.Ready or HostState.Degraded ? IndexStatusBarSuffix() : null)
         + (_intelliCodeReported is IntelliCodeStatus.Missing or IntelliCodeStatus.CompletionsOff ? ". " + IntelliCodeRequirement.Message : string.Empty);
+
+    /// <summary>
+    /// What the status bar text adds for the indexing indicator: nothing when it is idle or when the clickable item is in
+    /// the status bar (it shows the indicator itself); otherwise the indicator's text after a comma (the fallback).
+    /// </summary>
+    private string? IndexStatusBarSuffix() =>
+        _indexIndicator is { Text.Length: > 0 } indicator && _indexStatusItem is not { IsAttached: true } ? ", " + indicator.Text : null;
 
     /// <summary>Shows the supervisor's current state and connectivity, read on the UI thread so the latest change always wins.</summary>
     private async Task RefreshStatusBarAsync()
@@ -336,6 +382,7 @@ public sealed class PillionPackage : AsyncPackage
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync(DisposalToken);
             using var timing = UiThreadTimings.Measure("package.statusbar");
+            UpdateIndexStatusItem();
             if (_supervisor is { } supervisor)
             {
                 SetStatusBarText(StatusBarText(supervisor));
@@ -345,6 +392,25 @@ public sealed class PillionPackage : AsyncPackage
         {
             // Visual Studio is shutting down.
         }
+    }
+
+    /// <summary>Shows the indexing indicator in the clickable status bar item. The status bar's visual tree is only searched when there is something to show.</summary>
+    private void UpdateIndexStatusItem()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (_indexIndicator is not { } indicator || _indexStatusItem is not { } item)
+        {
+            return;
+        }
+
+        using var timing = UiThreadTimings.Measure("package.statusbar.index");
+        var text = indicator.Text;
+        if (text.Length > 0)
+        {
+            item.TryAttach();
+        }
+
+        item.Update(text, indicator.ToolTip);
     }
 
     private void SetStatusBarText(string text)
@@ -495,6 +561,70 @@ public sealed class PillionPackage : AsyncPackage
                 // Visual Studio is shutting down.
             }
         });
+    }
+
+    /// <summary>
+    /// Creates the command that opens the Index window. It is hidden (and disabled) while the <c>indexWindow</c> flag is off;
+    /// opening the Tools or View menu also asks the host again, so a change shows up without restarting Visual Studio.
+    /// </summary>
+    private OleMenuCommand CreateOpenIndexCommand(int commandId)
+    {
+        var command = new OleMenuCommand(OnOpenIndex, new CommandID(PackageGuids.CommandSet, commandId));
+        command.BeforeQueryStatus += (sender, args) =>
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            using var timing = UiThreadTimings.Measure("package.querystatus.openindex");
+            var availability = _chatAvailability;
+            if (sender is OleMenuCommand menuCommand)
+            {
+                var enabled = availability?.IsIndexWindowEnabled ?? true;
+                menuCommand.Visible = enabled;
+                menuCommand.Enabled = enabled;
+            }
+
+            if (availability is not null)
+            {
+                _ = JoinableTaskFactory.RunAsync(() => availability.RefreshAsync(DisposalToken));
+            }
+        };
+        return command;
+    }
+
+    private void OnOpenIndex(object sender, EventArgs e)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        _ = JoinableTaskFactory.RunAsync(async () =>
+        {
+            try
+            {
+                if (_chatAvailability is { } availability)
+                {
+                    await availability.RefreshAsync(DisposalToken).ConfigureAwait(true);
+                    if (!availability.IsIndexWindowEnabled)
+                    {
+                        _output?.WriteLine(IndexStrings.DisabledMessage + ".");
+                        return;
+                    }
+                }
+
+                var window = await ShowToolWindowAsync(typeof(IndexToolWindow), 0, create: true, DisposalToken).ConfigureAwait(true);
+                if (window?.Frame is null)
+                {
+                    _log?.Error("package.open_index.failed", "Could not create the Pillion Index window.");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Visual Studio is shutting down.
+            }
+        });
+    }
+
+    /// <summary>A click on the status bar's indexing indicator (UI thread).</summary>
+    private void OpenIndexFromStatusBar()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        OnOpenIndex(this, EventArgs.Empty);
     }
 
     private void OnOpenLogs(object sender, EventArgs e) => OpenLogFolder();

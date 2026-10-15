@@ -60,6 +60,7 @@ public sealed class IndexingOptionsViewModel : OptionsPageViewModel
     private string _retentionText = DefaultRetentionDays.ToString(CultureInfo.InvariantCulture);
     private bool _pauseOnBattery = true;
     private string _modelText = IndexStrings.OptionsModelNone;
+    private readonly ChatAvailability? _availability;
     private IReadOnlyList<string> _loadedExclude = [];
     private int _loadedMaxMemory = DefaultMaxMemoryMb;
     private int _loadedRetention = DefaultRetentionDays;
@@ -69,10 +70,18 @@ public sealed class IndexingOptionsViewModel : OptionsPageViewModel
     /// <param name="connection">The connection to Pillion Host.</param>
     /// <param name="joinableTaskFactory">The package's joinable task factory.</param>
     /// <param name="log">The logger, or <see langword="null"/>.</param>
-    public IndexingOptionsViewModel(IHostConnection connection, JoinableTaskFactory joinableTaskFactory, PillionLog? log = null)
+    /// <param name="availability">The feature flags: the page says "disabled by settings or policy" while <c>indexWindow</c> is off. <see langword="null"/> means always on.</param>
+    public IndexingOptionsViewModel(IHostConnection connection, JoinableTaskFactory joinableTaskFactory, PillionLog? log = null, ChatAvailability? availability = null)
         : base(connection, joinableTaskFactory, log)
     {
+        _availability = availability;
     }
+
+    /// <summary>Gets a value indicating whether the page is offered: <see langword="false"/> while the <c>indexWindow</c> flag is off (read when the page loads).</summary>
+    public bool IsFeatureEnabled { get; private set; } = true;
+
+    /// <summary>Gets the text shown instead of the page while the flag is off, or empty.</summary>
+    public string FeatureDisabledMessage => IsFeatureEnabled ? string.Empty : IndexStrings.OptionsDisabledMessage;
 
     /// <summary>Gets or sets the exclude patterns, one per line.</summary>
     public string ExcludeText
@@ -150,9 +159,15 @@ public sealed class IndexingOptionsViewModel : OptionsPageViewModel
     /// <inheritdoc/>
     protected override async Task<Action<OptionsPageViewModel>> LoadCoreAsync(ISettingsService settings, CancellationToken cancellationToken)
     {
+        if (_availability is not null)
+        {
+            await _availability.RefreshAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        var enabled = _availability?.IsIndexWindowEnabled ?? true;
         var section = SettingsJsonText.ReadObject(await settings.GetAsync(SectionKey, cancellationToken).ConfigureAwait(false));
         var model = await TryReadModelAsync(cancellationToken).ConfigureAwait(false);
-        return page => ((IndexingOptionsViewModel)page).ApplyLoaded(section, model);
+        return page => ((IndexingOptionsViewModel)page).ApplyLoaded(section, model, enabled);
     }
 
     /// <inheritdoc/>
@@ -242,8 +257,11 @@ public sealed class IndexingOptionsViewModel : OptionsPageViewModel
         }
     }
 
-    private void ApplyLoaded(JObject section, string? model)
+    private void ApplyLoaded(JObject section, string? model, bool enabled)
     {
+        IsFeatureEnabled = enabled;
+        OnPropertyChanged(nameof(IsFeatureEnabled));
+        OnPropertyChanged(nameof(FeatureDisabledMessage));
         var exclude = section["exclude"] is JArray array
             ? array.OfType<JValue>().Where(v => v.Type == JTokenType.String).Select(v => (string)v!).ToArray()
             : [];

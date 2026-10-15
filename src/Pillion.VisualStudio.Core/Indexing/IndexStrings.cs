@@ -522,6 +522,9 @@ public static class IndexStrings
     /// <summary>Gets the string: Summary sentence.</summary>
     public static string SummaryNoIndex => Get(nameof(SummaryNoIndex));
 
+    /// <summary>Gets the string: Shown instead of the Indexing page while the indexWindow feature flag is off.</summary>
+    public static string OptionsDisabledMessage => Get(nameof(OptionsDisabledMessage));
+
     /// <summary>Gets the string: Screen-reader name of the Indexing Options page.</summary>
     public static string OptionsPageName => Get(nameof(OptionsPageName));
 

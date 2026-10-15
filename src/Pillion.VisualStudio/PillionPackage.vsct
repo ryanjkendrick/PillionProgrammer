@@ -41,6 +41,26 @@
         </Strings>
       </Button>
 
+      <!-- The Index window (work item 2.15): View > Other Windows, and the Tools menu. Hidden while features.indexWindow is off
+           (the package sets Visible when the menu opens), hence DynamicVisibility. -->
+      <Button guid="guidPillionCommandSet" id="cmdidViewIndex" priority="0x0101" type="Button">
+        <Parent guid="guidPillionCommandSet" id="PillionViewOtherWindowsGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings>
+          <ButtonText>Pillion Index</ButtonText>
+        </Strings>
+      </Button>
+
+      <Button guid="guidPillionCommandSet" id="cmdidOpenIndex" priority="0x0055" type="Button">
+        <Parent guid="guidPillionCommandSet" id="PillionToolsMenuGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <Strings>
+          <ButtonText>Pillion: Open Index</ButtonText>
+          <CanonicalName>Pillion.OpenIndex</CanonicalName>
+          <LocCanonicalName>Pillion.OpenIndex</LocCanonicalName>
+        </Strings>
+      </Button>
+
       <Button guid="guidPillionCommandSet" id="cmdidShowStatus" priority="0x0100" type="Button">
         <Parent guid="guidPillionCommandSet" id="PillionToolsMenuGroup" />
         <Strings>
@@ -139,6 +159,8 @@
       <IDSymbol name="PillionViewOtherWindowsGroup" value="0x1021" />
       <IDSymbol name="cmdidNextSuggestion" value="0x0105" />
       <IDSymbol name="cmdidPreviousSuggestion" value="0x0106" />
+      <IDSymbol name="cmdidViewIndex" value="0x0107" />
+      <IDSymbol name="cmdidOpenIndex" value="0x0108" />
       <IDSymbol name="cmdidInlineChat" value="0x0300" />
       <IDSymbol name="PillionEditorContextGroup" value="0x1030" />
       <IDSymbol name="cmdidSuggest" value="0x0310" />
