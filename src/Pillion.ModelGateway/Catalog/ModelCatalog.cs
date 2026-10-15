@@ -86,12 +86,14 @@ public sealed class ModelCatalog
 
     private readonly Dictionary<ProviderKind, Dictionary<Profile, string>> _profiles;
     private readonly Dictionary<ProviderKind, IReadOnlyList<string>> _embeddingDefaults;
+    private readonly IReadOnlyList<ProviderKind> _embeddingProviderOrder;
     private readonly List<Family> _families;
 
-    private ModelCatalog(Dictionary<ProviderKind, Dictionary<Profile, string>> profiles, Dictionary<ProviderKind, IReadOnlyList<string>> embeddingDefaults, List<Family> families)
+    private ModelCatalog(Dictionary<ProviderKind, Dictionary<Profile, string>> profiles, Dictionary<ProviderKind, IReadOnlyList<string>> embeddingDefaults, IReadOnlyList<ProviderKind> embeddingProviderOrder, List<Family> families)
     {
         _profiles = profiles;
         _embeddingDefaults = embeddingDefaults;
+        _embeddingProviderOrder = embeddingProviderOrder;
         _families = families;
     }
 
@@ -111,6 +113,29 @@ public sealed class ModelCatalog
     /// <returns>The model ids; empty when the catalog names none.</returns>
     public IReadOnlyList<string> GetDefaultEmbeddingModels(ProviderKind kind) =>
         _embeddingDefaults.TryGetValue(kind, out var models) ? models : [];
+
+    /// <summary>Gets the provider kinds the Embedding task class tries first, in order, before the other providers in settings order.</summary>
+    public IReadOnlyList<ProviderKind> EmbeddingProviderOrder => _embeddingProviderOrder;
+
+    /// <summary>
+    /// Gets where a provider kind stands in <see cref="EmbeddingProviderOrder"/>: its position, or <see cref="int.MaxValue"/> for a
+    /// kind the list does not name (those keep their settings order). A model named by <c>routing.profiles</c> or an explicit
+    /// model id still comes first.
+    /// </summary>
+    /// <param name="kind">The provider kind.</param>
+    /// <returns>The priority; lower is tried first.</returns>
+    public int GetEmbeddingProviderPriority(ProviderKind kind)
+    {
+        for (var i = 0; i < _embeddingProviderOrder.Count; i++)
+        {
+            if (_embeddingProviderOrder[i] == kind)
+            {
+                return i;
+            }
+        }
+
+        return int.MaxValue;
+    }
 
     /// <summary>Gets what the catalog knows about an embedding model: dimensions, input limit, tokenizer family, licence and prefixes.</summary>
     /// <param name="modelId">The provider's model id; an Ollama namespace such as <c>library/</c> or a registry host is ignored.</param>
@@ -177,6 +202,20 @@ public sealed class ModelCatalog
             embeddingDefaults[kind] = [.. (models ?? []).Where(m => !string.IsNullOrWhiteSpace(m))];
         }
 
+        var embeddingProviderOrder = new List<ProviderKind>();
+        foreach (var kindName in document.EmbeddingProviderOrder ?? [])
+        {
+            if (!ProviderKinds.TryParse(kindName, out var kind))
+            {
+                throw new FormatException($"The model catalog names an unknown provider kind '{kindName}' in embeddingProviderOrder.");
+            }
+
+            if (!embeddingProviderOrder.Contains(kind))
+            {
+                embeddingProviderOrder.Add(kind);
+            }
+        }
+
         var families = new List<Family>();
         foreach (var family in document.Families ?? [])
         {
@@ -193,7 +232,7 @@ public sealed class ModelCatalog
             throw new FormatException("The last model family in the catalog must be the '*' default.");
         }
 
-        return new ModelCatalog(profiles, embeddingDefaults, families);
+        return new ModelCatalog(profiles, embeddingDefaults, embeddingProviderOrder, families);
     }
 
     /// <summary>Gets the catalog's default model for a profile and provider kind.</summary>
@@ -260,6 +299,8 @@ public sealed class ModelCatalog
         public Dictionary<string, Dictionary<string, string>?>? Profiles { get; set; }
 
         public Dictionary<string, List<string>?>? EmbeddingDefaults { get; set; }
+
+        public List<string>? EmbeddingProviderOrder { get; set; }
 
         public List<FamilyEntry>? Families { get; set; }
     }

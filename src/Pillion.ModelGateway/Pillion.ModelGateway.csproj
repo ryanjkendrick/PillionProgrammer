@@ -8,6 +8,8 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>Pillion.ModelGateway</RootNamespace>
+    <!-- directml (default): ONNX Runtime with the CPU and DirectML execution providers; cpu: the CPU-only package. See Directory.Packages.props. -->
+    <PillionOnnxRuntimeFlavor Condition="'$(PillionOnnxRuntimeFlavor)' == ''">directml</PillionOnnxRuntimeFlavor>
   </PropertyGroup>
 
   <ItemGroup>
@@ -21,21 +23,85 @@
     <PackageReference Include="Microsoft.Bcl.Memory" />
   </ItemGroup>
 
+  <!--
+    ONNX Runtime for the bundled embedding model (work item 2.7). The native onnxruntime.dll flows to the host and the tests
+    through the package's runtimes\win-x64\native assets. DirectML.dll does not: Microsoft.AI.DirectML copies it only from
+    its build targets, only for an x64 PlatformTarget and only into the project that references it, together with a debug
+    layer that must not ship. So the package's own copy is switched off and DirectML.dll is added here as content, which
+    reaches the output of every referencing project and the host's publish folder.
+  -->
+  <PropertyGroup Condition="'$(PillionOnnxRuntimeFlavor)' == 'directml'">
+    <Microsoft_AI_DirectML_SkipLibraryCopy>true</Microsoft_AI_DirectML_SkipLibraryCopy>
+    <Microsoft_AI_DirectML_SkipDebugLayerCopy>true</Microsoft_AI_DirectML_SkipDebugLayerCopy>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(PillionOnnxRuntimeFlavor)' == 'directml'">
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" GeneratePathProperty="true" />
+    <PackageReference Include="Microsoft.AI.DirectML" GeneratePathProperty="true" />
+    <Content Include="$(PkgMicrosoft_AI_DirectML)\bin\x64-win\DirectML.dll"
+             Condition="'$(PkgMicrosoft_AI_DirectML)' != '' and Exists('$(PkgMicrosoft_AI_DirectML)\bin\x64-win\DirectML.dll')"
+             Link="DirectML.dll"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             Visible="false" />
+    <!-- The DirectML licence terms forbid removing Microsoft's notices, so they ship beside the host. -->
+    <Content Include="$(PkgMicrosoft_AI_DirectML)\LICENSE.txt"
+             Condition="'$(PkgMicrosoft_AI_DirectML)' != '' and Exists('$(PkgMicrosoft_AI_DirectML)\LICENSE.txt')"
+             Link="licenses\DirectML-LICENSE.txt"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             Visible="false" />
+    <Content Include="$(PkgMicrosoft_AI_DirectML)\ThirdPartyNotices.txt"
+             Condition="'$(PkgMicrosoft_AI_DirectML)' != '' and Exists('$(PkgMicrosoft_AI_DirectML)\ThirdPartyNotices.txt')"
+             Link="licenses\DirectML-ThirdPartyNotices.txt"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             Visible="false" />
+    <!-- ONNX Runtime's own third-party notices (protobuf, Eigen and the rest compiled into onnxruntime.dll). -->
+    <Content Include="$(PkgMicrosoft_ML_OnnxRuntime_DirectML)\ThirdPartyNotices.txt"
+             Condition="'$(PkgMicrosoft_ML_OnnxRuntime_DirectML)' != '' and Exists('$(PkgMicrosoft_ML_OnnxRuntime_DirectML)\ThirdPartyNotices.txt')"
+             Link="licenses\OnnxRuntime-ThirdPartyNotices.txt"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             Visible="false" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(PillionOnnxRuntimeFlavor)' == 'cpu'">
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" GeneratePathProperty="true" />
+    <Content Include="$(PkgMicrosoft_ML_OnnxRuntime)\ThirdPartyNotices.txt"
+             Condition="'$(PkgMicrosoft_ML_OnnxRuntime)' != '' and Exists('$(PkgMicrosoft_ML_OnnxRuntime)\ThirdPartyNotices.txt')"
+             Link="licenses\OnnxRuntime-ThirdPartyNotices.txt"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             Visible="false" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\Pillion.Contracts\Pillion.Contracts.csproj" />
     <ProjectReference Include="..\Pillion.Common\Pillion.Common.csproj" />
   </ItemGroup>
 
-  <!-- Data, not code: the model catalog, the prompt templates and the token-counting families ship inside the assembly. -->
+  <!--
+    Data, not code: the model catalog, the prompt templates, the token-counting families and the model manifest ship inside
+    the assembly. The manifest compiled in here is the one the host trusts at run time (it is covered by the assembly's
+    signature); build\BundledModels.targets reads the same file to download the bundled model.
+  -->
   <ItemGroup>
     <EmbeddedResource Include="Catalog\catalog.json" LogicalName="Pillion.ModelGateway.catalog.json" />
     <EmbeddedResource Include="Templates\*.json" LogicalName="Pillion.ModelGateway.Templates.%(Filename)%(Extension)" />
     <EmbeddedResource Include="Tokens\*.json" LogicalName="Pillion.ModelGateway.Tokens.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Models\models.manifest.json" LogicalName="Pillion.ModelGateway.models.manifest.json" />
+  </ItemGroup>
+
+  <!-- The MSBuild inline tasks are compiled by MSBuild, not into this assembly. -->
+  <ItemGroup>
+    <Compile Remove="build\**" />
+    <None Include="build\**" />
   </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="Pillion.ModelGateway.Tests" />
     <InternalsVisibleTo Include="Pillion.Host.Tests" />
   </ItemGroup>
+
+  <Import Project="build\BundledModels.targets" />
 
 </Project>

@@ -28,3 +28,92 @@ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
 CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+================================================================================
+ONNX Runtime 1.24.4 (https://github.com/microsoft/onnxruntime), packaged in the
+Visual Studio extension under Host\ as onnxruntime.dll,
+onnxruntime_providers_shared.dll and Microsoft.ML.OnnxRuntime.dll (NuGet
+packages Microsoft.ML.OnnxRuntime.DirectML and Microsoft.ML.OnnxRuntime.Managed).
+Licensed under the MIT licence. The notices of the third-party components
+compiled into ONNX Runtime ship beside it as
+Host\licenses\OnnxRuntime-ThirdPartyNotices.txt.
+================================================================================
+
+MIT License
+
+Copyright (c) Microsoft Corporation
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+================================================================================
+DirectML 1.15.4 (NuGet package Microsoft.AI.DirectML,
+https://github.com/microsoft/DirectML), packaged in the Visual Studio extension
+under Host\ as DirectML.dll. DirectML is NOT open-source software: it is
+redistributed under the Microsoft Software License Terms for Microsoft DirectX
+Machine Learning (DirectML), which permit distributing it inside an application
+and which ship beside it, unmodified, as Host\licenses\DirectML-LICENSE.txt,
+with its notices as Host\licenses\DirectML-ThirdPartyNotices.txt. Those terms
+state that the software may collect information and send it to Microsoft.
+Building with -p:PillionOnnxRuntimeFlavor=cpu leaves DirectML out.
+================================================================================
+
+================================================================================
+BGE small English v1.5 (https://huggingface.co/BAAI/bge-small-en-v1.5), the
+bundled embedding model, packaged in the Visual Studio extension under
+Host\models\bge-small-en-v1.5\ (model_quantized.onnx, vocab.txt,
+tokenizer_config.json). The ONNX files come from the export
+https://huggingface.co/Xenova/bge-small-en-v1.5 (commit
+ea104dacec62c0de699686887e3f920caeb4f3e3), which declares no licence of its own;
+it is a format conversion of the MIT-licensed weights, which are licensed under
+the MIT licence of the FlagEmbedding project:
+================================================================================
+
+MIT License
+
+Copyright (c) 2022 staoxiao
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+================================================================================
+Models downloaded on request (not packaged in the Visual Studio extension):
+fetched by Pillion Host from the URLs in models.manifest.json into
+%LOCALAPPDATA%\PillionProgrammer\models\ only when the user asks for them.
+
+- multilingual-e5-small (https://huggingface.co/intfloat/multilingual-e5-small,
+  commit 614241f622f53c4eeff9890bdc4f31cfecc418b3): MIT licence, by the
+  model's authors (intfloat), who also publish the ONNX export used.
+- jina-embeddings-v2-base-code
+  (https://huggingface.co/jinaai/jina-embeddings-v2-base-code, commit
+  516f4baf13dec4ddddda8631e019b5737c8bc250): Apache License 2.0, by Jina AI,
+  who also publish the ONNX export used.
+================================================================================

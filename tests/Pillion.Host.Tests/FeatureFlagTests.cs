@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Pillion.Common;
 using Pillion.Common.Connectivity;
 using Pillion.Common.Secrets;
@@ -11,6 +12,7 @@ using Pillion.Contracts;
 using Pillion.Host.Models;
 using Pillion.Host.Tests.TestSupport;
 using Pillion.ModelGateway;
+using Pillion.ModelGateway.Providers.Bundled;
 using StreamJsonRpc;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 using AiChatRole = Microsoft.Extensions.AI.ChatRole;
@@ -23,7 +25,7 @@ public sealed class FeatureFlagTests : IDisposable
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
     private static readonly string[] AllFlags =
-        ["chat", "modelGateway", "connectivityProbes", "cloudProviders", "ollamaProvider", "openAICompatibleProvider", "anthropicProvider", "geminiProvider", "mistralProvider", "azureOpenAIProvider", "autocomplete", "inlineChat", "mentions", "outboundLogView", "embeddings"];
+        ["chat", "modelGateway", "connectivityProbes", "cloudProviders", "ollamaProvider", "openAICompatibleProvider", "anthropicProvider", "geminiProvider", "mistralProvider", "azureOpenAIProvider", "autocomplete", "inlineChat", "mentions", "outboundLogView", "embeddings", "bundledEmbeddings"];
 
     private readonly TempDirectory _data = new();
     private readonly FakeSettings _settings = new();
@@ -234,6 +236,36 @@ public sealed class FeatureFlagTests : IDisposable
         Assert.NotNull(snapshot.Find("local"));
         Assert.Null(snapshot.Find("cloud"));
         Assert.Contains(snapshot.Hidden, h => h.Settings.Id == "cloud" && h.Reason.Contains("openAICompatibleProvider", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task BundledEmbeddings_AddsTheBundledProviderOnItsOwn_VerifiesItsModelAtStart_AndOffHidesIt()
+    {
+        // The real factories again, including the bundled one, over the model the build copied into the test output.
+        await using var host = await InProcessHost.StartAsync(services =>
+        {
+            services.Replace(ServiceDescriptor.Singleton(new PillionPaths(_data.Path)));
+            services.Replace(ServiceDescriptor.Singleton<ISecretStore>(new InMemorySecretStore()));
+            services.Replace(ServiceDescriptor.Singleton<IConnectivitySettingsProvider>(_settings));
+            services.Replace(ServiceDescriptor.Singleton<IProviderProber>(_prober));
+            services.Replace(ServiceDescriptor.Singleton<INetworkChangeSource>(new NoNetworkChanges()));
+        });
+        var warmup = host.Services.GetServices<IHostedService>().OfType<BundledModelWarmup>().Single();
+        await warmup.Completion.WaitAsync(Wait);
+        var runtime = host.Services.GetRequiredService<BundledModelRuntime>();
+        var registry = host.Services.GetRequiredService<IProviderRegistry>();
+
+        Assert.Equal([Path.Combine(AppContext.BaseDirectory, "models"), Path.Combine(_data.Path, "models")], runtime.Locator.Roots);
+        Assert.NotNull(runtime.Locate("bge-small-en-v1.5"));
+        Assert.Equal(Path.Combine(_data.Path, "models"), host.Services.GetRequiredService<ModelDownloadService>().TargetRoot);
+        var snapshot = registry.GetSnapshot();
+        var bundled = Assert.IsType<BundledEmbeddingProvider>(snapshot.Find("bundled"));
+        Assert.Contains(await bundled.ListModelsAsync(CancellationToken.None), m => m.ModelId == "bge-small-en-v1.5" && m.Capabilities.Embeddings);
+
+        _settings.Update(s => s.Features.BundledEmbeddings = false);
+        snapshot = registry.GetSnapshot();
+        Assert.Null(snapshot.Find("bundled"));
+        Assert.Contains(snapshot.Hidden, h => h.Settings.Id == "bundled" && h.Reason.Contains("bundledEmbeddings", StringComparison.Ordinal));
     }
 
     private static ChatRequest Request(Profile profile) => new()
