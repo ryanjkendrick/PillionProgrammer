@@ -214,7 +214,8 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
     "indexing": true,
     "embeddings": true,
     "bundledEmbeddings": true,
-    "workspaceQueries": true
+    "workspaceQueries": true,
+    "indexWindow": true
   }
 }
 ```
@@ -240,6 +241,7 @@ on. The user sets them in the `features` section of `%LOCALAPPDATA%\PillionProgr
 | `embeddings` | The embedding gateway (`IModelGateway.EmbedAsync`, work item 2.6) fails with `PolicyDenied` and a message that names the flag; it also needs `modelGateway`. Chat, autocomplete and model listing are unaffected. Embeddings never leave the machine unless `cloudSwitches.embedding` is turned on as well (it is off by default; Local-only always wins). |
 | `bundledEmbeddings` | The bundled embedding provider (`bundled`, work item 2.7) is not built or routed to: the ONNX model shipped with the extension (`bge-small-en-v1.5`) and the models downloaded on request stop being offered, and the Embedding task class uses Ollama or another configured local embedding model instead (or fails with `ModelNotInstalled` when there is none). Nothing else changes. |
 | `workspaceQueries` | Visual Studio refuses Pillion Host's `FindReferencesAsync` and `CallersOfAsync` calls with `PolicyDenied` and a message that names the flag, and Pillion Host stops asking: `find_references` and `callers_of` (for `@symbol` and chat) are answered from the index's approximate reference edges only, marked approximate (work item 2.14). Nothing else changes. |
+| `indexWindow` | **View > Other Windows > Pillion Index** and **Tools > Pillion: Open Index** are hidden, the status bar shows no indexing indicator, and the **Indexing** Options page (`indexing.exclude`, `maxMemoryMb`, `pauseOnBattery`, `retentionDays`) says it is disabled by settings or policy. Pillion Host indexes either way (that is the `indexing` flag); the setting values stay in `settings.json`. The extension reads the flag when Pillion Host becomes ready and when the Tools menu opens (an absent flag means on). |
 
 A repository can switch flags off for everyone who opens it with `disabledFeatures` in `.pillion/policy.json`, next to
 `localOnly`, `disabledTools`, `exclude` and `denyCommands`:

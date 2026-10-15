@@ -6,8 +6,12 @@ using Pillion.VisualStudio.Core;
 namespace Pillion.VisualStudio.Tests;
 
 /// <summary>The UI thread timings debug switch (one class: the switch is process-wide, and xunit runs a class's tests one at a time).</summary>
+[Collection(UiThreadTimingsTests.GroupName)]
 public sealed class UiThreadTimingsTests : IDisposable
 {
+    /// <summary>The xunit collection of every test class whose code records timings (the switch and the recorded list are process-wide).</summary>
+    public const string GroupName = "UI thread timings";
+
     private readonly bool _wasEnabled = UiThreadTimings.Enabled;
 
     public UiThreadTimingsTests()
