@@ -14,12 +14,16 @@ internal sealed record CatalogIndex(string IndexId, string RootPath, IndexStorag
 /// Gives retrieval the open indexes of the current workspace: the <see cref="IndexStorage"/> (and, when there is one, the
 /// <see cref="SymbolGraph"/>) per repository root. <see cref="ReadOnlyIndexCatalog"/> is the simple implementation that
 /// opens index folders read-only; the indexing pipeline (work item 2.9) plugs in its live catalog of the indexes it owns
-/// or reads.
+/// or reads, bounded by the open workspace's roots (issue #98): retrieval, the mentions and the repo map never read an
+/// index of another folder.
 /// </summary>
 internal interface IIndexCatalog
 {
     /// <summary>Gets the open indexes for some repository roots.</summary>
-    /// <param name="roots">The roots (as the contract's <c>SearchRequest.Roots</c>); empty means every index the catalog serves.</param>
+    /// <param name="roots">
+    /// The roots (as the contract's <c>SearchRequest.Roots</c>); empty means the open workspace's roots, never every index on
+    /// disk. A root outside the workspace gets nothing.
+    /// </param>
     /// <param name="cancellationToken">Cancels the call.</param>
     /// <returns>One open index per root that has one; roots without an index are left out.</returns>
     Task<IReadOnlyList<CatalogIndex>> GetIndexesAsync(IReadOnlyList<string> roots, CancellationToken cancellationToken);

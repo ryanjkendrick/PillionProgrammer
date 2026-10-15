@@ -172,14 +172,14 @@ internal sealed class FakeMemory : IMemorySampler
 /// <summary>One indexing service over a data folder, with fakes for everything outside the pipeline.</summary>
 internal sealed class IndexingHarness : IAsyncDisposable
 {
-    public IndexingHarness(string dataRoot, IIndexEmbedder? embedder = null, IndexingOptions? options = null, PillionSettings? settings = null, string pipeName = "pillion-test-host", IProcessProbe? probe = null, IMemorySampler? memory = null)
+    public IndexingHarness(string dataRoot, IIndexEmbedder? embedder = null, IndexingOptions? options = null, PillionSettings? settings = null, string pipeName = "pillion-test-host", IProcessProbe? probe = null, IMemorySampler? memory = null, TimeProvider? time = null, Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null)
     {
         Paths = new PillionPaths(dataRoot);
         Settings = new StaticGatewaySettingsSource(settings ?? new PillionSettings());
         Embedder = embedder ?? new FakeEmbedder();
         Notifier = new IndexStatusNotifier(Sender, TimeProvider.System, NullLogger<IndexStatusNotifier>.Instance);
         var factory = new IndexStoreFactory(Paths, Flags, probe: probe, options: new IndexStoreOptions { ReaderOpenAttempts = 40, ReaderOpenDelay = TimeSpan.FromMilliseconds(100) });
-        var retention = new IndexRetention(Paths, Flags, probe: probe);
+        var retention = new IndexRetention(Paths, Flags, probe: probe, time: time);
         Service = new IndexingService(
             factory,
             retention,
@@ -191,7 +191,9 @@ internal sealed class IndexingHarness : IAsyncDisposable
             Power,
             memory ?? Memory,
             options ?? new IndexingOptions { MinimumRefreshInterval = TimeSpan.FromMilliseconds(200), PowerPollInterval = TimeSpan.FromMilliseconds(100), MemoryPollInterval = TimeSpan.FromMilliseconds(50), ReaderPollInterval = TimeSpan.FromMilliseconds(200), EmbeddingRetryDelay = TimeSpan.FromMilliseconds(10) },
-            pipeName);
+            pipeName,
+            time,
+            loggerFactory);
     }
 
     public PillionPaths Paths { get; }

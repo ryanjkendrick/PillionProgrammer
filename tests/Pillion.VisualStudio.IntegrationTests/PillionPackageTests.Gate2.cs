@@ -367,7 +367,10 @@ public sealed partial class PillionPackageTests
         await WriteGate2Async("context-assembly", result);
     }
 
-    /// <summary>A chat on the indexed code: the reply cites file:line spans of retrieved chunks.</summary>
+    /// <summary>
+    /// A chat on the indexed code: the reply cites file:line spans of retrieved chunks, and every citation is under a root of
+    /// the open solution (issue #98: retrieval never reads another folder's index on this machine).
+    /// </summary>
     [Gate2ScenarioFact]
     [TestOrder(50)]
     public Task Gate2_ChatWithRetrieval_CitesSpans() => RunGate2Async(Gate2_ChatWithRetrieval_CitesSpansCoreAsync);
@@ -376,22 +379,44 @@ public sealed partial class PillionPackageTests
     {
         using var lease = Gate2Lease(TimeSpan.FromMinutes(10));
         await OpenGate2SolutionAsync(lease.Token);
-        var (_, root) = await WaitForIndexedRootAsync(Gate2Folder, TimeSpan.FromMinutes(5), lease.Token);
+        var (status, root) = await WaitForIndexedRootAsync(Gate2Folder, TimeSpan.FromMinutes(5), lease.Token);
+        var openRoots = status.Roots.Select(r => r.RootPath).Where(r => !string.IsNullOrWhiteSpace(r)).ToList();
         var connection = await GateScenarioChecks.ConnectionAsync();
         var reply = await ChatOnceAsync(connection, Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N"), "Where is the running total stored after a step is processed? Name the file and line.", lease.Token);
         var cited = reply.Citations;
+        var outside = cited.Where(c => !IsUnderAnOpenRoot(c.FilePath, openRoots)).Select(c => $"{c.FilePath}:{c.StartLine}-{c.EndLine}").ToList();
         var result = new JObject
         {
             ["reply"] = reply.Text.Length > 600 ? reply.Text.Substring(0, 600) : reply.Text,
             ["model"] = reply.Model,
+            ["openRoots"] = new JArray(openRoots),
             ["citations"] = new JArray(cited.Select(c => $"{c.FilePath}:{c.StartLine}-{c.EndLine} (offset {c.ReplyOffset})")),
             ["explicit"] = cited.Count(c => c.ReplyOffset >= 0),
             ["implicit"] = cited.Count(c => c.ReplyOffset < 0),
             ["insideRoot"] = cited.All(c => c.FilePath.StartsWith(root.RootPath, StringComparison.OrdinalIgnoreCase) || !Path.IsPathRooted(c.FilePath)),
+            ["outsideOpenRoots"] = new JArray(outside),
             ["error"] = reply.Error,
         };
         await WriteGate2Async("chat-cites", result);
         Assert.True(cited.Length > 0, "The reply cites nothing: " + reply.Text);
+        Assert.True(outside.Count == 0, $"Citations outside the open roots ({string.Join("; ", openRoots)}): {string.Join("; ", outside)}");
+    }
+
+    /// <summary>Whether a cited path is under one of the open roots: a full path by prefix, a relative one by existing under a root.</summary>
+    private static bool IsUnderAnOpenRoot(string path, IReadOnlyList<string> roots)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        if (Path.IsPathRooted(path))
+        {
+            var full = Path.GetFullPath(path);
+            return roots.Any(r => full.StartsWith(r.TrimEnd('\\', '/') + "\\", StringComparison.OrdinalIgnoreCase));
+        }
+
+        return roots.Any(r => File.Exists(Path.Combine(r, path.Replace('/', '\\'))));
     }
 
     /// <summary>The Index window lists the real host's roots with their counts.</summary>

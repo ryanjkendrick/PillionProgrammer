@@ -27,7 +27,7 @@ internal interface IRetrievalService
     /// the repository root, which is what prompts show.
     /// </summary>
     /// <param name="query">The query (its own time budget, focus files and result count).</param>
-    /// <param name="roots">The repository roots; empty means every index the catalog serves.</param>
+    /// <param name="roots">The repository roots; empty means the open workspace's roots (never every index on disk).</param>
     /// <param name="cancellationToken">Cancels the search.</param>
     /// <returns>The response; empty while <c>features.retrieval</c> is off.</returns>
     Task<RetrievalResponse> RetrieveAsync(RetrievalQuery query, IReadOnlyList<string> roots, CancellationToken cancellationToken);

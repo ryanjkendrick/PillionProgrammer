@@ -233,6 +233,18 @@ this repository's `src` (one copy for 100,000 lines, eleven for 1,000,000, each 
    `repo-synthetic-50000\...` (another folder indexed on this machine); on 17.14, 4 of 7 citations came from other folders (two Gate 1 scratch projects and an IDE test's folder). Retrieval asks the catalog for every index on disk when
    it is given no roots (2.12 noted that an empty root list means "every index"). Another repository's code can then reach
    a prompt. Chat retrieval should be scoped to the workspace's roots.
+   **Fix (issue #98, `feature/phase2-fixes`):** the cause was the read-only catalog, which treated an empty root list as
+   every index on disk, and the live catalog, which handed it every request it could not serve. Now the live catalog
+   serves only the indexes of the roots the extension reported for the open solution or folder
+   (`IndexingService.WorkspaceRoots`): a request without roots means those roots, a named root outside them gets nothing,
+   and with nothing open nothing is served, so chat assembles without retrieved chunks. Retrieval, `@file`, `@folder`,
+   `@symbol`, `@solution` and the repo map all read through it (`@docs` reads `mentions.docsFolders` from disk, as before).
+   `ReadOnlyIndexCatalog` serves every index only when made with `servesEveryIndex: true`, which nothing in the host does;
+   the Index window's Indexes tab lists folders through `IndexRetention` without opening them. `WorkspaceScopeTests` puts
+   two indexes on disk with one root open and checks that search, `@file`, `@symbol`, `@solution` and chat assembly never
+   return or cite the other; the chat scenario now asserts that every citation is under an open root (VS 2026 18.11, the
+   generated solution, `qwen2.5-coder:7b`, with this machine's other indexes still on disk: 4 citations, all implicit, all
+   under the solution's root; the integration suite with it 21 of 21).
 4. **Indexes of deleted folders accumulate** in `%LOCALAPPDATA%\PillionProgrammer\index` (every IDE test creates one), and a
    root that disappears leaves its index in `Failed` ("the repository root does not exist") until the workspace changes. The
    gate script deletes them at the end; the Index window's Delete exists for users. Retention of stale indexes is a 2.18 or

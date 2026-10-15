@@ -40,7 +40,7 @@ public sealed class TreeSitterSymbolExtractor : SyntaxSymbolExtractor
 
     private protected override bool Collect(SymbolSink sink, out string? failure)
     {
-        using var tree = TreeSitterChunker.Parse(_loader, sink.Document.Text, Grammar.Grammar.MaxErrorFraction, out failure);
+        using var tree = TreeSitterChunker.Parse(_loader, sink.Document.Text, Grammar.Grammar.MaxErrorFraction, sink.ParseTimeout, out failure);
         if (tree is null || _compiled.Value is not { } compiled)
         {
             failure ??= _loader.Error ?? "The grammar is not available.";

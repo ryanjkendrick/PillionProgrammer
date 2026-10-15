@@ -61,8 +61,14 @@ splitting. All chunkers are thread-safe and never throw because of file content.
   stay with it. Runs of using directives, imports and fields are grouped into one chunk.
 - **Fallback window**: 60 lines with 10 lines of overlap, breadcrumb = path only, for any file without a syntactic
   chunker, and for a file whose parse fails badly (Roslyn: more than one syntax error per 20 lines; tree-sitter: more
-  than 30% of the text inside error nodes), whose grammar cannot be loaded, or whose chunker fails unexpectedly.
-  `ChunkOptions.OnFallback` reports each fallback.
+  than 30% of the text inside error nodes; tree-sitter: a parse that runs past `ChunkOptions.ParseTimeout`, 2 s by
+  default, issue #101), whose grammar cannot be loaded, or whose chunker fails unexpectedly. `ChunkOptions.OnFallback`
+  reports each fallback.
+- **Parse cap**: the bindings expose neither tree-sitter's timeout nor its cancellation flag, and the runtime they ship
+  replaced both with `ts_parser_parse_with_options`, whose progress callback cancels the parse. `TreeSitterTimedParse`
+  calls it with the bindings' own parser and tree handles and the same UTF-16 input as `Parser.Parse`, so a parse inside
+  the cap gives the same tree; one past it is cancelled within about a hundred parser operations. An 8 KB file of random
+  tokens that kept the TSX grammar busy for six minutes now falls back after 2 s (`ChunkerRegressionTests`).
 - **Token counting**: the counter is injected. `TokenCounters.FromWordPieceVocabulary` builds Microsoft.ML.Tokenizers'
   `BertTokenizer` from a `vocab.txt` (the bundled bge-small model's format, work item 2.7) and
   `TokenCounters.FromTokenizer` wraps any tokenizer. The default, `TokenCounters.ApproximateWordPiece`, is a
@@ -168,8 +174,9 @@ kind, a required field, a kind-refining field, a container field), container-onl
 and declarators, reference nodes (with the field that holds the target), type identifiers and qualified types,
 inheritance, import and type regions, skipped regions (type parameter declarations), module strings and the file
 module naming; `TreeSitterSymbolExtractor` walks any grammar described that way. Extraction never throws: a parse
-that fails badly (the chunkers' thresholds), a grammar that cannot load, or an unexpected error gives an empty
-extraction with `IsComplete = false` and a call to `SymbolExtractionOptions.OnFailure`.
+that fails badly (the chunkers' thresholds), a tree-sitter parse past `SymbolExtractionOptions.ParseTimeout` (2 s, as
+for chunking), a grammar that cannot load, or an unexpected error gives an empty extraction with `IsComplete = false`
+and a call to `SymbolExtractionOptions.OnFailure`.
 
 ### Resolution
 

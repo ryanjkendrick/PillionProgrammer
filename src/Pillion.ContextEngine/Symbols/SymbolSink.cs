@@ -17,6 +17,9 @@ internal sealed class SymbolSink(SourceDocument document, string language)
 
     public string Language { get; } = language;
 
+    /// <summary>Gets the longest a tree-sitter parse of the document may take (<see cref="SymbolExtractionOptions.ParseTimeout"/>).</summary>
+    public TimeSpan ParseTimeout { get; init; } = SymbolExtractionOptions.DefaultParseTimeout;
+
     public List<SymbolDefinition> Definitions { get; } = [];
 
     public List<SymbolReference> References { get; } = [];

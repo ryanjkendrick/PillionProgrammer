@@ -74,10 +74,14 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     private readonly HashSet<string> _suppressed = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _stopping = new();
     private WorkspaceDescription? _workspace;
+    private string[] _workspaceRoots = [];
     private int _workspaceVersion;
     private int _appliedWorkspaceVersion = -1;
     private Task _loop = Task.CompletedTask;
     private ITimer? _powerTimer;
+    private ITimer? _retentionTimer;
+    private DateTimeOffset? _nextRetentionSweep;
+    private int _retentionSweeps;
     private CancellationTokenSource? _runCancellation;
     private IndexPass? _currentPass;
     private RootIndex? _currentRoot;
@@ -173,6 +177,12 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         }
     }
 
+    /// <summary>Gets the report of the last scheduled retention sweep (issue #99), for logs and tests; <see langword="null"/> before the first.</summary>
+    public IndexRetentionReport? LastRetentionReport { get; private set; }
+
+    /// <summary>Gets how many scheduled retention sweeps finished (tests wait for the next one).</summary>
+    internal int RetentionSweeps => Volatile.Read(ref _retentionSweeps);
+
     /// <summary>Gets how many full runs finished (tests wait for the next one).</summary>
     public int FullRuns => Volatile.Read(ref _fullRuns);
 
@@ -193,6 +203,22 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             lock (_gate)
             {
                 return [.. _roots.Values];
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets the repository roots of the solution or folder open in Visual Studio (full paths, as <see cref="SetWorkspace"/>
+    /// resolved them); empty while nothing is open. Retrieval, the mentions and the repo map read only these roots' indexes
+    /// (design sections 7 and 12; issue #98): an index of another folder on this machine never reaches a prompt.
+    /// </summary>
+    internal IReadOnlyList<string> WorkspaceRoots
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _workspaceRoots;
             }
         }
     }
@@ -288,6 +314,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         }
 
         _powerTimer?.Dispose();
+        _retentionTimer?.Dispose();
         _memory.Dispose();
         List<RootIndex> roots;
         lock (_gate)
@@ -311,10 +338,12 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     public void SetWorkspace(WorkspaceDescription workspace)
     {
         ArgumentNullException.ThrowIfNull(workspace);
-        var wanted = RepositoryRoots.Resolve(WorkspacePaths(workspace)).Select(r => Key(r.Path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var resolved = RepositoryRoots.Resolve(WorkspacePaths(workspace)).Select(r => Key(r.Path)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var wanted = resolved.ToHashSet(StringComparer.OrdinalIgnoreCase);
         lock (_gate)
         {
             _workspace = workspace;
+            _workspaceRoots = resolved;
 
             // The same roots (the extension sends the workspace again after every project load): nothing to restart.
             if (!_failed && _suppressed.Count == 0 && _appliedWorkspaceVersion == _workspaceVersion && wanted.SetEquals(_roots.Keys))
@@ -724,6 +753,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             try
             {
                 await ReconcileAsync(stopping).ConfigureAwait(false);
+                await SweepRetentionIfDueAsync(stopping).ConfigureAwait(false);
                 await RunDueRootsAsync(stopping).ConfigureAwait(false);
                 await CheckReadersAsync(stopping).ConfigureAwait(false);
             }
@@ -867,6 +897,110 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         }
 
         _appliedWorkspaceVersion = version;
+    }
+
+    /// <summary>
+    /// The scheduled retention sweep (design section 10, issue #99): once the workspace the extension reported is applied (its
+    /// indexes open), then every <see cref="IndexingOptions.RetentionSweepInterval"/>. Indexes whose root is gone, or unopened
+    /// for <c>indexing.retentionDays</c>, are deleted; an index a live host holds is never deleted (<see cref="IndexRetention"/>
+    /// keeps it), nor one that belongs to a root of the open workspace (open here, or of another embedding model or chunker
+    /// version). Runs on the pipeline loop, so no root is opened while it deletes. Logs every index it deletes.
+    /// </summary>
+    private async Task SweepRetentionIfDueAsync(CancellationToken stopping)
+    {
+        var interval = _options.RetentionSweepInterval;
+        if (interval <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            // Not before the workspace's indexes are open: the extension reported it and this loop applied it.
+            if (_workspace is null || _appliedWorkspaceVersion != _workspaceVersion)
+            {
+                return;
+            }
+        }
+
+        var now = _time.GetUtcNow();
+        if (_nextRetentionSweep is { } next && now < next)
+        {
+            return;
+        }
+
+        _nextRetentionSweep = now + interval;
+        _retentionTimer ??= _time.CreateTimer(_ => Wake(), null, interval, interval);
+        var days = _settings.GetCurrent().Settings.Indexing.RetentionDays;
+        IndexRetentionReport report;
+        try
+        {
+            report = await _retention.SweepAsync(dryRun: false, retentionDays: days, cancellationToken: stopping, protect: IsProtectedFromRetention).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            LogRetentionFailed(_logger, ex.GetType().Name, ex.Message);
+            return;
+        }
+
+        LastRetentionReport = report;
+        Interlocked.Increment(ref _retentionSweeps);
+        if (report.Skipped)
+        {
+            return;
+        }
+
+        var deleted = 0;
+        foreach (var item in report.Items.Where(i => i.WantsDelete))
+        {
+            var reason = item.Decision == RetentionDecision.DeleteRootMissing ? "its repository root no longer exists" : $"not opened for more than {days} days";
+            if (item.Deleted)
+            {
+                deleted++;
+                LogRetentionDeleted(_logger, item.Usage.Id, item.Usage.RootPath ?? "(unknown root)", reason, item.Usage.DiskBytes / 1048576.0);
+            }
+            else
+            {
+                LogRetentionDeleteFailed(_logger, item.Usage.Id, item.Usage.RootPath ?? "(unknown root)", reason, item.Error ?? "unknown");
+            }
+        }
+
+        LogRetentionSwept(_logger, report.Items.Count, deleted, report.BytesReclaimed / 1048576.0, interval.TotalHours);
+    }
+
+    /// <summary>Whether retention must keep an index: one this host has open, or one of a root of the open workspace.</summary>
+    private bool IsProtectedFromRetention(IndexUsage usage)
+    {
+        HashSet<string> ids;
+        HashSet<string> roots;
+        lock (_gate)
+        {
+            ids = [.. _roots.Values.Select(r => r.Store.Identity.Id)];
+            roots = new HashSet<string>(_roots.Values.Select(r => r.Store.Identity.NormalizedRoot), StringComparer.Ordinal);
+            foreach (var root in _workspaceRoots)
+            {
+                roots.Add(IndexIdentity.NormalizeRoot(root));
+            }
+        }
+
+        if (ids.Contains(usage.Id))
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(usage.RootPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            return roots.Contains(IndexIdentity.NormalizeRoot(usage.RootPath));
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
     }
 
     private async Task<RootIndex?> OpenAsync(RepositoryRoot repository, IndexEmbeddingModel model, IReadOnlyList<IndexedProject> projects, CancellationToken stopping)
@@ -1409,6 +1543,18 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
 
     [LoggerMessage(EventId = 2969, Level = LogLevel.Debug, Message = "A saved document is outside every repository root this host indexes; it is not indexed here.")]
     private static partial void LogSaveIgnored(ILogger logger);
+
+    [LoggerMessage(EventId = 2970, Level = LogLevel.Information, Message = "Index retention deleted index {IndexId} for {Root}: {Reason} ({Megabytes:F1} MB).")]
+    private static partial void LogRetentionDeleted(ILogger logger, string indexId, string root, string reason, double megabytes);
+
+    [LoggerMessage(EventId = 2971, Level = LogLevel.Warning, Message = "Index retention could not delete index {IndexId} for {Root} ({Reason}): {Error}. It is tried again at the next sweep.")]
+    private static partial void LogRetentionDeleteFailed(ILogger logger, string indexId, string root, string reason, string error);
+
+    [LoggerMessage(EventId = 2972, Level = LogLevel.Information, Message = "Index retention swept {Indexes} indexes: {Deleted} deleted, {Megabytes:F1} MB reclaimed; the next sweep in {Hours:F0} hours.")]
+    private static partial void LogRetentionSwept(ILogger logger, int indexes, int deleted, double megabytes, double hours);
+
+    [LoggerMessage(EventId = 2973, Level = LogLevel.Warning, Message = "Index retention could not list the index folders ({ExceptionType}: {Reason}); it is tried again at the next sweep.")]
+    private static partial void LogRetentionFailed(ILogger logger, string exceptionType, string reason);
 
     [LoggerMessage(EventId = 2914, Level = LogLevel.Debug, Message = "The battery saver state could not be read; indexing is not paused for it.")]
     private static partial void LogPowerFailed(ILogger logger, Exception exception);

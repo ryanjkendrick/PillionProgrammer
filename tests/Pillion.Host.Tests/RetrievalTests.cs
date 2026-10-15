@@ -8,6 +8,8 @@ using Pillion.Common.Settings;
 using Pillion.ContextEngine.Retrieval;
 using Pillion.Contracts;
 using Pillion.Host.Context.Retrieval;
+using Pillion.Host.Indexing;
+using Pillion.Host.Tests.Indexing;
 using Pillion.Host.Tests.TestSupport;
 using Pillion.Indexing.Storage;
 using Pillion.ModelGateway;
@@ -149,19 +151,25 @@ public sealed class RetrievalTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task TheCatalog_ServesEveryIndexWithoutRoots_NoneForAnotherRoot_AndNothingWithIndexingOff()
+    public async Task TheCatalog_ServesARootByName_NothingWithoutRootsUnlessAskedForEveryIndex_AndNothingWithIndexingOff()
     {
         await TestIndex.BuildAsync(new PillionPaths(_data.Path), _repo.Path);
         using var elsewhere = new TempDirectory();
         var catalog = Catalog();
 
-        Assert.Single(await catalog.GetIndexesAsync([], CancellationToken.None));
+        // Issue #98: a request without roots never means every index on disk, unless the catalog was made for that.
+        Assert.Empty(await catalog.GetIndexesAsync([], CancellationToken.None));
         Assert.Single(await catalog.GetIndexesAsync([_repo.Path.ToUpperInvariant() + "\\"], CancellationToken.None)); // normalised like the index identity
         Assert.Empty(await catalog.GetIndexesAsync([elsewhere.Path], CancellationToken.None));
-        Assert.Same((await catalog.GetIndexesAsync([], CancellationToken.None))[0].Storage, (await catalog.GetIndexesAsync([], CancellationToken.None))[0].Storage);
+        Assert.Same((await catalog.GetIndexesAsync([_repo.Path], CancellationToken.None))[0].Storage, (await catalog.GetIndexesAsync([_repo.Path], CancellationToken.None))[0].Storage);
+
+        var everything = new ReadOnlyIndexCatalog(new PillionPaths(_data.Path), _flags, servesEveryIndex: true);
+        _catalogs.Add(everything);
+        Assert.Single(await everything.GetIndexesAsync([], CancellationToken.None));
 
         _flags.Disabled.Add(FeatureNames.Indexing);
-        Assert.Empty(await catalog.GetIndexesAsync([], CancellationToken.None));
+        Assert.Empty(await catalog.GetIndexesAsync([_repo.Path], CancellationToken.None));
+        Assert.Empty(await everything.GetIndexesAsync([], CancellationToken.None));
     }
 
     [Fact]
@@ -182,6 +190,10 @@ public sealed class RetrievalTests : IAsyncDisposable
         await using var host = await StartAsync();
         await using var client = await host.ConnectAndHandshakeAsync();
         var context = client.Attach<IContextService>();
+
+        // Nothing is open yet: nothing is searched (issue #98: never every index on disk).
+        Assert.Empty((await context.SearchDetailedAsync(new SearchRequest { Query = "ComputeTotal of an order", Mode = SearchMode.Lexical, MaxResults = 3 }, CancellationToken.None).WaitAsync(Wait)).Results);
+        await OpenWorkspaceAsync(context, _repo.Path);
 
         var detailed = await context.SearchDetailedAsync(new SearchRequest { Query = "ComputeTotal of an order", Mode = SearchMode.Lexical, MaxResults = 3 }, CancellationToken.None).WaitAsync(Wait);
         var plain = await context.SearchAsync(new SearchRequest { Query = "ComputeTotal of an order", MaxResults = 3 }, CancellationToken.None).WaitAsync(Wait);
@@ -207,6 +219,27 @@ public sealed class RetrievalTests : IAsyncDisposable
         Assert.Equal(PillionErrorCode.PolicyDenied, Assert.IsType<PillionError>(ex.DeserializedErrorData).Code);
     }
 
+    /// <summary>
+    /// Reports the folder as the open workspace, as Visual Studio does, and waits until the pipeline has opened and swept its
+    /// index (the host's embedder is replaced with one of the test index's model, so the pipeline opens that index itself).
+    /// </summary>
+    internal static async Task OpenWorkspaceAsync(IContextService context, string root)
+    {
+        await context.SetWorkspaceAsync(new WorkspaceDescription { FolderPath = root }, CancellationToken.None).WaitAsync(Wait);
+        var deadline = Stopwatch.StartNew();
+        while (true)
+        {
+            var status = await context.GetIndexStatusAsync(CancellationToken.None).WaitAsync(Wait);
+            if (status.Phase == IndexPhase.Idle && status.Roots.Length == 1 && status.Roots[0].LastFullSweepUtc is not null)
+            {
+                return;
+            }
+
+            Assert.True(deadline.Elapsed < TimeSpan.FromSeconds(60), $"The workspace's index did not open: phase {status.Phase}, error {status.LastError}, roots {status.Roots.Length}.");
+            await Task.Delay(50);
+        }
+    }
+
     private ReadOnlyIndexCatalog Catalog()
     {
         var catalog = new ReadOnlyIndexCatalog(new PillionPaths(_data.Path), _flags);
@@ -219,6 +252,7 @@ public sealed class RetrievalTests : IAsyncDisposable
         services.Replace(ServiceDescriptor.Singleton(new PillionPaths(_data.Path)));
         services.Replace(ServiceDescriptor.Singleton<ISecretStore>(new InMemorySecretStore()));
         services.Replace(ServiceDescriptor.Singleton<IFeatureFlags>(_flags));
+        services.Replace(ServiceDescriptor.Singleton<IIndexEmbedder>(new FakeEmbedder { ModelId = "test/none" }));
     });
 
     internal sealed class Flags : IFeatureFlags
@@ -285,6 +319,9 @@ public sealed class RetrievalModelTests(ITestOutputHelper output) : IAsyncDispos
 
         await using var client = await host.ConnectAndHandshakeAsync();
         var context = client.Attach<IContextService>();
+
+        // Retrieval reads the open workspace's indexes only (issue #98): the pipeline opens this index (same model) and sweeps it.
+        await RetrievalTests.OpenWorkspaceAsync(context, _repo.Path);
 
         // The first search after the index opens pays for reader connections and the vector cache load; logged.
         var cold = await context.SearchDetailedAsync(new SearchRequest { Query = "warm up the index", MaxResults = 3 }, CancellationToken.None).WaitAsync(Wait);

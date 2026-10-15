@@ -26,7 +26,7 @@ public sealed class HtmlChunker : SyntaxChunker
     internal static List<ChunkUnit>? CollectMarkup(GrammarLoader loader, TokenBudget budget, string text,
         double maxErrorFraction, ResourceScope scope, out string? failure)
     {
-        var tree = TreeSitterChunker.Parse(loader, text, maxErrorFraction, out failure);
+        var tree = TreeSitterChunker.Parse(loader, text, maxErrorFraction, budget.Options.ParseTimeout, out failure);
         if (tree is null)
         {
             return null;

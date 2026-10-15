@@ -92,6 +92,12 @@ internal sealed class IndexingOptions
     /// <summary>Gets the chunks per embedding request on the save path: small, so the budget is checked often.</summary>
     public int SaveEmbeddingBatchSize { get; init; } = 8;
 
+    /// <summary>
+    /// Gets how often the retention sweep runs while the host runs (issue #99): first once the workspace's indexes are open,
+    /// then this often (a day). Zero or less turns the scheduled sweep off.
+    /// </summary>
+    public TimeSpan RetentionSweepInterval { get; init; } = TimeSpan.FromDays(1);
+
     /// <summary>Gets an optional hook called on the pipeline thread after each file is chunked (tests check the thread's priority).</summary>
     public Action<string>? OnFilePrepared { get; init; }
 }
