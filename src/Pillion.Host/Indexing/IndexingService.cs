@@ -144,6 +144,12 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     /// <summary>Gets what the last incremental run found, for logs and tests.</summary>
     public IncrementalOutcome? LastIncrementalOutcome { get; private set; }
 
+    /// <summary>Gets the statistics of the last incremental run that indexed a save relayed from Visual Studio, for logs and tests.</summary>
+    public PassStatistics? LastSaveStatistics { get; private set; }
+
+    /// <summary>Gets the time from the last indexed save's arrival to its file being searchable (work item 2.10; Gate 2: 500 ms).</summary>
+    public TimeSpan? LastSaveToSearchable { get; private set; }
+
     /// <summary>Gets how many incremental runs finished (tests wait for the next one).</summary>
     public int IncrementalRuns => Volatile.Read(ref _incrementalRuns);
 
@@ -934,6 +940,12 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
                     await WipeAsync(root, token).ConfigureAwait(false);
                 }
 
+                // An incremental run is reported as Storing with its file count from the start (it has no sweep).
+                if (incremental)
+                {
+                    pass.Progress.Advance(IndexPhase.Storing);
+                }
+
                 lock (_gate)
                 {
                     _currentPass = pass;
@@ -951,6 +963,8 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
                     Interlocked.Increment(ref _incrementalRuns);
                     if (outcome.SaveToSearchable is { } searchable)
                     {
+                        LastSaveStatistics = pass.Statistics;
+                        LastSaveToSearchable = searchable;
                         LogSaveSearchable(_logger, searchable.TotalMilliseconds);
                     }
 

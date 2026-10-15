@@ -168,7 +168,9 @@ public sealed class IndexingPipelineTests(ITestOutputHelper output) : IDisposabl
         var charge = Assert.Single(await storage.Symbols.FindSymbolsByNameAsync("Charge"));
         var orderService = (await second.Root.Store.Files.GetAsync("src/Orders/OrderService.cs"))!;
         Assert.Contains(await storage.Symbols.GetReferencesToAsync(charge.Id), r => r.FileId == orderService.Id && r.Kind == "call");
-        Assert.Equal(((FakeEmbedder)second.Embedder).ChunksEmbedded, stats.Chunks);
+        // Only the chunks whose text changed are embedded again; the others keep their stored vectors (work item 2.10).
+        Assert.True(stats.ChunksReused > 0);
+        Assert.Equal(((FakeEmbedder)second.Embedder).ChunksEmbedded, stats.Chunks - stats.ChunksReused);
     }
 
     [Fact]

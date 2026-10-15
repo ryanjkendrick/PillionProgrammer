@@ -48,8 +48,9 @@ internal sealed partial class IndexPass
                     DeleteWithDescendants(decision.Path, deletes);
                     break;
                 case PathKind.Directory:
-                    // A folder appeared (moved in, copied, checked out): a sweep finds its files with the full walk.
-                    outcome.SweepNeeded = true;
+                    // A folder appeared. Created and then filled, its files have events of their own in this batch; moved or
+                    // copied in, they have none, and only a sweep finds them.
+                    outcome.SweepNeeded |= HasFilesOutside(classifier, decision.Path, paths);
                     break;
                 case PathKind.Excluded:
                     if (_root.FileIds.TryGetValue(decision.Path, out var excludedId))
@@ -129,6 +130,35 @@ internal sealed partial class IndexPass
         Statistics.SaveToSearchable = outcome.SaveToSearchable;
         LogIncremental(_logger, _root.Store.Identity.Id, paths.Count, outcome.Indexed, outcome.Deleted, outcome.Unchanged, Statistics.Duration.TotalMilliseconds);
         return outcome;
+    }
+
+    /// <summary>Whether a folder holds an indexable file (by name) that is not among the batch's paths; gives up looking after 10,000 entries (then yes).</summary>
+    private static bool HasFilesOutside(PathClassifier classifier, string folder, IReadOnlyDictionary<string, long?> batch)
+    {
+        var full = Path.Combine(classifier.Root, folder.Replace('/', Path.DirectorySeparatorChar));
+        var seen = 0;
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(full, "*", SearchOption.AllDirectories))
+            {
+                if (++seen > 10_000)
+                {
+                    return true;
+                }
+
+                var relative = PathClassifier.Normalize(Path.GetRelativePath(classifier.Root, file));
+                if (!batch.ContainsKey(relative) && classifier.ClassifyByName(relative).IsIncluded)
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private static ExcludedFile ToExcluded(ScanEntry entry) => new()
@@ -290,25 +320,27 @@ internal sealed partial class IndexPass
     /// <returns>The time from the save's arrival to the file being searchable, or <see langword="null"/> when it could not be read.</returns>
     private async Task<TimeSpan?> IndexSavedFileAsync(FileRecord record, long savedAt, CancellationToken cancellationToken)
     {
-        var file = await _scheduler.Run(() => Prepare(record), cancellationToken).ConfigureAwait(false);
+        var reusable = await ReusableVectorsAsync(record, cancellationToken).ConfigureAwait(false);
+        var file = await _scheduler.Run(() => Prepare(record, reusable), cancellationToken).ConfigureAwait(false);
         if (file.Symbols is null)
         {
             Progress.FilesDone++;
             return null;
         }
 
+        // The chunks whose text is new, in file order: the first ones get vectors before the file is stored.
+        var missing = Enumerable.Range(0, file.Chunks.Count).Where(i => file.Vectors[i] is null).ToList();
         var budget = _options.SaveSearchableBudget - _options.SaveStoreReserve;
-        var count = file.Chunks.Count;
         var done = 0;
         var lastBatch = TimeSpan.Zero;
-        while (done < count)
+        while (done < missing.Count)
         {
             if (done > 0 && Stopwatch.GetElapsedTime(savedAt) + lastBatch > budget)
             {
                 break;
             }
 
-            done += await EmbedRangeAsync(file, done, Math.Min(Math.Max(1, _options.SaveEmbeddingBatchSize), _memory.BatchSize), cancellationToken).ConfigureAwait(false);
+            done += await EmbedAsync(file, missing, done, Math.Min(Math.Max(1, _options.SaveEmbeddingBatchSize), _memory.BatchSize), cancellationToken).ConfigureAwait(false);
             lastBatch = _lastEmbedDuration;
         }
 
@@ -318,18 +350,18 @@ internal sealed partial class IndexPass
         Progress.AddBytesDone(record.Size);
         _changed();
 
-        if (done < count)
+        if (done < missing.Count)
         {
             // Over budget: the rest of the vectors now, in normal batches, then the row is marked complete.
             Statistics.PartialFiles++;
-            LogPartial(_logger, done, count, searchable.TotalMilliseconds);
+            LogPartial(_logger, file.Chunks.Count - (missing.Count - done), file.Chunks.Count, searchable.TotalMilliseconds);
             var from = done;
-            while (done < count)
+            while (done < missing.Count)
             {
-                done += await EmbedRangeAsync(file, done, _memory.BatchSize, cancellationToken).ConfigureAwait(false);
+                done += await EmbedAsync(file, missing, done, _memory.BatchSize, cancellationToken).ConfigureAwait(false);
             }
 
-            var embeddings = Enumerable.Range(from, count - from).Select(i => new ChunkEmbedding(chunkIds[i], file.Vectors[i]!.Quantized)).ToList();
+            var embeddings = missing.Skip(from).Select(i => new ChunkEmbedding(chunkIds[i], file.Vectors[i]!.Quantized)).ToList();
             var files = _root.Store.Files;
             var complete = file.Record;
             await _scheduler.RunAsync(
@@ -347,17 +379,17 @@ internal sealed partial class IndexPass
         return searchable;
     }
 
-    /// <summary>Embeds up to <paramref name="size"/> chunks of a file from <paramref name="start"/>, in file order.</summary>
+    /// <summary>Embeds up to <paramref name="size"/> of a file's chunks: <paramref name="indexes"/> from position <paramref name="start"/>.</summary>
     /// <returns>How many were embedded.</returns>
-    private async Task<int> EmbedRangeAsync(PreparedFile file, int start, int size, CancellationToken cancellationToken)
+    private async Task<int> EmbedAsync(PreparedFile file, List<int> indexes, int start, int size, CancellationToken cancellationToken)
     {
         _memory.BeforeBatch();
         await _pause.WaitWhilePausedAsync(cancellationToken).ConfigureAwait(false);
-        var take = Math.Min(size, file.Chunks.Count - start);
+        var take = Math.Min(size, indexes.Count - start);
         var texts = new List<string>(take);
         for (var i = start; i < start + take; i++)
         {
-            texts.Add(file.Chunks[i].EmbeddingText);
+            texts.Add(file.Chunks[indexes[i]].EmbeddingText);
         }
 
         Progress.MarkEmbeddingStarted(Stopwatch.GetTimestamp());
@@ -368,7 +400,7 @@ internal sealed partial class IndexPass
         Statistics.EmbeddingBatches++;
         for (var i = 0; i < take; i++)
         {
-            file.Vectors[start + i] = vectors[i];
+            file.Vectors[indexes[start + i]] = vectors[i];
         }
 
         file.Pending -= take;

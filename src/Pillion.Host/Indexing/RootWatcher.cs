@@ -299,10 +299,14 @@ internal sealed partial class RootWatcher : IDisposable
             return;
         }
 
-        // A folder's own "changed" event (its entries changed) says nothing the entries' events do not.
-        if (change == WatcherChangeTypes.Changed && Directory.Exists(fullPath))
+        if (change != WatcherChangeTypes.Deleted && Directory.Exists(fullPath))
         {
-            return;
+            // A folder's own "changed" event (its entries changed) says nothing the entries' events do not; a new folder is
+            // checked with the folder rules too (a directory-only ignore pattern such as "artifacts/").
+            if (change == WatcherChangeTypes.Changed || !classifier.ClassifyByName(relative, isDirectory: true).IsIncluded)
+            {
+                return;
+            }
         }
 
         Interlocked.Increment(ref _eventsQueued);

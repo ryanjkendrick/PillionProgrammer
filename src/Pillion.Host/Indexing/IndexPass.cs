@@ -138,6 +138,15 @@ internal sealed class PassStatistics
 
     /// <summary>Gets or sets the saved files stored before all their chunks had vectors (the save budget ran out).</summary>
     public int PartialFiles { get; set; }
+
+    private long _chunksReused;
+
+    /// <summary>Gets the chunks of changed files whose text was unchanged, so their stored vectors were kept instead of embedding them again.</summary>
+    public long ChunksReused => Interlocked.Read(ref _chunksReused);
+
+    /// <summary>Counts reused chunks (from several pipeline threads).</summary>
+    /// <param name="count">The chunks.</param>
+    public void AddChunksReused(int count) => Interlocked.Add(ref _chunksReused, count);
 }
 
 /// <summary>
@@ -534,8 +543,10 @@ internal sealed partial class IndexPass
                 new ParallelOptions { MaxDegreeOfParallelism = _options.MaxDegreeOfParallelism, TaskScheduler = _scheduler, CancellationToken = cancellationToken },
                 async (record, token) =>
                 {
-                    await _pause.WaitWhilePausedAsync(token).ConfigureAwait(false);
-                    var file = Prepare(record);
+                    // Stay on the pipeline's below-normal threads (the scheduler is captured): chunking follows.
+                    await _pause.WaitWhilePausedAsync(token).ConfigureAwait(true);
+                    var reusable = await ReusableVectorsAsync(record, token).ConfigureAwait(true);
+                    var file = Prepare(record, reusable);
                     await writer.WriteAsync(file, token).ConfigureAwait(false);
                 }).ConfigureAwait(false);
             writer.TryComplete();
@@ -547,7 +558,8 @@ internal sealed partial class IndexPass
         }
     }
 
-    private PreparedFile Prepare(FileRecord record)
+    /// <summary>Reads, chunks and extracts a file; chunks whose text the file already had keep their stored vectors.</summary>
+    private PreparedFile Prepare(FileRecord record, Dictionary<string, sbyte[]>? reusable = null)
     {
         var text = ReadText(record);
         if (text is null)
@@ -558,7 +570,56 @@ internal sealed partial class IndexPass
         var chunks = Chunker.Chunk(record.Path, text, _chunkOptions);
         var symbols = Extractor.Extract(record.Path, text);
         _options.OnFilePrepared?.Invoke(record.Path);
-        return new PreparedFile(record, chunks, symbols, CountLines(text));
+        var file = new PreparedFile(record, chunks, symbols, CountLines(text));
+        if (reusable is { Count: > 0 })
+        {
+            var reused = 0;
+            for (var i = 0; i < chunks.Count; i++)
+            {
+                if (reusable.TryGetValue(chunks[i].EmbeddingText, out var vector))
+                {
+                    file.Vectors[i] = new EmbeddedVector(vector, 0, null);
+                    file.Pending--;
+                    reused++;
+                }
+            }
+
+            Statistics.AddChunksReused(reused);
+        }
+
+        return file;
+    }
+
+    /// <summary>
+    /// The vectors of a changed file's stored chunks, by embedding text (breadcrumb and text): the model and the text are the
+    /// same, so the vector is too (work item 2.10). A branch switch or an edit usually changes a few members of a file, and
+    /// only those are embedded again.
+    /// </summary>
+    private Task<Dictionary<string, sbyte[]>?> ReusableVectorsAsync(FileRecord record, CancellationToken cancellationToken)
+    {
+        if (record.Id == 0)
+        {
+            return Task.FromResult<Dictionary<string, sbyte[]>?>(null);
+        }
+
+        return _root.Storage.Database.ReadAsync<Dictionary<string, sbyte[]>?>(
+            (connection, token) =>
+            {
+                using var command = connection.CreateCommand();
+                command.CommandText = "SELECT c.breadcrumb, c.text, e.embedding FROM chunks c JOIN chunk_embeddings e ON e.chunk_id = c.id WHERE c.file_id = $file";
+                command.Parameters.AddWithValue("$file", record.Id);
+                using var reader = command.ExecuteReader();
+                var vectors = new Dictionary<string, sbyte[]>(StringComparer.Ordinal);
+                while (reader.Read())
+                {
+                    token.ThrowIfCancellationRequested();
+                    var bytes = (byte[])reader.GetValue(2);
+                    vectors.TryAdd(reader.GetString(0) + "\n" + reader.GetString(1), System.Runtime.InteropServices.MemoryMarshal.Cast<byte, sbyte>(bytes).ToArray());
+                }
+
+                return Task.FromResult<Dictionary<string, sbyte[]>?>(vectors);
+            },
+            cancellationToken);
     }
 
     private async Task ConsumeAsync(ChannelReader<PreparedFile> reader, CancellationToken cancellationToken)
@@ -570,6 +631,11 @@ internal sealed partial class IndexPass
             waiting.Enqueue(file);
             for (var i = 0; i < file.Chunks.Count; i++)
             {
+                if (file.Vectors[i] is not null)
+                {
+                    continue; // Reused from the stored chunk with the same text.
+                }
+
                 batch.Add((file, i));
                 if (batch.Count >= _memory.BatchSize * Math.Max(1, _options.EmbeddingSortWindow))
                 {
@@ -579,7 +645,7 @@ internal sealed partial class IndexPass
                 }
             }
 
-            if (file.Chunks.Count == 0)
+            if (file.Pending == 0)
             {
                 await StoreReadyAsync(waiting, cancellationToken).ConfigureAwait(false);
             }
