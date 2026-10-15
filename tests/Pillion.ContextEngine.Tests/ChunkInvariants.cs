@@ -53,7 +53,7 @@ internal static class ChunkInvariants
             var first = segments[0];
             var expectedFirst = Breadcrumbs.Sanitize(path, int.MaxValue);
             if (first != expectedFirst && first != Breadcrumbs.Sanitize(fileName, int.MaxValue)
-                && !first.EndsWith('…') && first != "…")
+                && !first.EndsWith('\u2026') && first != "\u2026")
             {
                 return $"Breadcrumb '{chunk.Breadcrumb}' does not start with the path.";
             }
@@ -100,7 +100,8 @@ internal static class ChunkInvariants
                 return $"Line {line} is covered {covered[line]} times.";
             }
 
-            if (windows && covered[line] > 2)
+            var maxWindows = (options.WindowLines + options.WindowLines - options.WindowOverlap - 1) / (options.WindowLines - options.WindowOverlap);
+            if (windows && covered[line] > maxWindows)
             {
                 return $"Line {line} is covered by {covered[line]} windows.";
             }
