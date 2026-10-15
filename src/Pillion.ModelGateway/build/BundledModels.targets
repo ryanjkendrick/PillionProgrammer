@@ -1,0 +1,92 @@
+<Project>
+
+  <!--
+    Bundled embedding models (work item 2.7, design sections 7, 11 and 16). Model binaries are never committed: this target
+    reads Models\models.manifest.json, downloads every non-optional file of each model marked "bundled" into a
+    content-addressed cache, verifies its SHA-256 and size against the manifest, and adds it as content under
+    models\<model-id>\ so that it is copied to the output of this project, of every project that references it (Pillion
+    Host and the tests) and to the host's publish folder, which the VSIX packages under Host\. The extension therefore
+    works with the network disabled.
+
+    - The cache is <NuGet packages folder>\pillion.models\<model-id>\<first 16 hex digits of the SHA-256>\<file>, so
+      rebuilds, clean builds, other worktrees and the VSIX's separate host publish never download a file twice. Set
+      PillionModelCache to use another folder.
+    - A hash or size mismatch fails the build with the expected and actual values; the bad file is deleted so that the
+      next build downloads it again.
+    - A verified file gets a <file>.sha256 stamp (hash, size and time stamp), so later builds do not hash 34 MB again.
+    - Offline: once the cache is filled no network is needed. To build without the models at all (for example on a
+      machine that cannot reach huggingface.co), pass -p:PillionSkipModelDownload=true; the build warns, and at run time
+      the host looks for the model in %LOCALAPPDATA%\PillionProgrammer\models\ instead.
+    - Design-time builds in Visual Studio never download.
+  -->
+  <PropertyGroup>
+    <PillionModelManifest Condition="'$(PillionModelManifest)' == ''">$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)..', 'Models', 'models.manifest.json'))</PillionModelManifest>
+  </PropertyGroup>
+
+  <UsingTask TaskName="PillionResolveModelFiles" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <ManifestPath ParameterType="System.String" Required="true" />
+      <CacheRoot ParameterType="System.String" Required="true" />
+      <Files ParameterType="Microsoft.Build.Framework.ITaskItem[]" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Class" Language="cs" Source="$(MSBuildThisFileDirectory)PillionModelTasks.cs" />
+    </Task>
+  </UsingTask>
+
+  <UsingTask TaskName="PillionVerifyModelFiles" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Files ParameterType="Microsoft.Build.Framework.ITaskItem[]" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Class" Language="cs" Source="$(MSBuildThisFileDirectory)PillionModelTasks.cs" />
+    </Task>
+  </UsingTask>
+
+  <Target Name="PillionWarnModelsSkipped"
+          BeforeTargets="AssignTargetPaths"
+          Condition="'$(PillionSkipModelDownload)' == 'true' and '$(DesignTimeBuild)' != 'true'">
+    <Warning Code="PILLION001" Text="PillionSkipModelDownload is true: the bundled embedding model is not copied to the output. The host will look for it in %LOCALAPPDATA%\PillionProgrammer\models\ instead." />
+  </Target>
+
+  <Target Name="PillionAcquireBundledModels"
+          BeforeTargets="AssignTargetPaths"
+          Condition="'$(PillionSkipModelDownload)' != 'true' and '$(DesignTimeBuild)' != 'true'">
+    <PropertyGroup>
+      <_PillionModelCache>$(PillionModelCache)</_PillionModelCache>
+      <_PillionModelCache Condition="'$(_PillionModelCache)' == '' and '$(NuGetPackageRoot)' != ''">$([MSBuild]::EnsureTrailingSlash('$(NuGetPackageRoot)'))pillion.models\</_PillionModelCache>
+      <_PillionModelCache Condition="'$(_PillionModelCache)' == ''">$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)', 'pillion.models'))</_PillionModelCache>
+    </PropertyGroup>
+
+    <PillionResolveModelFiles ManifestPath="$(PillionModelManifest)" CacheRoot="$(_PillionModelCache)">
+      <Output TaskParameter="Files" ItemName="_PillionModelFile" />
+    </PillionResolveModelFiles>
+
+    <ItemGroup>
+      <_PillionModelDownload Include="@(_PillionModelFile)" Condition="'%(_PillionModelFile.NeedsDownload)' == 'true'" />
+    </ItemGroup>
+
+    <Message Importance="high"
+             Condition="'@(_PillionModelDownload)' != ''"
+             Text="Downloading %(_PillionModelDownload.TargetPath) (%(_PillionModelDownload.Size) bytes) from %(_PillionModelDownload.Url)" />
+    <MakeDir Directories="%(_PillionModelDownload.CacheDirectory)" Condition="'@(_PillionModelDownload)' != ''" />
+    <DownloadFile SourceUrl="%(_PillionModelDownload.Url)"
+                  DestinationFolder="%(_PillionModelDownload.CacheDirectory)"
+                  DestinationFileName="%(_PillionModelDownload.PartialName)"
+                  SkipUnchangedFiles="false"
+                  Retries="3"
+                  RetryDelayMilliseconds="2000"
+                  Condition="'@(_PillionModelDownload)' != ''" />
+
+    <PillionVerifyModelFiles Files="@(_PillionModelFile)" />
+
+    <ItemGroup>
+      <Content Include="@(_PillionModelFile)"
+               Link="%(_PillionModelFile.TargetPath)"
+               CopyToOutputDirectory="PreserveNewest"
+               CopyToPublishDirectory="PreserveNewest"
+               Visible="false" />
+    </ItemGroup>
+  </Target>
+
+</Project>

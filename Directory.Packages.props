@@ -103,6 +103,25 @@
   </ItemGroup>
 
   <!--
+    Bundled embeddings (work item 2.7, design section 7, Embed): ONNX Runtime runs the bundled embedding model in the host.
+    Microsoft.ML.OnnxRuntime.DirectML (MIT) carries onnxruntime.dll built with both the CPU and the DirectML execution
+    providers, so one package serves the CPU path and the GPU path; it is the default (PillionOnnxRuntimeFlavor=directml in
+    Pillion.ModelGateway.csproj). Its newest release is 1.24.4 (2026-03-17): DirectML is in maintenance and the DirectML
+    package stopped at 1.24, while the CPU-only Microsoft.ML.OnnxRuntime has moved on to 1.31. Both are pinned to 1.24.4
+    so the managed API (Microsoft.ML.OnnxRuntime.Managed, MIT) is the same whichever flavour is built; measured on
+    2026-10-15, 1.31.0 was no faster than 1.24.4 on CPU for bge-small (9.3 chunks a second either way, batch 32 of 512
+    tokens, 8 threads). Microsoft.AI.DirectML (DirectML.dll, 18.5 MB, x64) is NOT open source: it ships under the Microsoft
+    DirectML licence terms, which allow redistribution inside an application and include a data-collection clause; see
+    THIRD-PARTY-NOTICES.txt. Building with -p:PillionOnnxRuntimeFlavor=cpu drops DirectML and uses the CPU-only package of
+    the same version.
+  -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.24.4" />
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.24.4" />
+    <PackageVersion Include="Microsoft.AI.DirectML" Version="1.15.4" />
+  </ItemGroup>
+
+  <!--
     Roslyn's parsers, used by Pillion Host for syntax validation only (work item 1.8, design section 8): an inline edit
     to a C# or VB file is parsed with CSharpSyntaxTree / VisualBasicSyntaxTree to count syntax errors before the VSIX
     previews it. Nothing is compiled and no workspace is loaded. 5.0.0 is the newest stable release in the local
