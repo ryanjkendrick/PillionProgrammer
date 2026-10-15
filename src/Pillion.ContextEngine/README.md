@@ -280,8 +280,9 @@ text is never logged.
 
 **Measured** (`RetrievalBenchmarkTests`, `Category=Benchmark`: a generated encrypted index of 100,000 chunks, 384-dimension
 int8 vectors and 100,000 symbols, 50 natural-language questions through `StorageRetrievalIndex` as the host runs them,
-with a hashing embedder so the model's time is not counted): hybrid p50 55 ms, p95 90 ms (lexical about 49 ms, vector 8
-ms, symbols 2 ms, fusion and expansion 10 ms), on the development machine while other builds kept the CPU busy. Before
+with a hashing embedder so the model's time is not counted): hybrid p50 40 ms, p95 59 ms (lexical about 35 ms, vector 5
+ms, symbols 1 ms, fusion and expansion 6 ms) on the development machine, and p50 55 ms, p95 90 ms in a run while other
+builds kept the CPU saturated. Before
 the question options of lexical search the same run measured p50 157 ms, nearly all of it BM25 over the generator's
 twenty nouns that occur in most chunks. The bundled model's own cost for one query, through the gateway, is logged by
 the host's `Category=Model` retrieval test: about 110 ms with the machine lightly loaded and 220 to 430 ms with the CPU
