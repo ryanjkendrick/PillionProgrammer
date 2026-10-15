@@ -170,7 +170,6 @@ else {
                 $r = Invoke-DotnetTestRun -RepoRoot $repo -Targets @('PillionProgrammer.NoVsix.slnf') -Filter 'Category!=Live&Category!=Benchmark&Category!=Model' -ResultsDir (Join-Path $runDir 'tests-unit') -LogPath (Join-Path $runDir 'test-unit.log') -NoBuild
                 $perProject = ($r.Projects.Keys | ForEach-Object { '{0} {1}/{2}/{3}' -f $_, $r.Projects[$_].passed, $r.Projects[$_].failed, $r.Projects[$_].skipped }) -join '; '
                 $data['unit'] = [ordered]@{ totals = $r.Totals; projects = $r.Projects; failed = $r.Failed }
-                $data['unitMeasurements'] = Get-LiveMeasurements -UnitResults $r.Results
                 [ordered]@{
                     Status  = (@($r.ExitCodes | Where-Object { $_ -ne 0 }).Count -eq 0 -and $r.Totals.failed -eq 0 -and $r.Totals.passed -gt 0) ? 'Pass' : 'Fail'
                     Summary = "passed $($r.Totals.passed), failed $($r.Totals.failed), skipped $($r.Totals.skipped) ($perProject)"
