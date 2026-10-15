@@ -189,17 +189,24 @@ function Test-PlainSqliteOpen {
     not a database". Returns the outcome text. Uses a copy, so the live file is never touched.
     #>
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Scratch)
-    $python = Get-Command python -ErrorAction SilentlyContinue
-    if (-not $python) { $python = Get-Command py -ErrorAction SilentlyContinue }
-    if (-not $python) { return [pscustomobject]@{ Path = $Path; Opened = $null; Outcome = 'not checked: no python on PATH' } }
+    # Python 3 (isolated mode): the py launcher's -3 first, then python3 or python if it is a Python 3.
+    $exe = $null; $prefix = @()
+    if ((Get-Command py -ErrorAction SilentlyContinue) -and ((& py -3 --version 2>&1) -match '^Python 3')) { $exe = 'py'; $prefix = @('-3') }
+    else {
+        foreach ($name in 'python3', 'python') {
+            $cmd = Get-Command $name -ErrorAction SilentlyContinue
+            if ($cmd -and ((& $cmd.Source --version 2>&1) -match '^Python 3')) { $exe = $cmd.Source; break }
+        }
+    }
+    if (-not $exe) { return [pscustomobject]@{ Path = $Path; Opened = $null; Outcome = 'not checked: no Python 3 on PATH' } }
     $copy = Join-Path $Scratch ("plain-" + [IO.Path]::GetFileName($Path))
     Copy-Item -LiteralPath $Path -Destination $copy -Force
     $script = "import sqlite3,sys`ntry:`n    c=sqlite3.connect(sys.argv[1]); r=c.execute('select count(*) from sqlite_master').fetchone(); print('OPENED', r[0])`nexcept Exception as e:`n    print('FAILED', type(e).__name__, e)"
     $py = Join-Path $Scratch 'plain-open.py'
     Set-Content -LiteralPath $py -Value $script -Encoding utf8
-    $out = (& $python.Source -I $py $copy 2>&1) -join ' '
+    $out = (& $exe @prefix -I $py $copy 2>&1) -join ' '
     Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue
-    [pscustomobject]@{ Path = $Path; Opened = ($out -like 'OPENED*'); Outcome = $out }
+    [pscustomobject]@{ Path = $Path; Opened = $(if ($out -like 'OPENED*') { $true } elseif ($out -like 'FAILED*') { $false } else { $null }); Outcome = $out }
 }
 
 function Get-KeyFileAcl {
