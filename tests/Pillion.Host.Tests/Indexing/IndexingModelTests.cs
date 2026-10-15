@@ -154,16 +154,36 @@ public sealed class IndexingModelTests(ITestOutputHelper output) : IDisposable
 
         await using var gateway = BuildGateway(new PillionSettings());
         var embedder = gateway.GetRequiredService<IIndexEmbedder>();
-        await using var harness = new IndexingHarness(_workspace.Data, embedder, new IndexingOptions());
+        var sampler = new PeakMemorySampler();
+        await using var harness = new IndexingHarness(_workspace.Data, embedder, new IndexingOptions(), memory: sampler);
         var started = Stopwatch.StartNew();
         await harness.StartAsync(_workspace.Repository);
         var status = await harness.WaitForIdleAsync(TimeSpan.FromMinutes(60));
         started.Stop();
+        output.WriteLine($"Working set sampled before each batch: peak {sampler.PeakBytes / 1048576:N0} MB; batch size at the end {harness.Service.Memory.BatchSize}.");
 
         var text = await DescribeAsync("this repository's src folder, bundled bge-small int8 on the CPU", harness, status.Roots[0].ChunkCount, started.Elapsed);
         output.WriteLine(text);
         Console.WriteLine(text);
         Assert.True(started.Elapsed < TimeSpan.FromMinutes(30), text);
+    }
+
+    private sealed class PeakMemorySampler : IMemorySampler
+    {
+        private long _peak;
+
+        public long PeakBytes => Interlocked.Read(ref _peak);
+
+        public long WorkingSetBytes()
+        {
+            var bytes = Environment.WorkingSet;
+            long seen;
+            while (bytes > (seen = Interlocked.Read(ref _peak)) && Interlocked.CompareExchange(ref _peak, bytes, seen) != seen)
+            {
+            }
+
+            return bytes;
+        }
     }
 
     private static string FindRepositoryFolder(string name)

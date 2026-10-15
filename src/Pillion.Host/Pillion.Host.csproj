@@ -30,6 +30,7 @@
     <!-- The indexing pipeline (work item 2.9): discovery, hashing and ownership, then chunkers and symbols. The Context Engine
          brings the tree-sitter native libraries under runtimes\<rid>\native\, which flow into the host's output and publish. -->
     <ProjectReference Include="..\Pillion.Indexing\Pillion.Indexing.csproj" />
+    <!-- The symbol graph's approximate reference edges, the fallback of the workspace queries (work item 2.14). -->
     <ProjectReference Include="..\Pillion.ContextEngine\Pillion.ContextEngine.csproj" />
   </ItemGroup>
 

@@ -20,6 +20,8 @@ public sealed record ConversationRecord(string Id, string Title, DateTimeOffset 
 /// <param name="TokensIn">The prompt tokens of the request that produced it.</param>
 /// <param name="TokensOut">The tokens generated.</param>
 /// <param name="Cost">The estimated cost in US dollars, when known.</param>
+/// <param name="Citations">The citations of an assistant reply as JSON, or <see langword="null"/> when there are none.</param>
+/// <param name="Cancelled">Whether the reply was stopped before it finished (<paramref name="Content"/> is what had arrived).</param>
 public sealed record NewMessage(
     string ConversationId,
     string Role,
@@ -29,7 +31,9 @@ public sealed record NewMessage(
     string? Provider = null,
     int? TokensIn = null,
     int? TokensOut = null,
-    double? Cost = null);
+    double? Cost = null,
+    string? Citations = null,
+    bool Cancelled = false);
 
 /// <summary>A stored message.</summary>
 /// <param name="Id">The message id, increasing in the order messages were added.</param>
@@ -42,6 +46,8 @@ public sealed record NewMessage(
 /// <param name="TokensIn">The prompt tokens of the request that produced it.</param>
 /// <param name="TokensOut">The tokens generated.</param>
 /// <param name="Cost">The estimated cost in US dollars, when known.</param>
+/// <param name="Citations">The citations of an assistant reply as JSON, or <see langword="null"/> when there are none.</param>
+/// <param name="Cancelled">Whether the reply was stopped before it finished.</param>
 public sealed record MessageRecord(
     long Id,
     string ConversationId,
@@ -52,13 +58,21 @@ public sealed record MessageRecord(
     string? Provider,
     int? TokensIn,
     int? TokensOut,
-    double? Cost);
+    double? Cost,
+    string? Citations = null,
+    bool Cancelled = false);
 
 /// <summary>A context pin of a conversation (an <c>@</c>-mention kept with it).</summary>
 /// <param name="Kind">What is pinned: <c>file</c>, <c>folder</c>, <c>selection</c>, <c>errors</c> or <c>clipboard</c> (as <c>MentionResolution.Kind</c>).</param>
 /// <param name="Target">What it points at, for example a repository-relative path.</param>
 /// <param name="TokenCount">Its size in tokens when it was pinned.</param>
-public sealed record PinRecord(string Kind, string Target, int TokenCount);
+/// <param name="DisplayName">The short name on the pin's badge; empty when none was stored.</param>
+public sealed record PinRecord(string Kind, string Target, int TokenCount, string DisplayName = "");
+
+/// <summary>A conversation as the list shows it: the conversation and how many messages it has.</summary>
+/// <param name="Conversation">The conversation.</param>
+/// <param name="MessageCount">The number of messages.</param>
+public sealed record ConversationListItem(ConversationRecord Conversation, int MessageCount);
 
 /// <summary>
 /// One request sent to a model provider, as the Outbound log keeps it on disk (design section 12, Data flows). The fields

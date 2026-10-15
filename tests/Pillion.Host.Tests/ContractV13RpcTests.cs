@@ -15,8 +15,8 @@ using StreamJsonRpc;
 namespace Pillion.Host.Tests;
 
 /// <summary>
-/// Contract 1.3 in Pillion Host, over the real pipe: the conversation service and the index methods are stubs until their
-/// work items (2.2, 2.11, 2.15) land, and say so with typed errors; the status is honestly "no index"; the
+/// Contract 1.3 in Pillion Host, over the real pipe: the conversation service (work item 2.2) works over a real store; the
+/// index methods are stubs until their work items (2.11, 2.15) land, and say so with typed errors; the status is honestly "no index"; the
 /// <c>indexStatusChanged</c> notification reaches the client and is throttled to twice a second.
 /// </summary>
 public sealed class ContractV13RpcTests : IDisposable
@@ -50,28 +50,33 @@ public sealed class ContractV13RpcTests : IDisposable
     }
 
     [Fact]
-    public async Task TheConversationService_IsNotImplementedYet_AndSaysWhichWorkItemAddsIt()
+    public async Task TheConversationService_IsServedOverThePipe_AndKeepsWhatItIsGivenAcrossAHostRestart()
     {
-        await using var host = await StartAsync();
-        await using var client = await host.ConnectAndHandshakeAsync();
-        var conversations = client.Attach<IConversationService>();
-
-        var calls = new Func<Task>[]
+        // Work item 2.2 implemented the service (it was a NotImplemented stub in the first wave of phase 2).
+        await using (var host = await StartAsync())
         {
-            () => conversations.ListConversationsAsync(new ConversationListRequest(), CancellationToken.None),
-            () => conversations.GetConversationAsync("c", CancellationToken.None),
-            () => conversations.CreateConversationAsync(new ConversationCreateRequest(), CancellationToken.None),
-            () => conversations.RenameConversationAsync("c", "t", CancellationToken.None),
-            () => conversations.DeleteConversationAsync("c", CancellationToken.None),
-            () => conversations.DeleteAllConversationsAsync(CancellationToken.None),
-            () => conversations.SetPinsAsync("c", [], CancellationToken.None),
-        };
+            await using var client = await host.ConnectAndHandshakeAsync();
+            var conversations = client.Attach<IConversationService>();
 
-        foreach (var call in calls)
+            var created = await conversations.CreateConversationAsync(new ConversationCreateRequest { Id = "pipe-1", Title = "Over the pipe" }, CancellationToken.None).WaitAsync(Wait);
+            Assert.True(await conversations.SetPinsAsync("pipe-1", [new ConversationPin { Kind = MentionKinds.File, Target = @"C:x.cs", DisplayName = "a.cs", TokenCount = 7 }], CancellationToken.None).WaitAsync(Wait));
+            Assert.Equal("pipe-1", created.Id);
+            Assert.False(await conversations.RenameConversationAsync("unknown", "t", CancellationToken.None).WaitAsync(Wait));
+        }
+
+        await using (var host = await StartAsync())
         {
-            var error = await ErrorOfAsync(call);
-            Assert.Equal(PillionErrorCode.NotImplemented, error.Code);
-            Assert.Equal("work item 2.2", error.Details);
+            await using var client = await host.ConnectAndHandshakeAsync();
+            var conversations = client.Attach<IConversationService>();
+
+            var page = await conversations.ListConversationsAsync(new ConversationListRequest(), CancellationToken.None).WaitAsync(Wait);
+            Assert.Equal("Over the pipe", Assert.Single(page.Items).Title);
+            var detail = (await conversations.GetConversationAsync("pipe-1", CancellationToken.None).WaitAsync(Wait))!;
+            Assert.Equal(("a.cs", 7), (Assert.Single(detail.Pins).DisplayName, detail.Pins[0].TokenCount));
+            Assert.Null(await conversations.GetConversationAsync("nope", CancellationToken.None).WaitAsync(Wait));
+
+            var deleted = await conversations.DeleteAllConversationsAsync(CancellationToken.None).WaitAsync(Wait);
+            Assert.Equal((1, 0, 1), (deleted.Conversations, deleted.Messages, deleted.Pins));
         }
     }
 

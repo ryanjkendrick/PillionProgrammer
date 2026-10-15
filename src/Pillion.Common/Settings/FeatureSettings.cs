@@ -56,6 +56,9 @@ public static class FeatureNames
     /// <summary>The bundled embedding provider: the in-process ONNX Runtime model shipped with the extension and the models downloaded on request (work item 2.7). It also needs <see cref="Embeddings"/>.</summary>
     public const string BundledEmbeddings = "bundledEmbeddings";
 
+    /// <summary>Workspace queries: <c>find_references</c> and <c>callers_of</c> answered by the live Roslyn workspace in Visual Studio (<c>IWorkspaceQueryService</c>), with the index's approximate edges as the fallback (work item 2.14).</summary>
+    public const string WorkspaceQueries = "workspaceQueries";
+
     /// <summary>Gets every feature flag name, in the order they are written to <c>settings.json</c>.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
@@ -77,6 +80,7 @@ public static class FeatureNames
         Indexing,
         Embeddings,
         BundledEmbeddings,
+        WorkspaceQueries,
     ];
 }
 
@@ -146,6 +150,7 @@ public sealed class FeatureSettings : SettingsNode
             "indexing" => Indexing,
             "embeddings" => Embeddings,
             "bundledembeddings" => BundledEmbeddings,
+            "workspacequeries" => WorkspaceQueries,
             _ => true,
         };
     }
@@ -212,6 +217,9 @@ public sealed class FeatureSettings : SettingsNode
             case "bundledembeddings":
                 BundledEmbeddings = false;
                 break;
+            case "workspacequeries":
+                WorkspaceQueries = false;
+                break;
         }
     }
 
@@ -237,4 +245,11 @@ public sealed class FeatureSettings : SettingsNode
     /// extension (and models downloaded on request) runs in the host, with no network. When off, the provider is hidden from routing.
     /// </summary>
     public bool BundledEmbeddings { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether workspace queries are answered: Visual Studio refuses <c>FindReferencesAsync</c>
+    /// and <c>CallersOfAsync</c> with a policy error while it is off, and Pillion Host answers <c>find_references</c> and
+    /// <c>callers_of</c> from the index's approximate edges only.
+    /// </summary>
+    public bool WorkspaceQueries { get; set; } = true;
 }

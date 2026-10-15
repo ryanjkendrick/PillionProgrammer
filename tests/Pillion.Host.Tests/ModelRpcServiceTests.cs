@@ -7,6 +7,7 @@ using Pillion.Common.Secrets;
 using Pillion.Common.Settings;
 using Pillion.Contracts;
 using Pillion.Host.Tests.TestSupport;
+using Pillion.LocalStore.Conversations;
 using Pillion.ModelGateway;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 using AiChatRole = Microsoft.Extensions.AI.ChatRole;
@@ -69,6 +70,37 @@ public sealed class ModelRpcServiceTests : IDisposable
         });
         Assert.True(chunks[^1].IsFinal);
         Assert.True(chunks[^1].CompletionTokens > 0);
+    }
+
+    [Fact]
+    public async Task ChatAsync_WithAConversationId_IsSavedByTheComposedHost_AndItsOutboundRecordIsStored()
+    {
+        // Work item 2.2 end to end through the real pipe and the composed host: the recorder, the store sink on the gateway's
+        // in-memory log, and the two services that read them back.
+        await using var host = await StartAsync();
+        await using var client = await host.ConnectAndHandshakeAsync();
+        var request = Request("req-saved", "Hello saved");
+        request.ConversationId = "conv-saved";
+
+        await foreach (var chunk in client.Attach<IModelService>().ChatAsync(request, CancellationToken.None).WithCancellation(CancellationToken.None))
+        {
+            _ = chunk;
+        }
+
+        var detail = await client.Attach<IConversationService>().GetConversationAsync("conv-saved", CancellationToken.None).WaitAsync(Wait);
+        Assert.NotNull(detail);
+        Assert.Equal("Hello saved", detail.Conversation.Title);
+        Assert.Equal(["Hello saved", "echo: Hello saved"], detail.Messages.Select(m => m.Content));
+        Assert.Equal("fake-chat:1b", detail.Messages[1].ModelId);
+        Assert.Equal("fake/fake-chat:1b", detail.Conversation.LastModelId);
+        var repository = await host.Services.GetRequiredService<IConversationStore>().GetRepositoryAsync();
+        Assert.Equal(0.0, (await repository.GetMessagesAsync("conv-saved"))[1].Cost); // A local provider costs nothing.
+
+        var records = await client.Attach<IDiagnosticsService>().GetOutboundRecordsAsync(10, CancellationToken.None).WaitAsync(Wait);
+        var record = Assert.Single(records);
+        Assert.Equal(("req-saved", "fake", TaskClass.Chat), (record.RequestId, record.ProviderId, record.TaskClass));
+        var stored = await repository.GetRecentOutboundAsync();
+        Assert.Equal("req-saved", Assert.Single(stored).RequestId);
     }
 
     [Fact]

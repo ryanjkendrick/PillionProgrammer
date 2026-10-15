@@ -8,13 +8,15 @@ using Pillion.Common.Settings;
 using Pillion.Contracts;
 using Pillion.Host.Connectivity;
 using Pillion.Host.Context;
-using Pillion.Host.Indexing;
 using Pillion.Host.Conversations;
+using Pillion.Host.Indexing;
 using Pillion.Host.Lifecycle;
 using Pillion.Host.Logging;
 using Pillion.Host.Models;
 using Pillion.Host.Rpc;
 using Pillion.Host.Settings;
+using Pillion.Host.WorkspaceQueries;
+
 using Pillion.Indexing;
 using Pillion.Indexing.Ownership;
 using Pillion.Indexing.Retention;
@@ -116,11 +118,27 @@ internal static class PillionHostBuilderExtensions
         builder.Services.TryAddSingleton<INotificationSender, VsixNotificationSender>();
         builder.Services.TryAddSingleton<IndexStatusNotifier>();
 
+        // Workspace queries (work item 2.14): find_references and callers_of for @symbol and chat, from Visual Studio's Roslyn
+        // workspace with the index's approximate edges as the fallback. The index's graphs come from the pipeline (2.9) and
+        // the retrieval catalog (2.11), which replace the empty provider.
+        builder.Services.TryAddSingleton<ISymbolGraphProvider, EmptySymbolGraphProvider>();
+        builder.Services.TryAddSingleton<IWorkspaceQueries, HostWorkspaceQueries>();
+
         // Local Store (work item 2.1): the encrypted conversations.db, opened lazily behind the localStore flag. Work item
         // 2.2 persists conversations and the Outbound log through it, behind IConversationService (contract 1.3, a stub
         // until then).
         builder.Services.AddPillionLocalStore();
         builder.Services.AddRpcTarget<IConversationService, ConversationRpcService>();
+
+        // Persistence (work item 2.2): chat requests that name a conversation are saved as they run, and the Outbound log's
+        // records are written to the store as they are produced (the gateway's in-memory log feeds the sink), so the
+        // conversation list and the Outbound log view survive a restart. The sink is also a hosted service, so it drains
+        // its queue when the host stops.
+        builder.Services.TryAddSingleton<ConversationRecorder>();
+        builder.Services.TryAddSingleton<StoreOutboundSink>();
+        builder.Services.AddSingleton<IOutboundSink>(sp => sp.GetRequiredService<StoreOutboundSink>());
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<StoreOutboundSink>());
+        builder.Services.AddHostedService<ConversationRetentionService>();
 
         // The indexing pipeline (work item 2.9), behind features.indexing: the index stores and retention of Pillion.Indexing,
         // the gateway's embeddings, IDE activity from the ideActivityChanged notification, and the status through

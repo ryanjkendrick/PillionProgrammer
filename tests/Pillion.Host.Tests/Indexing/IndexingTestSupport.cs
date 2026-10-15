@@ -168,7 +168,7 @@ internal sealed class FakeMemory : IMemorySampler
 /// <summary>One indexing service over a data folder, with fakes for everything outside the pipeline.</summary>
 internal sealed class IndexingHarness : IAsyncDisposable
 {
-    public IndexingHarness(string dataRoot, IIndexEmbedder? embedder = null, IndexingOptions? options = null, PillionSettings? settings = null, string pipeName = "pillion-test-host", IProcessProbe? probe = null)
+    public IndexingHarness(string dataRoot, IIndexEmbedder? embedder = null, IndexingOptions? options = null, PillionSettings? settings = null, string pipeName = "pillion-test-host", IProcessProbe? probe = null, IMemorySampler? memory = null)
     {
         Paths = new PillionPaths(dataRoot);
         Settings = new StaticGatewaySettingsSource(settings ?? new PillionSettings());
@@ -185,7 +185,7 @@ internal sealed class IndexingHarness : IAsyncDisposable
             Notifier,
             Activity,
             Power,
-            Memory,
+            memory ?? Memory,
             options ?? new IndexingOptions { MinimumRefreshInterval = TimeSpan.FromMilliseconds(200), PowerPollInterval = TimeSpan.FromMilliseconds(100), MemoryPollInterval = TimeSpan.FromMilliseconds(50), ReaderPollInterval = TimeSpan.FromMilliseconds(200), EmbeddingRetryDelay = TimeSpan.FromMilliseconds(10) },
             pipeName);
     }

@@ -160,6 +160,10 @@ internal sealed class ChatScript
     public void SendFrom(string providerId, string modelId, string text, bool isFinal = false, PillionError? error = null) =>
         Push(new ChatChunk { Text = text, IsFinal = isFinal, ProviderId = providerId, ModelId = modelId, Error = error });
 
+    /// <summary>Sends the final chunk of a reply that cites spans (contract 1.3).</summary>
+    public void SendFinalWithCitations(string text, params Citation[] citations) =>
+        Push(new ChatChunk { Text = text, IsFinal = true, Citations = citations });
+
     public void Fail(Exception exception) => Push(exception);
 
     public void Finish() => Push(End);

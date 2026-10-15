@@ -20,19 +20,25 @@ index can share it. Behind the `localStore` feature flag (see the repository REA
 databases, so the conversations database names its key after itself (`PillionPaths.ConversationsKeyFile`): every
 database has its own key.
 
-`conversations.db` schema version 1 (`Conversations/ConversationsSchema.cs`); times are Unix milliseconds, UTC:
+`conversations.db` schema version 2 (`Conversations/ConversationsSchema.cs`); times are Unix milliseconds, UTC:
 
 | Table | Columns |
 | --- | --- |
 | `conversations` | id, title, created, updated, model |
-| `messages` | id, conversation\_id (cascade delete), role, content, model, provider, tokens\_in, tokens\_out, cost, created |
-| `pins` | conversation\_id (cascade delete), kind, target, token\_count |
+| `messages` | id, conversation\_id (cascade delete), role, content, model, provider, tokens\_in, tokens\_out, cost, created, citations (JSON, schema 2), cancelled (schema 2) |
+| `pins` | conversation\_id (cascade delete), kind, target, token\_count, ordinal (schema 2), display\_name (schema 2) |
 | `outbound_log` | id, time, request\_id, provider, model, task\_class, locality (`local` or `cloud`), prompt\_tokens, prompt\_tokens\_counted, completion\_tokens, cache\_hit, first\_token\_ms, duration\_ms, outcome, error\_code, redactions, context\_items, context\_trimmed, spans |
 | `meta` | key, value: `schema_version`, `min_reader_version`, `store`, `written_by`, `created_utc` |
 
 `outbound_log` holds every field of the gateway's in-memory `OutboundRecord` (enums as their names), plus `spans`
 (files and line spans as JSON, design section 10) for when the gateway records them. `IConversationRepository` is the
-typed API over these tables; nothing in the host uses it yet (work item 2.2 does).
+typed API over these tables; the host uses it for the conversation service, for saving chat turns and for the Outbound log
+(work item 2.2, `src/Pillion.Host/Conversations`).
+
+Schema 2 (work item 2.2) is additive, so `min_reader_version` stays 1 and a build that only knows schema 1 can still use the
+file: a reply's `citations` (JSON, the `file:line` spans it cited), a `cancelled` flag for a reply stopped before it finished
+(`content` is what had arrived), and the pins' `ordinal` (they come back in the order the Chat window shows them) and
+`display_name`. Pins hold what to resolve again, never the content.
 
 Retention (`ConversationRetention`): conversations and the Outbound log are kept until the user deletes them.
 `DeleteAllAsync` empties every table, runs `VACUUM` so the freed pages go too, and deletes the migration backups.

@@ -106,6 +106,35 @@ internal sealed class ChatToolWindow : ToolWindowPane
         }
     }
 
+    /// <summary>Opens a file in the editor and puts the caret on a line (a cited span under a reply). Must be called on the UI thread.</summary>
+    /// <param name="path">The full path of the file.</param>
+    /// <param name="line">The zero-based line.</param>
+    public static void OpenCitation(string path, int line)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path))
+        {
+            PillionPackage.Instance?.Log?.Info("chat.citation.missing", "A cited file is not on disk any more.");
+            return;
+        }
+
+        try
+        {
+            VsShellUtilities.OpenDocument(ServiceProvider.GlobalProvider, path, Guid.Empty, out _, out _, out var frame, out var view);
+            frame?.Show();
+            if (view is not null)
+            {
+                var target = Math.Max(0, line);
+                view.SetCaretPos(target, 0);
+                view.CenterLines(target, 1);
+            }
+        }
+        catch (Exception ex) when (ex is COMException or System.IO.IOException or InvalidOperationException)
+        {
+            PillionPackage.Instance?.Log?.Warning("chat.citation.failed", "Opening a cited span failed.", ("error", ex.GetType().Name));
+        }
+    }
+
     private static ChatEditorActions CreateActions(PillionLog? log)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
