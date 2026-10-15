@@ -41,6 +41,11 @@ returns the roots to index. For each path it walks up to the nearest folder hold
 Projects under one repository give one root; a solution spanning two repositories gives two. Pure path logic, no git
 library.
 
+`GitHead.Read(gitDirectory)` (work item 2.10) reads what a root has checked out: `ref: refs/heads/<branch> @ <commit>`, or
+the commit when `HEAD` is detached, resolving the ref in the git directory, then in the common directory (a linked
+worktree's `commondir` file names it), then in `packed-refs`. The host's watcher compares two readings after git lets go
+of `index.lock` to tell a branch switch, pull, reset or rebase (the commit moved: sweep) from `git status` or `git add`.
+
 ## What is indexed
 
 `RepositoryScanner.ScanAsync(root)` walks the tree and yields one `ScanEntry` per file, and one per directory it
@@ -77,6 +82,11 @@ Notes:
 - Rules 1 to 10 use the name and the directory entry only. Excluded files are never opened (tests lock them to prove it).
 - Language is detected from the extension (`Languages.Detect`): `csharp`, `vb`, `razor`, `typescript`, `javascript`,
   `python`, `c`, `cpp` (headers too: a C++ grammar parses C headers), `go`, `rust`, `java`, `sql`, `html`, `css`, `other`.
+- `PathClassifier` (work item 2.10) decides one path at a time with exactly these rules, for the watcher and the
+  incremental indexer: `ClassifyByName(path)` applies the rules that need no disk access (every ancestor folder as the walk
+  would meet it, then the name; only the ignore files are read, once each, and cached until `Invalidate`), and
+  `Classify(path)` the full decision (reparse points, nested repositories, the NuGet `packages` folder, the size cap and the
+  content checks too), returning `null` when nothing exists at the path. A test checks it against the scan file by file.
 - Gitignore syntax is Pillion's own implementation of the gitwildmatch subset (`Discovery/Ignore`), compiled to string
   comparisons or non-backtracking regular expressions, so a hostile pattern cannot slow matching down. Not supported:
   `.git/info/exclude`, the global excludes file, `core.ignorecase=false`.
@@ -151,7 +161,10 @@ migrations append after version 2; leave the earlier SQL alone.
    open) is never treated as stale.
 5. Disposing the writer records the last-opened time, closes the database and deletes the lock, but only if the file still
    carries its own token: a host that was wrongly presumed dead does not delete its successor's lock.
-6. `IndexStore.GetLiveWriter()` lets a reader check that the owner is still alive; when it is not, opening the index
+6. `IndexStore.HoldsWriterLock()` (work item 2.10) lets the writer check that `writer.lock` still carries its token; the
+   host stops writing and watching, and opens the index again, when it does not. A lock that cannot be read right now
+   counts as still held.
+7. `IndexStore.GetLiveWriter()` lets a reader check that the owner is still alive; when it is not, opening the index
    again through the factory reclaims the lock and promotes the caller to writer.
 
 Both `features.indexing` and `features.localStore` must be on; otherwise opening fails with `LocalStoreException`

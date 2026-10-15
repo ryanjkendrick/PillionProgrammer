@@ -87,6 +87,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     private bool _started;
     private int _disposed;
     private int _incrementalRuns;
+    private int _savesReceived;
     private int _fullRuns;
 
     /// <summary>Initializes a new instance of the <see cref="IndexingService"/> class.</summary>
@@ -156,6 +157,21 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
 
     /// <summary>Gets how many incremental runs finished (tests wait for the next one).</summary>
     public int IncrementalRuns => Volatile.Read(ref _incrementalRuns);
+
+    /// <summary>Gets how many saves Visual Studio relayed (tests of the notification).</summary>
+    internal int SavesReceived => Volatile.Read(ref _savesReceived);
+
+    /// <summary>Gets the documents Visual Studio last reported open (tests of the notification).</summary>
+    internal IReadOnlyList<string> OpenDocuments
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _openDocuments;
+            }
+        }
+    }
 
     /// <summary>Gets how many full runs finished (tests wait for the next one).</summary>
     public int FullRuns => Volatile.Read(ref _fullRuns);
@@ -325,6 +341,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     public void NotifySaved(string? fullPath)
     {
         var savedAt = Stopwatch.GetTimestamp();
+        Interlocked.Increment(ref _savesReceived);
         if (string.IsNullOrWhiteSpace(fullPath) || !_features.IsEnabled(FeatureNames.Indexing))
         {
             return;

@@ -39,7 +39,7 @@ ones), and must not clash with a notification name (`ContractV13Tests`).
 Additive only, batched at the boundary of phase 2's first wave into one minor bump (`ContractVersion` says 1.3; decision
 of 2026-10-15 in `docs/phase-2-plan.md`). A 1.2 peer is still accepted by the handshake: a 1.2 host answers the new
 methods with StreamJsonRpc's method-not-found error, a 1.2 client never calls them and registers no handler for
-`indexStatusChanged` (nor sends `ideActivityChanged`), and each side reads the new fields' defaults from the other (`ContractV13Tests`, and over the real
+`indexStatusChanged` (nor sends `ideActivityChanged`, `documentSaved` or `openDocumentsChanged`), and each side reads the new fields' defaults from the other (`ContractV13Tests`, and over the real
 pipe `ContractV13RpcTests` and `HandshakeCompatibilityTests` in the host tests). Every new DTO is round-tripped by
 `DtoRoundTripTests`. Until the consuming work items land, Pillion Host answers most new methods with
 `PillionErrorCode.NotImplemented` (see the host README, Contract 1.3 stubs); the fake host serves them all with canned data.
@@ -115,6 +115,21 @@ pipe `ContractV13RpcTests` and `HandshakeCompatibilityTests` in the host tests).
   The extension (`IndexingRelay` in Pillion.VisualStudio.Core) sends `Build` from the solution build events and `Debug`
   from the debugger's mode; it does not set `Test` yet (no supported Test Explorer API in the SDK packages it uses), so a
   test run pauses indexing only through its build.
+
+- **Saves and open documents (work item 2.10, added within 1.3).** Two more client-to-host notifications, additive, the
+  version stays 1.3; a host without them (an earlier 1.3 build or 1.2) has no handler and drops them, and its file watcher
+  (or its next sweep) still sees the files. Neither side logs the paths.
+
+  Notification `documentSaved`, **client to host**, one positional argument: the saved document's full path (a string).
+  Sent at once for every save Visual Studio reports, not debounced and not deduplicated (the host compares hashes). The host
+  hands the file to the incremental indexer of the root it lies in, bypassing the watcher's 500 ms debounce, so it is
+  searchable within the 500 ms budget (Gate 2); a file outside every root the host owns, or excluded by the discovery rules,
+  is ignored.
+
+  Notification `openDocumentsChanged`, **client to host**, one positional argument: the full paths of every open document
+  (a string array; the documents opened since the extension's relay started). Sent after every handshake (possibly empty)
+  and, after 500 ms of quiet, whenever the set changes. A full indexing run (a branch switch's sweep) indexes the open ones
+  among its added and changed files first; the host forgets the set when the client disconnects.
 
 - **Search (work item 2.11).** `SearchAsync` is unchanged (a 1.2 client keeps calling it); the new
   `SearchDetailedAsync(SearchRequest)` returns the hits with timings.

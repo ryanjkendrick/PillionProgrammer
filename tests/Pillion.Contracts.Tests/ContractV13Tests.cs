@@ -30,7 +30,7 @@ public class ContractV13Tests
     private static readonly string[] Notifications = ["hostStateChanged", "connectivityChanged", "settingsChanged", "indexStatusChanged"];
 
     /// <summary>The notifications the VSIX sends to the host (method names on the host's JsonRpc).</summary>
-    private static readonly string[] ClientNotifications = ["ideActivityChanged"];
+    private static readonly string[] ClientNotifications = ["ideActivityChanged", "documentSaved", "openDocumentsChanged"];
 
     /// <summary>Every method contract 1.3 added, with its interface.</summary>
     public static TheoryData<Type, string> MethodsAddedIn13 => new()

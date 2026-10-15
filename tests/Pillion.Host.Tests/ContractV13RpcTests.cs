@@ -153,6 +153,24 @@ public sealed class ContractV13RpcTests : IDisposable
         await WaitUntilAsync(() => monitor.Current == IdeActivity.None);
     }
 
+    private static readonly string[] OpenPaths = [@"C:\src\App\Program.cs", @"C:\src\App\Startup.cs"];
+
+    [Fact]
+    public async Task TheSaveAndOpenDocumentNotifications_ReachTheIndexer_AndTheOpenSetIsForgottenWhenTheClientLeaves()
+    {
+        await using var host = await StartAsync();
+        var indexing = host.Services.GetRequiredService<Pillion.Host.Indexing.IndexingService>();
+        await using (var client = await host.ConnectAndHandshakeAsync())
+        {
+            await client.Rpc.NotifyAsync("openDocumentsChanged", new object[] { OpenPaths }).WaitAsync(Wait);
+            await WaitUntilAsync(() => indexing.OpenDocuments.Count == 2);
+            await client.Rpc.NotifyAsync("documentSaved", @"C:\src\App\Program.cs").WaitAsync(Wait);
+            await WaitUntilAsync(() => indexing.SavesReceived == 1);
+        }
+
+        await WaitUntilAsync(() => indexing.OpenDocuments.Count == 0);
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow + Wait;
