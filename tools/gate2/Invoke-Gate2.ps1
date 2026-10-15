@@ -426,9 +426,14 @@ finally {
                 $d['Summary'] = "settings.json restored, matches backup: $($r.MatchesBackup); gate indexes deleted: $($d['indexesRemoved'].Count); devenv left: $($left.Count); Pillion.Host left: $($d['hostsLeft'].Count); resident: $($d['residentAtEnd'] -join ', ')"
                 $d
             }))
-    $table = New-Gate2Table -Data $data -Steps $steps.ToArray() -VisualStudio $vs
-    $run['gate2Table'] = $table.Rows
-    Write-Gate0Results -Run $run -Steps $steps.ToArray() -Title "Gate 2 evidence run (VS$($vs.Major))" -FilePrefix 'gate2' -Preamble $table.Markdown
+    $preamble = $null
+    try {
+        $table = New-Gate2Table -Data $data -Steps $steps.ToArray() -VisualStudio $vs
+        $run['gate2Table'] = $table.Rows
+        $preamble = $table.Markdown
+    }
+    catch { $preamble = "The criteria table could not be built: $($_.Exception.Message) (line $($_.InvocationInfo.ScriptLineNumber))" }
+    Write-Gate0Results -Run $run -Steps $steps.ToArray() -Title "Gate 2 evidence run (VS$($vs.Major))" -FilePrefix 'gate2' -Preamble $preamble
 }
 
 $failedSteps = @($steps | Where-Object status -EQ 'Fail')
