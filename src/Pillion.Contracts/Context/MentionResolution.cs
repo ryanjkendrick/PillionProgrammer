@@ -22,7 +22,7 @@ public sealed class MentionResolution
     [DataMember(Order = 3)]
     public string? Content { get; set; }
 
-    /// <summary>Gets or sets the kind the mention resolved as: <c>file</c>, <c>folder</c>, <c>selection</c>, <c>errors</c> or <c>clipboard</c>.</summary>
+    /// <summary>Gets or sets the kind the mention resolved as, one of the <see cref="MentionKinds"/>.</summary>
     [DataMember(Order = 4)]
     public string Kind { get; set; } = string.Empty;
 
@@ -59,4 +59,12 @@ public sealed class MentionResolution
     /// </summary>
     [DataMember(Order = 11)]
     public bool IsSensitive { get; set; }
+
+    /// <summary>
+    /// Gets or sets the spans the content was built from (for example a symbol's definition and the references summarised,
+    /// or the chunks of a <c>docs</c> match), so the pin can open them; <see cref="Citation.ReplyOffset"/> is -1. Empty for
+    /// content that has no source location. Added in contract 1.3 (work item 2.13).
+    /// </summary>
+    [DataMember(Order = 12)]
+    public Citation[] Citations { get; set; } = [];
 }

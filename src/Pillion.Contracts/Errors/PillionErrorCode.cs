@@ -23,4 +23,17 @@ public enum PillionErrorCode
 
     /// <summary>The operation was cancelled.</summary>
     Cancelled,
+
+    /// <summary>
+    /// The Local Store (an encrypted database such as <c>conversations.db</c> or an <c>index.db</c>) could not be opened or
+    /// used: its key is missing or unreadable, it was written by a newer schema, a migration failed, or the encrypting SQLite
+    /// library is missing. Added in contract 1.3; a 1.2 host reported these as <see cref="PolicyDenied"/>.
+    /// </summary>
+    StorageUnavailable,
+
+    /// <summary>
+    /// The method is on the contract but this build of the host does not implement it yet (a later work item does). The
+    /// message names the feature. Added in contract 1.3.
+    /// </summary>
+    NotImplemented,
 }
