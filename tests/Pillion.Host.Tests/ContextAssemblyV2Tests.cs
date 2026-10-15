@@ -121,6 +121,7 @@ public sealed class ContextAssemblyV2Tests : IAsyncDisposable
         Assert.Equal((1, 2), (provider.Searches, provider.Reuses));
         var query = Assert.Single(retrieval.Queries);
         Assert.Equal(AutocompleteSnippetProvider.TimeBudget, query.TimeBudget);
+        Assert.Equal(RetrievalSearchMode.LexicalAndSymbol, query.Mode); // no query embedding: fits 100 ms with the bundled model on the CPU
         Assert.StartsWith("decimal ComputeTotal(Order order) ComputeTotal Order order", query.Text, StringComparison.Ordinal);
 
         // Leaving the member searches again, and so does the same member after 30 s.

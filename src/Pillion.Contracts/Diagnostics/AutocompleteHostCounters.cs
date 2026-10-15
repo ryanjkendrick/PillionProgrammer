@@ -102,6 +102,26 @@ public sealed class AutocompleteHostCounters
     /// </summary>
     [DataMember(Order = 21)]
     public ResidentModelInfo[] ResidentModels { get; set; } = [];
+
+    /// <summary>
+    /// Gets or sets the model requests since the host started whose document had an earlier model request to the same model, so
+    /// their prompt prefix could be compared with it (the denominator of <see cref="PromptPrefixReuseRate"/>). Added in
+    /// contract 1.3 (work item 2.12).
+    /// </summary>
+    [DataMember(Order = 22)]
+    public long PromptPrefixChecks { get; set; }
+
+    /// <summary>
+    /// Gets or sets how many of those requests sent a prompt prefix (retrieved snippets, header and code before the caret) that
+    /// starts with the previous request's for the same document and model, so a resident local model can reuse its cached
+    /// prompt (issue #47, option 1). Added in contract 1.3 (work item 2.12).
+    /// </summary>
+    [DataMember(Order = 23)]
+    public long PromptPrefixReuses { get; set; }
+
+    /// <summary>Gets or sets <see cref="PromptPrefixReuses"/> over <see cref="PromptPrefixChecks"/>, from 0 to 1; 0 before the first check. Added in contract 1.3 (work item 2.12).</summary>
+    [DataMember(Order = 24)]
+    public double PromptPrefixReuseRate { get; set; }
 }
 
 /// <summary>A local model that is loaded in its runtime (design section 6, Local model residency).</summary>

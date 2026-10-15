@@ -11,6 +11,8 @@ namespace Pillion.ModelGateway;
 /// <param name="Dropped">Cloud requests dropped at the hard limit.</param>
 /// <param name="Failed">Requests that failed.</param>
 /// <param name="Cancelled">Requests the caller cancelled (usually the next keystroke).</param>
+/// <param name="PromptPrefixChecks">Model requests whose document had an earlier model request to the same model (work item 2.12).</param>
+/// <param name="PromptPrefixReuses">Of those, the ones whose prompt prefix starts with the previous one's.</param>
 public sealed record AutocompleteCountersSnapshot(
     long Requests,
     long CacheHits,
@@ -19,10 +21,18 @@ public sealed record AutocompleteCountersSnapshot(
     long ModelRequests,
     long Dropped,
     long Failed,
-    long Cancelled)
+    long Cancelled,
+    long PromptPrefixChecks = 0,
+    long PromptPrefixReuses = 0)
 {
     /// <summary>Gets the share of cache lookups that hit (exact or type-through), or 0 before the first lookup.</summary>
     public double HitRate => CacheHits + TypeThroughHits + CacheMisses == 0 ? 0 : (CacheHits + TypeThroughHits) / (double)(CacheHits + TypeThroughHits + CacheMisses);
+
+    /// <summary>
+    /// Gets the share of compared model requests whose prompt prefix extended the previous one for the same document and model,
+    /// which a resident local model's prompt cache can reuse (issue #47, option 1), or 0 before the first comparison.
+    /// </summary>
+    public double PromptPrefixReuseRate => PromptPrefixChecks == 0 ? 0 : PromptPrefixReuses / (double)PromptPrefixChecks;
 }
 
 /// <summary>The gateway's autocomplete counters. Thread-safe; one per gateway (a singleton in Pillion Host).</summary>
@@ -33,7 +43,15 @@ public sealed class AutocompleteCounters
     private long _dropped;
     private long _failed;
     private long _cancelled;
+    private long _prefixChecks;
+    private long _prefixReuses;
     private AutocompleteCache? _cache;
+    private readonly object _prefixGate = new();
+    private readonly Dictionary<string, (string Prefix, long Stamp)> _lastPrefix = new(StringComparer.OrdinalIgnoreCase);
+    private long _prefixClock;
+
+    /// <summary>The most documents whose last prompt prefix is remembered.</summary>
+    public const int PrefixDocuments = 32;
 
     /// <summary>Records a received request.</summary>
     public void Request() => Interlocked.Increment(ref _requests);
@@ -50,6 +68,46 @@ public sealed class AutocompleteCounters
     /// <summary>Records a cancelled request.</summary>
     public void Cancelled() => Interlocked.Increment(ref _cancelled);
 
+    /// <summary>
+    /// Records the prompt prefix a model request sent for a document (work item 2.12): when the document had an earlier model
+    /// request to the same model, it counts one check, and one reuse when the new prefix starts with the previous one.
+    /// </summary>
+    /// <param name="document">The document's path (empty for none: nothing is recorded).</param>
+    /// <param name="model">The qualified model id (a cached prompt lives in one model).</param>
+    /// <param name="prefix">The text sent before the caret: snippets, header and the kept prefix.</param>
+    /// <returns><see langword="true"/> when it reused the previous prefix; <see langword="false"/> when it did not or there was none.</returns>
+    public bool PromptPrefix(string document, string model, string prefix)
+    {
+        ArgumentNullException.ThrowIfNull(prefix);
+        if (string.IsNullOrEmpty(document))
+        {
+            return false;
+        }
+
+        var key = model + "|" + document;
+        lock (_prefixGate)
+        {
+            var reused = false;
+            if (_lastPrefix.TryGetValue(key, out var last))
+            {
+                _prefixChecks++;
+                reused = prefix.StartsWith(last.Prefix, StringComparison.Ordinal);
+                if (reused)
+                {
+                    _prefixReuses++;
+                }
+            }
+
+            _lastPrefix[key] = (prefix, ++_prefixClock);
+            while (_lastPrefix.Count > PrefixDocuments)
+            {
+                _lastPrefix.Remove(_lastPrefix.MinBy(e => e.Value.Stamp).Key);
+            }
+
+            return reused;
+        }
+    }
+
     /// <summary>Gets a snapshot, including the cache's hit and miss counts.</summary>
     /// <returns>The snapshot.</returns>
     public AutocompleteCountersSnapshot Snapshot()
@@ -63,7 +121,9 @@ public sealed class AutocompleteCounters
             Interlocked.Read(ref _modelRequests),
             Interlocked.Read(ref _dropped),
             Interlocked.Read(ref _failed),
-            Interlocked.Read(ref _cancelled));
+            Interlocked.Read(ref _cancelled),
+            Interlocked.Read(ref _prefixChecks),
+            Interlocked.Read(ref _prefixReuses));
     }
 
     /// <summary>Attaches the cache whose hit and miss counts the snapshot reports.</summary>

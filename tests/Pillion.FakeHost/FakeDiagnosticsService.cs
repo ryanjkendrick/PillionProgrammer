@@ -3,7 +3,7 @@ using Pillion.Contracts;
 namespace Pillion.FakeHost;
 
 /// <summary>
-/// A canned <see cref="IDiagnosticsService"/>: empty autocomplete counters, the Outbound records of the chat requests this
+/// A canned <see cref="IDiagnosticsService"/>: empty autocomplete counters (from 1.3, a canned prompt-prefix reuse of 3 in 4), the Outbound records of the chat requests this
 /// fake host served (<see cref="FakeRecorder"/>), and a Context Inspector preview built from the request without a model
 /// (the system prompt, each pin, the current file and the message; a pin named with <c>huge</c> in it is reported as
 /// dropped, and a cloud model's preview counts one redaction per pin). From contract 1.3, a message containing <c>/cite</c>
@@ -13,7 +13,7 @@ namespace Pillion.FakeHost;
 internal sealed class FakeDiagnosticsService(FakeRecorder recorder) : IDiagnosticsService
 {
     public Task<AutocompleteHostCounters> GetAutocompleteCountersAsync(CancellationToken cancellationToken) =>
-        Task.FromResult(new AutocompleteHostCounters { WindowSeconds = 300 });
+        Task.FromResult(new AutocompleteHostCounters { WindowSeconds = 300, PromptPrefixChecks = 4, PromptPrefixReuses = 3, PromptPrefixReuseRate = 0.75 });
 
     public Task<OutboundRecordDto[]> GetOutboundRecordsAsync(int maxCount, CancellationToken cancellationToken)
     {

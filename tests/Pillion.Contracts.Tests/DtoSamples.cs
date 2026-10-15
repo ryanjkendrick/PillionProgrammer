@@ -161,6 +161,9 @@ internal static class DtoSamples
             PromptTokensEstimated = 4200,
             PromptTokensMax = 1010,
             ResidentModels = [new ResidentModelInfo { ProviderId = "ollama", ModelId = "qwen2.5-coder:7b", ContextLength = 4096, VramBytes = 4748056984, KeepAlive = "-1", IsPinned = true }],
+            PromptPrefixChecks = 40,
+            PromptPrefixReuses = 31,
+            PromptPrefixReuseRate = 0.775,
         },
         new ResidentModelInfo { ProviderId = "ollama", ModelId = "gemma4:e2b", ContextLength = 4096, VramBytes = 1708392447, KeepAlive = "-1", IsPinned = true },
         new OutboundRecordDto

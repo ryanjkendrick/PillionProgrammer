@@ -175,6 +175,55 @@ public sealed class AutocompleteSnippetTests
     }
 
     [Fact]
+    public async Task ThePromptPrefixReuseCounter_CountsModelRequestsThatExtendThePreviousPromptOfTheirDocument()
+    {
+        var source = new MemberSnippets();
+        using var harness = new GatewayHarness(withCloud: false, snippets: source);
+        harness.Settings.Routing.Profiles[Profile.LocalFast] = "local/qwen2.5-coder:14b";
+        harness.Reload();
+        harness.ListAll();
+        harness.Local!.Fim = (_, ct) => FakeProvider.Pieces(ct, "zzz"); // never typed through, so every new prefix reaches the model
+
+        async Task SendAsync(string prefix, string file, string id)
+        {
+            var request = GatewayHarness.CompletionRequest(prefix: Lines(0, 40) + prefix, suffix: "\n}", requestId: id);
+            request.FilePath = file;
+            request.CaretLine = 40;
+            request.EnclosingDeclaration = "decimal ComputeTotal(Order order)";
+            await harness.Gateway.CompleteAsync(request, CancellationToken.None).CollectAsync();
+        }
+
+        await SendAsync("return order.", @"C:\src\Calc.cs", "p1");   // first for the document: nothing to compare
+        await SendAsync("return order.L", @"C:\src\Calc.cs", "p2");  // extends it: reuse
+        await SendAsync("return order.Li", @"C:\src\Calc.cs", "p3"); // extends it: reuse
+        await SendAsync("return order.", @"C:\src\Calc.cs", "p4");   // backspaces: an exact cache hit, no model request
+        await SendAsync("return order.X", @"C:\src\Calc.cs", "p5");  // diverged: compared, not reused
+        await SendAsync("return total.", @"C:\src\Other.cs", "p6");  // another document: first for it
+
+        var counters = harness.Gateway.Counters.Snapshot();
+        Assert.Equal(5, counters.ModelRequests);
+        Assert.Equal(3, counters.PromptPrefixChecks);
+        Assert.Equal(2, counters.PromptPrefixReuses);
+        Assert.Equal(2 / 3.0, counters.PromptPrefixReuseRate, 6);
+    }
+
+    [Fact]
+    public void ThePromptPrefixCounter_KeepsModelsAndDocumentsApart()
+    {
+        var counters = new AutocompleteCounters();
+
+        Assert.False(counters.PromptPrefix("a.cs", "local/m1", "abc"));
+        Assert.False(counters.PromptPrefix("a.cs", "local/m2", "abcd")); // another model's cache
+        Assert.True(counters.PromptPrefix("a.cs", "local/m1", "abcd"));
+        Assert.False(counters.PromptPrefix(string.Empty, "local/m1", "abcde")); // no document: not recorded
+        Assert.False(counters.PromptPrefix("A.CS", "local/m1", "xbc")); // paths compare without case
+
+        var snapshot = counters.Snapshot();
+        Assert.Equal((2, 1), (snapshot.PromptPrefixChecks, snapshot.PromptPrefixReuses));
+        Assert.Equal(0, new AutocompleteCounters().Snapshot().PromptPrefixReuseRate);
+    }
+
+    [Fact]
     public async Task AFailingSnippetSource_DoesNotFailTheCompletion()
     {
         using var harness = new GatewayHarness(withCloud: false, snippets: new FailingSnippets());

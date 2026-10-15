@@ -256,6 +256,7 @@ public sealed class HybridRetrieverTests
     [InlineData(RetrievalSearchMode.Vector, false, true, false)]
     [InlineData(RetrievalSearchMode.Symbol, false, false, true)]
     [InlineData(RetrievalSearchMode.Hybrid, true, true, true)]
+    [InlineData(RetrievalSearchMode.LexicalAndSymbol, true, false, true)] // autocomplete snippets: no query embedding
     public async Task TheMode_RunsOnlyItsLegs(RetrievalSearchMode mode, bool lexical, bool vector, bool symbol)
     {
         var a = Chunk("src/A.cs");

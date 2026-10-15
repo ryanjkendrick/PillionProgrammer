@@ -190,4 +190,16 @@ public sealed class DiagnosticsRpcTests : IDisposable
 
         public IReadOnlyList<OutboundRecord> GetRecent() => [.. records];
     }
+    [Fact]
+    public void ThePromptPrefixReuseFigures_AreReported()
+    {
+        var counters = new AutocompleteCounters();
+        counters.PromptPrefix("a.cs", "local/m", "x");
+        counters.PromptPrefix("a.cs", "local/m", "xy");
+        counters.PromptPrefix("a.cs", "local/m", "z");
+
+        var report = DiagnosticsRpcService.Build(counters.Snapshot(), [], DateTimeOffset.UtcNow);
+
+        Assert.Equal((2, 1, 0.5), (report.PromptPrefixChecks, report.PromptPrefixReuses, report.PromptPrefixReuseRate));
+    }
 }

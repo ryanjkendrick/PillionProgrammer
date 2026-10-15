@@ -249,6 +249,9 @@ internal sealed class DiagnosticsRpcService : IDiagnosticsService
             PromptTokensCounted = counted.Sum(r => (long)r.EstimatedPromptTokens),
             PromptTokensEstimated = estimated.Sum(r => (long)r.EstimatedPromptTokens),
             PromptTokensMax = sent.Count == 0 ? 0 : sent.Max(r => r.EstimatedPromptTokens),
+            PromptPrefixChecks = counters.PromptPrefixChecks,
+            PromptPrefixReuses = counters.PromptPrefixReuses,
+            PromptPrefixReuseRate = counters.PromptPrefixReuseRate,
         };
     }
 

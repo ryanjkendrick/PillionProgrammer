@@ -553,6 +553,12 @@ public sealed partial class ModelGateway : IModelGateway
                     await attempt.StartAsync().ConfigureAwait(false);
                     model = candidate;
                     plan = candidatePlan;
+                    if (isAutocomplete)
+                    {
+                        // Issue #47 option 1: did this prompt extend the last one sent for the document, so the model's cache can reuse it?
+                        _counters.PromptPrefix(request.FilePath ?? string.Empty, candidate.QualifiedId, candidatePlan.Prompt.PromptPrefix);
+                    }
+
                     break;
                 }
                 catch (AutocompleteDroppedException)
