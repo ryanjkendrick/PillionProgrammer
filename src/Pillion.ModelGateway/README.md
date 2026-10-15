@@ -236,7 +236,9 @@ otherwise).
    has one request in flight per provider and is never retried.
 9. **Record.** Every completion writes an `OutboundRecord`: provider, model, locality, prompt tokens (counted when the
    family has a tokenizer, `PromptTokensCounted`), completion tokens, `CacheHit`, `TimeToFirstToken`, duration,
-   redaction count and outcome. `AutocompleteCounters.Snapshot()` (a singleton, also `ModelGateway.Counters`) reports
+   redaction count and outcome. `AutocompleteCounters.Snapshot()` (a singleton, also `ModelGateway.Counters`; from work item 2.12 also the prompt-prefix
+reuse checks, reuses and rate: model requests whose prompt prefix starts with the previous one for the same document and
+model) reports
    requests, exact and type-through hits, misses, model requests, drops, failures, cancellations and the hit rate.
 
 ### Token counting (`Tokens/`)

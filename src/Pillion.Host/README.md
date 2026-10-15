@@ -204,8 +204,11 @@ returns the same hits as `SearchDetailedAsync` without the timings. `SearchReque
 
 `CodeContextRetriever` is the part the prompt builders share: it honours `retrieval`, asks the catalog whether an index is
 open, runs `IRetrievalService.RetrieveAsync` (the retriever's own shape: 1-based lines, paths relative to the root) and maps
-hits to `ContextChunk`s; a failed search gives nothing. It resolves `IRetrievalService` lazily, because the question embedder
-goes through the gateway, which takes the autocomplete snippet source.
+hits to `ContextChunk`s; a failed search gives nothing. It resolves `IRetrievalService`, `IIndexCatalog` and
+`ISymbolGraphProvider` lazily: the question embedder and the indexing pipeline behind `LiveIndexCatalog` both go through the
+gateway, which takes the autocomplete snippet source. With the pipeline running, chunks and the repo map's graph come from
+the pipeline's own open index (`LiveIndexCatalog`); its read-only fallback skips the roots the pipeline has open, so no
+database gets a second opener.
 
 - **Chat, retrieved chunks** (`RetrievalContextSource`, an `IContextSource`): unless `RetrievalMode` is `Off`, the query is
   the user's latest message plus the identifiers of pinned selections, the focus files are the current file and the pinned
@@ -217,8 +220,9 @@ goes through the gateway, which takes the autocomplete snippet source.
   tokenizer; key `repoMap`. The read-only catalog carries no graphs, so the map appears once the indexing pipeline (2.9)
   supplies them.
 - **Autocomplete** (`AutocompleteSnippetProvider`, the gateway's `IAutocompleteSnippetSource`): the enclosing declaration
-  and the identifiers of the caret's lines, open documents as focus files, a 100 ms budget, chunks of other files only, at
-  most three; a degraded search gives none. The snippets are chosen once per document and enclosing member and reused for
+  and the identifiers of the caret's lines, open documents as focus files, the lexical and symbol legs only
+  (`RetrievalSearchMode.LexicalAndSymbol`: no query embedding, which with the bundled model on the CPU takes longer than the
+  budget), a 100 ms budget, chunks of other files only, at most three; a degraded search gives none. The snippets are chosen once per document and enclosing member and reused for
   every keystroke in it until the declaration changes or 30 s pass (one search in flight per member, detached from the
   keystroke's cancellation), so the prompt prefix stays the same; the gateway caches completions per snippet set.
 - **Inline edits** (`InlineEditRetrieval`, `IInlineEditContext`): the instruction and the identifiers of the code to edit,
