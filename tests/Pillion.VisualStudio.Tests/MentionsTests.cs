@@ -27,7 +27,16 @@ public sealed class MentionSyntaxTests
     [InlineData("@clipboard", "clipboard", "", false)]
     [InlineData("@file", "", "file", false)]
     [InlineData(@"@C:\src\A.cs", "", @"C:\src\A.cs", false)]
-    [InlineData("@symbol:OrderService", "", "symbol:OrderService", false)]
+    [InlineData("@symbol:OrderService", "symbol", "OrderService", true)]
+    [InlineData("@docs:guide", "docs", "guide", true)]
+    [InlineData("@solution", "solution", "", false)]
+    [InlineData("@git", "git", "", false)]
+    [InlineData("@git:log:5", "git", "log:5", true)]
+    [InlineData("@output:debug", "output", "debug", true)]
+    [InlineData("@build", "build", "", false)]
+    [InlineData("@tests", "tests", "", false)]
+    [InlineData("@symbol", "", "symbol", false)]
+    [InlineData("@terminal:x", "", "terminal:x", false)]
     [InlineData("Customer.cs", "", "Customer.cs", false)]
     public void Parse_ReadsNameAndKindValue(string text, string kind, string value, bool separator)
     {
@@ -173,7 +182,11 @@ public sealed class MentionPickerTests
         picker.Update("@", 1, Files);
 
         Assert.True(picker.IsOpen);
-        Assert.Equal(["@file", "@folder", "@selection", "@errors", "@clipboard"], picker.Items.Select(i => i.Label));
+        Assert.Equal(["@file", "@folder", "@symbol", "@docs", "@selection", "@errors", "@clipboard", "@solution", "@git", "@output", "@build", "@tests"], picker.Items.Select(i => i.Label));
+        Assert.All(picker.Items, i => Assert.NotEqual(string.Empty, i.Detail)); // every kind has its hint line
+        Assert.True(picker.Items[0].IsFirstInGroup);
+        Assert.All(picker.Items.Skip(1), i => Assert.False(i.IsFirstInGroup));
+        Assert.Equal(ChatStrings.MentionGroupKinds + ": @file, " + ChatStrings.MentionKindFile, picker.Items[0].AutomationName);
         Assert.Equal(0, picker.SelectedIndex);
         Assert.True(picker.Items[0].IsSelected);
         Assert.Equal(ChatStrings.MentionPickerHint, picker.Title);
@@ -232,7 +245,7 @@ public sealed class MentionPickerTests
         picker.Update("@", 1, Files);
 
         picker.Move(-1);
-        Assert.Equal(4, picker.SelectedIndex);
+        Assert.Equal(MentionSyntax.Kinds.Count - 1, picker.SelectedIndex);
         picker.Move(1);
         Assert.Equal(0, picker.SelectedIndex);
         Assert.Same(picker.Items[0], picker.SelectedItem);

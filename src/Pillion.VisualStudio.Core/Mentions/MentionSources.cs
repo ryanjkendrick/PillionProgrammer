@@ -65,7 +65,8 @@ public sealed class CurrentFileContext
 }
 
 /// <summary>
-/// What only Visual Studio knows, for <c>@selection</c>, <c>@clipboard</c>, <c>@errors</c> and the current file region. The
+/// What only Visual Studio knows, for <c>@selection</c>, <c>@clipboard</c>, <c>@errors</c>, <c>@output</c>, <c>@build</c>,
+/// <c>@tests</c> and the current file region. The
 /// implementation switches to the UI thread itself; callers may be on any thread.
 /// </summary>
 public interface IChatEditorContext
@@ -89,4 +90,20 @@ public interface IChatEditorContext
     /// <param name="cancellationToken">A token that cancels the call.</param>
     /// <returns>The JSON lines; empty when there are no diagnostics.</returns>
     Task<string> GetErrorsPayloadAsync(CancellationToken cancellationToken);
+
+    /// <summary>Gets the tail of an Output window pane for <c>@output</c> (work item 2.13).</summary>
+    /// <param name="pane">The pane: <c>Build</c>, <c>Debug</c> or <c>Tests</c> (or another pane's name).</param>
+    /// <param name="cancellationToken">A token that cancels the call.</param>
+    /// <returns>The last part of the pane's text, or <see langword="null"/> when the pane is missing or empty.</returns>
+    Task<string?> GetOutputPaneTextAsync(string pane, CancellationToken cancellationToken);
+
+    /// <summary>Gets the last build's outcome and output for <c>@build</c> (work item 2.13).</summary>
+    /// <param name="cancellationToken">A token that cancels the call.</param>
+    /// <returns>A summary line and the Build pane's tail as it was when the build finished, or <see langword="null"/> when no build has finished.</returns>
+    Task<string?> GetLastBuildAsync(CancellationToken cancellationToken);
+
+    /// <summary>Gets the last test results for <c>@tests</c> (work item 2.13).</summary>
+    /// <param name="cancellationToken">A token that cancels the call.</param>
+    /// <returns>The failing tests with their stack traces when Visual Studio exposes them, else the Tests pane's tail; <see langword="null"/> when there is nothing.</returns>
+    Task<string?> GetTestResultsAsync(CancellationToken cancellationToken);
 }

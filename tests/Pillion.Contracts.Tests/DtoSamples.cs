@@ -270,6 +270,12 @@ internal static class DtoSamples
             IsInUse = true,
             IsOpen = true,
         },
+        new WorkspaceDescription
+        {
+            SolutionPath = @"C:\src\Shop\Shop.sln",
+            ProjectPaths = [@"C:\src\Shop\Api\Api.csproj", @"C:\src\Shop\Web\Web.csproj"],
+            FolderPath = @"C:\src\Shop",
+        },
         Cite(17),
         new ConversationListRequest { Offset = 50, Limit = 25 },
         Summary(),

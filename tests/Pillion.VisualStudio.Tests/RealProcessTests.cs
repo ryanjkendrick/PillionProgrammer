@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Microsoft.VisualStudio.Threading;
 using Pillion.Contracts;
 using Pillion.VisualStudio.Core;
+using Pillion.VisualStudio.Core.Signals;
 
 namespace Pillion.VisualStudio.Tests;
 
@@ -461,6 +462,33 @@ public sealed class RealProcessTests : IDisposable
         Assert.Contains(indexes, i => i.RootExists == false);
         Assert.True(await context.DeleteIndexAsync(root.IndexId, CancellationToken.None));
         await Wait.UntilAsync(() => statuses.Last().Roots.Length == 0, "the deletion was pushed");
+    }
+
+    [Fact]
+    public async Task IndexingRelay_TellsTheFakeHostTheWorkspaceAndTheActivity_OverTheRealWire()
+    {
+        Assert.True(File.Exists(FakeHostPath), "Build tests/Pillion.FakeHost first: " + FakeHostPath);
+        using var supervisor = CreateSupervisor(new RestartPolicy());
+        using var hub = new IdeSignalsHub(SystemClock.Instance, _log);
+        var workspace = new FakeWorkspaceSource();
+        workspace.Set(new WorkspaceDescription { SolutionPath = @"C:\fake\App.sln", ProjectPaths = [@"C:\fake\App\App.csproj", @"C:\fake\Lib\Lib.csproj"] }, raise: false);
+        using var relay = new IndexingRelay(supervisor, hub, workspace, activity: null, SystemClock.Instance, _log);
+        relay.Start();
+        supervisor.Start();
+        await supervisor.WhenReadyAsync(CancellationToken.None).WithTimeout(TimeSpan.FromSeconds(30));
+
+        // The fake host reports what it received on stderr, which the launcher copies into the log.
+        await Wait.UntilAsync(() => LogText.Contains("fakehost: ide activity None"), "the host received the activity set");
+        await Wait.UntilAsync(() => LogText.Contains("fakehost: workspace solution with 2 projects"), "the host received the workspace");
+
+        hub.NotifyBuildStarted();
+        await Wait.UntilAsync(() => LogText.Contains("fakehost: ide activity Build"), "the host received the build flag");
+        hub.NotifyBuildFinished(success: true);
+        await Wait.UntilAsync(() => LogText.Split('\n').Count(l => l.Contains("fakehost: ide activity None")) == 2, "the host received the end of the build");
+
+        await supervisor.ShutdownAsync(TimeSpan.FromSeconds(2));
+        Assert.Contains("indexing.workspace.sent", LogText);
+        Assert.DoesNotContain(LogText.Split('\n'), l => l.Contains("indexing.") && l.Contains(@"C:\fake")); // Counts only, never file names.
     }
 
     private HostProcessLauncher CreateLauncher() => new(

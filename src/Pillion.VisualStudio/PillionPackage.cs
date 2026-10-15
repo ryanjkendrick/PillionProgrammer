@@ -74,6 +74,7 @@ public sealed class PillionPackage : AsyncPackage
     private AutocompleteFeature? _autocomplete;
     private InlineChatFeature? _inlineChat;
     private IdeSignalsFeature? _signals;
+    private IndexingRelayFeature? _indexing;
     private HostFeatureFlag? _workspaceQueriesFlag;
     private RoslynWorkspaceQueryEngine? _workspaceQueryEngine;
     private WorkspaceQueryService? _workspaceQueries;
@@ -151,6 +152,8 @@ public sealed class PillionPackage : AsyncPackage
         var signals = new IdeSignalsFeature(JoinableTaskFactory, log);
         _signals = signals;
         AddService(typeof(IIdeSignals), (container, token, type) => Task.FromResult<object?>(signals.Hub), promote: true);
+        var indexing = new IndexingRelayFeature(JoinableTaskFactory, supervisor, signals.Hub, log); // Work item 2.9: what to index, when to pause.
+        _indexing = indexing;
         Instance = this;
 
         // The Output pane is created on its first write (on the UI thread, by the writer), not here. Until then lines wait
@@ -212,6 +215,7 @@ public sealed class PillionPackage : AsyncPackage
         autocomplete.Start();
         inlineChat.Start();
         _ = JoinableTaskFactory.RunAsync(() => signals.StartAsync(this, DisposalToken, startupOver));
+        _ = JoinableTaskFactory.RunAsync(() => indexing.StartAsync(this, DisposalToken, startupOver));
         workspaceQueriesFlag.Start();
         _ = JoinableTaskFactory.RunAsync(() => WarmUpWorkspaceQueriesAsync(startupOver));
         _ = JoinableTaskFactory.RunAsync(() => CheckIntelliCodeAsync(DisposalToken));
@@ -294,6 +298,8 @@ public sealed class PillionPackage : AsyncPackage
             _autocomplete = null;
             _inlineChat?.Dispose();
             _inlineChat = null;
+            _indexing?.Dispose(); // Before the signals: the relay listens to the hub's build state.
+            _indexing = null;
             _signals?.Dispose();
             _signals = null;
             _workspaceQueriesFlag?.Dispose();

@@ -143,6 +143,32 @@ internal sealed class HostRpcSession : IHostSession
         return (T)_proxies.GetOrAdd(typeof(T), _ => _rpc.Attach<T>());
     }
 
+    /// <inheritdoc/>
+    public async Task<bool> NotifyAsync(string method, object? argument)
+    {
+        if (string.IsNullOrEmpty(method))
+        {
+            throw new ArgumentException("A notification name is required.", nameof(method));
+        }
+
+        if (Volatile.Read(ref _disposed) != 0 || _completion.Task.IsCompleted)
+        {
+            return false;
+        }
+
+        try
+        {
+            // An explicit array: exactly one positional argument, even when it is null or itself an array.
+            await _rpc.NotifyAsync(method, new[] { argument }).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex) when (ex is ConnectionLostException or ObjectDisposedException or System.IO.IOException)
+        {
+            _log.Debug("host.notify_failed", "A notification to the host was not sent; the connection is gone.", ("method", method), ("error", ex.GetType().Name));
+            return false;
+        }
+    }
+
     /// <summary>Performs the handshake and reads the host's initial state.</summary>
     /// <param name="processId">The devenv.exe process id to report.</param>
     /// <param name="timeout">How long to wait for the host to answer.</param>

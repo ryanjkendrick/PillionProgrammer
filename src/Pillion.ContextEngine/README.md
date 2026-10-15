@@ -3,8 +3,10 @@
 The Context Engine library (design section 7). It holds the **chunkers** (phase 2, work item 2.4), **symbols and the
 repo map** (work item 2.5, [below](#symbols-and-the-repo-map)) and **hybrid retrieval** (work item 2.11,
 [below](#hybrid-retrieval)). It is a .NET 10 class library with no Visual Studio dependency. Pillion Host references it
-for retrieval (behind `features.retrieval`); the indexing pipeline (work item 2.9) wires the chunkers and symbols in
-behind `features.indexing`.
+for retrieval (behind `features.retrieval`) and for the indexing pipeline (work item 2.9, `src/Pillion.Host/Indexing`),
+which chunks files and extracts their symbols with it behind `features.indexing`. The tree-sitter native libraries reach
+the host's output and its published `runtimes\<rid>\native\` folder through the project reference (the host's publish
+keeps only its own runtime's).
 
 ## Versions
 

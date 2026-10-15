@@ -121,6 +121,37 @@ public sealed class FilesRepository
             cancellationToken);
     }
 
+    /// <summary>
+    /// Stores files inside a write transaction the caller already holds (the indexing pipeline stores a file's row, chunks,
+    /// vectors and symbols in one transaction). Same rules as <see cref="UpsertAsync"/>.
+    /// </summary>
+    /// <param name="connection">The writer connection of the index database.</param>
+    /// <param name="transaction">The open write transaction.</param>
+    /// <param name="records">The records to store.</param>
+    /// <param name="cancellationToken">Cancels between records.</param>
+    /// <returns>The stored rows, with their ids.</returns>
+    public IReadOnlyList<FileRecord> Upsert(SqliteConnection connection, SqliteTransaction transaction, IEnumerable<FileRecord> records, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        ArgumentNullException.ThrowIfNull(records);
+        return Upsert(connection, transaction, records.ToList(), _time.GetUtcNow().ToUnixTimeMilliseconds(), cancellationToken);
+    }
+
+    /// <summary>Deletes files by path inside a write transaction the caller already holds; see <see cref="DeleteAsync"/>.</summary>
+    /// <param name="connection">The writer connection of the index database.</param>
+    /// <param name="transaction">The open write transaction.</param>
+    /// <param name="paths">The paths relative to the root.</param>
+    /// <param name="cancellationToken">Cancels between paths.</param>
+    /// <returns>The number of rows deleted.</returns>
+    public static int Delete(SqliteConnection connection, SqliteTransaction transaction, IEnumerable<string> paths, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        ArgumentNullException.ThrowIfNull(paths);
+        return Delete(connection, transaction, paths.ToList(), cancellationToken);
+    }
+
     private static List<FileRecord> Upsert(SqliteConnection connection, SqliteTransaction transaction, List<FileRecord> records, long now, CancellationToken cancellationToken)
     {
         var stored = new List<FileRecord>(records.Count);

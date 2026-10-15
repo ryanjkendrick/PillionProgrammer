@@ -48,3 +48,8 @@ public sealed class SweepResult
     /// <summary>Gets a value indicating whether anything needs to be stored or removed.</summary>
     public bool HasChanges => Added.Count + Changed.Count + Touched.Count + Deleted.Count > 0;
 }
+
+/// <summary>How far a sweep has got.</summary>
+/// <param name="FilesSeen">Files and excluded directories the walk has met so far.</param>
+/// <param name="FilesHashed">Files opened and hashed so far.</param>
+public readonly record struct SweepProgress(int FilesSeen, int FilesHashed);

@@ -78,6 +78,8 @@ The chunkers, symbol extraction, storage and retrieval code live in a new `src/P
 | 2026-10-15 | The reranker ships only behind a flag, off by default, after the licence review in section 18 | The review has not happened and the budgets hold without it |
 | 2026-10-15 | Gemini embeddings (issue #61) are done in 2.6 with the other adapters | One pass over the embedding abstraction is cheaper than two |
 | 2026-10-15 | Contract 1.3 is one minor bump at the wave boundary with the conversation service, index progress fields and the citation fields of chat chunks | Same batching rule as phase 1: majors must match, minors only add |
+| 2026-10-15 | Work item 2.9, at the lead's request: contract 1.3 also gains `IContextService.SetWorkspaceAsync(WorkspaceDescription)` and the client-to-host notification `ideActivityChanged` (an `IdeActivity` flags set), additively, without a version change | The host had no way to learn the open solution or when the IDE builds, tests or debugs, both of which the pipeline needs; additions only, so 1.2 and earlier 1.3 peers still interoperate |
+| 2026-10-15 | Work item 2.9: a host that only reads an index does not forward update requests to the owner; it re-sweeps when it takes the index over from a dead owner, and refuses a rebuild with `PolicyDenied` | Forwarding needs a host-to-host handshake on the owner's pipe that does not exist; the takeover sweep makes the index correct without it. Item 2.10 can add forwarding |
 
 ## Decisions needed from the product owner during phase 2
 

@@ -13,7 +13,7 @@ public class InterfaceShapeTests
         [typeof(IContextService)] =
         [
             "SearchAsync", "ResolveMentionAsync", "GetIndexStatusAsync", "PauseIndexingAsync",
-            "SearchDetailedAsync", "ListExcludedFilesAsync", "RebuildIndexAsync", "DeleteIndexAsync", "ListIndexesAsync",
+            "SearchDetailedAsync", "ListExcludedFilesAsync", "RebuildIndexAsync", "DeleteIndexAsync", "ListIndexesAsync", "SetWorkspaceAsync",
         ],
         [typeof(IAgentService)] = ["StartSessionAsync", "ApproveAsync", "DenyAsync", "StopAsync", "RevertAsync"],
         [typeof(ISettingsService)] = ["GetAsync", "SetAsync", "TestProviderAsync"],
@@ -128,6 +128,12 @@ public class InterfaceShapeTests
     public void IndexPauseReason_HasExpectedMembers()
     {
         Assert.Equal(["None", "User", "Build", "Test", "Debug", "Battery", "Memory", "LowDisk"], Enum.GetNames<IndexPauseReason>());
+    }
+
+    [Fact]
+    public void IdeActivity_HasExpectedFlags()
+    {
+        Assert.Equal([("None", 0), ("Build", 1), ("Debug", 2), ("Test", 4)], Enum.GetValues<IdeActivity>().Select(a => (a.ToString(), (int)a)));
     }
 
     [Fact]

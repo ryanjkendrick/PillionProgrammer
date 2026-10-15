@@ -20,6 +20,8 @@
     <!-- Roslyn's C# and VB parsers, for syntax validation of inline edits (no compilation; see Directory.Packages.props). -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
     <PackageReference Include="Microsoft.CodeAnalysis.VisualBasic" />
+    <!-- @git mentions (work item 2.13): diffs and commits through libgit2; its native git2-*.dll ships in the publish. -->
+    <PackageReference Include="LibGit2Sharp" />
   </ItemGroup>
 
   <ItemGroup>
@@ -27,6 +29,8 @@
     <ProjectReference Include="..\Pillion.Common\Pillion.Common.csproj" />
     <ProjectReference Include="..\Pillion.ModelGateway\Pillion.ModelGateway.csproj" />
     <ProjectReference Include="..\Pillion.LocalStore\Pillion.LocalStore.csproj" />
+    <!-- The indexing pipeline (work item 2.9): discovery, hashing and ownership, then chunkers and symbols. The Context Engine
+         brings the tree-sitter native libraries under runtimes\<rid>\native\, which flow into the host's output and publish. -->
     <ProjectReference Include="..\Pillion.Indexing\Pillion.Indexing.csproj" />
     <!-- The symbol graph's approximate reference edges, the fallback of the workspace queries (work item 2.14). -->
     <ProjectReference Include="..\Pillion.ContextEngine\Pillion.ContextEngine.csproj" />
@@ -35,5 +39,18 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Pillion.Host.Tests" />
   </ItemGroup>
+
+  <!--
+    The Context Engine copies its tree-sitter libraries for win-x64 and win-arm64 into every project that references it. A
+    publish for one runtime keeps only that runtime's copy (about 13 MB each), so the win-x64 host in the VSIX carries no
+    Arm64 grammars.
+  -->
+  <Target Name="PillionKeepOneTreeSitterRuntime" AfterTargets="ComputeResolvedFilesToPublishList" Condition="'$(RuntimeIdentifier)' != ''">
+    <ItemGroup>
+      <_PillionTreeSitterPublished Include="@(ResolvedFileToPublish)" Condition="$([System.String]::Copy('%(Filename)').StartsWith('tree-sitter'))" />
+      <_PillionOtherTreeSitter Include="@(_PillionTreeSitterPublished)" Condition="!$([System.String]::Copy('%(RelativePath)').Replace('/', '\').StartsWith('runtimes\$(RuntimeIdentifier)\'))" />
+      <ResolvedFileToPublish Remove="@(_PillionOtherTreeSitter)" />
+    </ItemGroup>
+  </Target>
 
 </Project>

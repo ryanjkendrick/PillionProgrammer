@@ -182,6 +182,84 @@ public static class ChatStrings
     /// <summary>Gets the string: Description of @clipboard in the picker.</summary>
     public static string MentionKindClipboard => Get(nameof(MentionKindClipboard));
 
+    /// <summary>Gets the heading of the mention kinds in the picker.</summary>
+    public static string MentionGroupKinds => Get(nameof(MentionGroupKinds));
+
+    /// <summary>Gets the heading of the files in the picker.</summary>
+    public static string MentionGroupFiles => Get(nameof(MentionGroupFiles));
+
+    /// <summary>Gets the heading of the folders in the picker.</summary>
+    public static string MentionGroupFolders => Get(nameof(MentionGroupFolders));
+
+    /// <summary>Gets the heading of the symbols in the picker.</summary>
+    public static string MentionGroupSymbols => Get(nameof(MentionGroupSymbols));
+
+    /// <summary>Gets the heading of the documents in the picker.</summary>
+    public static string MentionGroupDocs => Get(nameof(MentionGroupDocs));
+
+    /// <summary>Gets the heading of the @git options in the picker.</summary>
+    public static string MentionGroupGit => Get(nameof(MentionGroupGit));
+
+    /// <summary>Gets the heading of the @output options in the picker.</summary>
+    public static string MentionGroupOutput => Get(nameof(MentionGroupOutput));
+
+    /// <summary>Gets the description of @symbol in the picker.</summary>
+    public static string MentionKindSymbol => Get(nameof(MentionKindSymbol));
+
+    /// <summary>Gets the description of @docs in the picker.</summary>
+    public static string MentionKindDocs => Get(nameof(MentionKindDocs));
+
+    /// <summary>Gets the description of @solution in the picker.</summary>
+    public static string MentionKindSolution => Get(nameof(MentionKindSolution));
+
+    /// <summary>Gets the description of @git in the picker.</summary>
+    public static string MentionKindGit => Get(nameof(MentionKindGit));
+
+    /// <summary>Gets the description of @output in the picker.</summary>
+    public static string MentionKindOutput => Get(nameof(MentionKindOutput));
+
+    /// <summary>Gets the description of @build in the picker.</summary>
+    public static string MentionKindBuild => Get(nameof(MentionKindBuild));
+
+    /// <summary>Gets the description of @tests in the picker.</summary>
+    public static string MentionKindTests => Get(nameof(MentionKindTests));
+
+    /// <summary>Gets the picker title after @symbol: is typed.</summary>
+    public static string MentionPickerSymbolHint => Get(nameof(MentionPickerSymbolHint));
+
+    /// <summary>Gets the picker title after @docs: is typed.</summary>
+    public static string MentionPickerDocsHint => Get(nameof(MentionPickerDocsHint));
+
+    /// <summary>Gets the picker title after @git: is typed.</summary>
+    public static string MentionPickerGitHint => Get(nameof(MentionPickerGitHint));
+
+    /// <summary>Gets the picker title after @output: is typed.</summary>
+    public static string MentionPickerOutputHint => Get(nameof(MentionPickerOutputHint));
+
+    /// <summary>Gets the detail of the entry that resolves the typed name as written; {0} is the name.</summary>
+    public static string MentionTypedValueFormat => Get(nameof(MentionTypedValueFormat));
+
+    /// <summary>Gets the title of the sub-picker for an ambiguous symbol; {0} is the mention.</summary>
+    public static string MentionSymbolCandidatesTitleFormat => Get(nameof(MentionSymbolCandidatesTitleFormat));
+
+    /// <summary>Gets the detail of the working-tree diff option.</summary>
+    public static string MentionGitDiff => Get(nameof(MentionGitDiff));
+
+    /// <summary>Gets the detail of the staged changes option.</summary>
+    public static string MentionGitStaged => Get(nameof(MentionGitStaged));
+
+    /// <summary>Gets the detail of the log option; {0} is the number of commits.</summary>
+    public static string MentionGitLogFormat => Get(nameof(MentionGitLogFormat));
+
+    /// <summary>Gets the detail of the Build pane option.</summary>
+    public static string MentionOutputBuild => Get(nameof(MentionOutputBuild));
+
+    /// <summary>Gets the detail of the Debug pane option.</summary>
+    public static string MentionOutputDebug => Get(nameof(MentionOutputDebug));
+
+    /// <summary>Gets the detail of the Tests pane option.</summary>
+    public static string MentionOutputTests => Get(nameof(MentionOutputTests));
+
     /// <summary>Gets the string: Shown under the input when resolving a mention failed without a reason.</summary>
     public static string MentionFailed => Get(nameof(MentionFailed));
 

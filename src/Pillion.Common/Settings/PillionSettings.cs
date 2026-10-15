@@ -222,6 +222,18 @@ public sealed class IndexingSettings : SettingsNode
     public int RetentionDays { get; set; } = 30;
 }
 
+/// <summary>Chat mention settings (design section 7, Context pinning with @-mentions).</summary>
+public sealed class MentionsSettings : SettingsNode
+{
+    /// <summary>
+    /// Gets or sets folders of documentation outside the open repositories that <c>@docs</c> also searches (work item 2.13):
+    /// full paths, or paths relative to the first open workspace root. Their Markdown and text files are matched by name and
+    /// read from disk (they are not indexed); files the exclusion globs or the secret-file rules refuse are skipped. Empty by
+    /// default, so <c>@docs</c> covers only the documentation in the open repositories.
+    /// </summary>
+    public List<string> DocsFolders { get; set; } = [];
+}
+
 /// <summary>Logging settings.</summary>
 public sealed class LoggingSettings : SettingsNode
 {
@@ -264,6 +276,9 @@ public sealed class PillionSettings : SettingsNode
 
     /// <summary>Gets or sets the indexing settings.</summary>
     public IndexingSettings Indexing { get; set; } = new();
+
+    /// <summary>Gets or sets the chat mention settings.</summary>
+    public MentionsSettings Mentions { get; set; } = new();
 
     /// <summary>Gets or sets the logging settings.</summary>
     public LoggingSettings Logging { get; set; } = new();

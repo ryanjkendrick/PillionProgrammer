@@ -35,7 +35,7 @@ public sealed class MentionToken
 public sealed class ParsedMention
 {
     /// <summary>Initializes a new instance of the <see cref="ParsedMention"/> class.</summary>
-    /// <param name="kind">The kind (<c>file</c>, <c>folder</c>, <c>selection</c>, <c>errors</c>, <c>clipboard</c>), or empty for a bare name.</param>
+    /// <param name="kind">One of <see cref="MentionSyntax.Kinds"/>, or empty for a bare name.</param>
     /// <param name="value">The value after the kind, or the bare name.</param>
     /// <param name="hasKindSeparator">Whether the text had <c>kind:</c> (so the user chose the kind).</param>
     public ParsedMention(string kind, string value, bool hasKindSeparator)
@@ -57,8 +57,10 @@ public sealed class ParsedMention
 
 /// <summary>
 /// The <c>@</c>-mention grammar of the chat input (design section 7, Context pinning): <c>@</c> followed by a fuzzy name
-/// pins a file or folder (<c>@Customer.cs</c>); <c>@kind:value</c> disambiguates (<c>@folder:src/Api</c>); the kinds without
-/// a value are <c>@selection</c>, <c>@errors</c> and <c>@clipboard</c>.
+/// pins a file or folder (<c>@Customer.cs</c>); <c>@kind:value</c> disambiguates (<c>@folder:src/Api</c>,
+/// <c>@symbol:OrderService</c>); the kinds without a value are <c>@selection</c>, <c>@errors</c>, <c>@clipboard</c>,
+/// <c>@solution</c>, <c>@build</c> and <c>@tests</c>, and <c>@git</c> and <c>@output</c> take an optional one
+/// (<c>@git:staged</c>, <c>@git:log:5</c>, <c>@output:debug</c>). Work item 2.13 added the kinds after <c>@clipboard</c>.
 /// </summary>
 public static class MentionSyntax
 {
@@ -77,13 +79,67 @@ public static class MentionSyntax
     /// <summary>The <c>clipboard</c> kind.</summary>
     public const string Clipboard = "clipboard";
 
-    /// <summary>Gets the kinds, in the order the picker lists them.</summary>
-    public static IReadOnlyList<string> Kinds { get; } = [File, Folder, Selection, Errors, Clipboard];
+    /// <summary>The <c>symbol</c> kind: a definition and a summary of its references.</summary>
+    public const string Symbol = "symbol";
 
-    /// <summary>Determines whether a kind takes a value (<c>file</c> and <c>folder</c>).</summary>
+    /// <summary>The <c>docs</c> kind: Markdown and text documentation.</summary>
+    public const string Docs = "docs";
+
+    /// <summary>The <c>solution</c> kind: the repo map.</summary>
+    public const string Solution = "solution";
+
+    /// <summary>The <c>git</c> kind: the working-tree diff, the staged changes or the last commits.</summary>
+    public const string Git = "git";
+
+    /// <summary>The <c>output</c> kind: a pane of the Output window.</summary>
+    public const string Output = "output";
+
+    /// <summary>The <c>build</c> kind: the last build's output.</summary>
+    public const string Build = "build";
+
+    /// <summary>The <c>tests</c> kind: the last test results.</summary>
+    public const string Tests = "tests";
+
+    /// <summary>The characters that separate an option from its count (<c>log:5</c>, <c>log 5</c>).</summary>
+    internal static readonly char[] OptionSeparators = [':', ' ', ','];
+
+    /// <summary>Gets the kinds, in the order the picker lists them.</summary>
+    public static IReadOnlyList<string> Kinds { get; } = [File, Folder, Symbol, Docs, Selection, Errors, Clipboard, Solution, Git, Output, Build, Tests];
+
+    /// <summary>Determines whether a kind takes a value (<c>file</c>, <c>folder</c>, <c>symbol</c> and <c>docs</c>), so a bare word is a fuzzy name.</summary>
     /// <param name="kind">The kind.</param>
-    /// <returns><see langword="true"/> for <c>file</c> and <c>folder</c>.</returns>
-    public static bool TakesValue(string kind) => kind is File or Folder;
+    /// <returns><see langword="true"/> for the kinds that name something.</returns>
+    public static bool TakesValue(string kind) => kind is File or Folder or Symbol or Docs;
+
+    /// <summary>Determines whether a kind takes an optional value from a short list (<c>git</c> and <c>output</c>).</summary>
+    /// <param name="kind">The kind.</param>
+    /// <returns><see langword="true"/> for <c>git</c> and <c>output</c>.</returns>
+    public static bool HasOptions(string kind) => kind is Git or Output;
+
+    /// <summary>Determines whether picking a kind in the picker types <c>@kind:</c> and lists its values (rather than pinning it at once).</summary>
+    /// <param name="kind">The kind.</param>
+    /// <returns><see langword="true"/> for the kinds that take a value or an option.</returns>
+    public static bool OpensSubPicker(string kind) => TakesValue(kind) || HasOptions(kind);
+
+    /// <summary>Determines whether a conversation holds at most one pin of a kind (its content has no name or option).</summary>
+    /// <param name="kind">The kind.</param>
+    /// <returns><see langword="true"/> for <c>selection</c>, <c>errors</c>, <c>clipboard</c>, <c>solution</c>, <c>build</c> and <c>tests</c>.</returns>
+    public static bool IsSingleton(string kind) => kind is Selection or Errors or Clipboard or Solution or Build or Tests;
+
+    /// <summary>The arguments a mention sends (<see cref="Contracts.MentionRequest.Arguments"/>): the option of <c>git</c> and <c>output</c>.</summary>
+    /// <param name="parsed">The parsed mention.</param>
+    /// <returns><c>["log", "5"]</c> for <c>@git:log:5</c>, <c>["debug"]</c> for <c>@output:debug</c>; empty otherwise.</returns>
+    public static string[] ArgumentsOf(ParsedMention parsed)
+    {
+        if (parsed is null || !HasOptions(parsed.Kind) || parsed.Value.Length == 0)
+        {
+            return [];
+        }
+
+        return parsed.Kind == Output
+            ? [parsed.Value]
+            : parsed.Value.Split(OptionSeparators, StringSplitOptions.RemoveEmptyEntries);
+    }
 
     /// <summary>Reads a mention with the grammar.</summary>
     /// <param name="mention">The mention, with or without its leading <c>@</c>.</param>
@@ -118,7 +174,7 @@ public static class MentionSyntax
     /// <summary>Determines whether a word is one of <see cref="Kinds"/>.</summary>
     /// <param name="word">The word (lower case).</param>
     /// <returns><see langword="true"/> for a kind.</returns>
-    public static bool IsKind(string word) => word is File or Folder or Selection or Errors or Clipboard;
+    public static bool IsKind(string word) => word is File or Folder or Selection or Errors or Clipboard or Symbol or Docs or Solution or Git or Output or Build or Tests;
 
     /// <summary>
     /// Finds the mention being typed at the caret: an <c>@</c> at the start of the input or after white space or an

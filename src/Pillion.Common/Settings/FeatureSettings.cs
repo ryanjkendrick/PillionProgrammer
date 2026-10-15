@@ -58,8 +58,10 @@ public static class FeatureNames
 
     /// <summary>Workspace queries: <c>find_references</c> and <c>callers_of</c> answered by the live Roslyn workspace in Visual Studio (<c>IWorkspaceQueryService</c>), with the index's approximate edges as the fallback (work item 2.14).</summary>
     public const string WorkspaceQueries = "workspaceQueries";
+
     /// <summary>The Index window, its status bar indicator and the Indexing options page in Visual Studio (work item 2.15).</summary>
     public const string IndexWindow = "indexWindow";
+
     /// <summary>Hybrid retrieval: <c>IContextService.SearchAsync</c> and <c>SearchDetailedAsync</c> over the open indexes (work item 2.11). An index also needs <see cref="Indexing"/> and <see cref="LocalStore"/>.</summary>
     public const string Retrieval = "retrieval";
 

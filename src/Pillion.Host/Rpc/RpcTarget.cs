@@ -20,6 +20,35 @@ internal interface IRpcTarget
     object GetTarget(IServiceProvider services);
 }
 
+/// <summary>
+/// A notification the server accepts from the VSIX on every authenticated connection (client to host, no response), for
+/// example <c>ideActivityChanged</c>. Register one with
+/// <see cref="RpcTargetServiceCollectionExtensions.AddRpcNotification"/>; like requests, it is only dispatched after the
+/// handshake has been accepted.
+/// </summary>
+internal interface IRpcNotificationTarget
+{
+    /// <summary>Gets the notification (method) name.</summary>
+    string Name { get; }
+
+    /// <summary>Gets the handler; its parameters are the notification's positional arguments. Called once per connection.</summary>
+    /// <param name="services">The host's service provider.</param>
+    /// <returns>The handler.</returns>
+    Delegate GetHandler(IServiceProvider services);
+}
+
+/// <summary>An <see cref="IRpcNotificationTarget"/> resolved through a factory.</summary>
+/// <param name="name">The notification name.</param>
+/// <param name="factory">Returns the handler; called once per connection.</param>
+internal sealed class RpcNotificationRegistration(string name, Func<IServiceProvider, Delegate> factory) : IRpcNotificationTarget
+{
+    /// <inheritdoc/>
+    public string Name { get; } = name;
+
+    /// <inheritdoc/>
+    public Delegate GetHandler(IServiceProvider services) => factory(services);
+}
+
 /// <summary>An <see cref="IRpcTarget"/> resolved through a factory.</summary>
 /// <param name="contractType">The contract interface.</param>
 /// <param name="factory">Resolves the implementation; called once per connection.</param>
@@ -89,6 +118,20 @@ internal static class RpcTargetServiceCollectionExtensions
         }
 
         services.AddSingleton<IRpcTarget>(new RpcTargetRegistration(contract, sp => factory(sp)));
+        return services;
+    }
+
+    /// <summary>Accepts a client-to-host notification on every authenticated connection.</summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="name">The notification name.</param>
+    /// <param name="factory">Returns the handler (its parameters are the positional arguments); called once per connection.</param>
+    /// <returns>The same service collection.</returns>
+    public static IServiceCollection AddRpcNotification(this IServiceCollection services, string name, Func<IServiceProvider, Delegate> factory)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(factory);
+        services.AddSingleton<IRpcNotificationTarget>(new RpcNotificationRegistration(name, factory));
         return services;
     }
 }

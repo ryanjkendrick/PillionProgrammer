@@ -239,7 +239,7 @@ on except `reranker`, which waits on a licence review. The user sets them in the
 | `mentions` | The Chat window hides the `@` picker, the pins and **Include current file**, and sends no pins and no current file with a message (pins already made stay with their conversation and come back when the flag does). Pillion Host's `ResolveMentionAsync` is not gated; chat itself is unaffected. |
 | `outboundLogView` | The Chat window hides **Inspect** and the **Outbound log**, and `IDiagnosticsService.GetOutboundRecordsAsync` and `PreviewContextAsync` fail with `PolicyDenied` and a message that names the flag. The Outbound log itself is still kept by Pillion Host. |
 | `localStore` | Pillion Host does not create or open its encrypted Local Store (`conversations.db`, see `src/Pillion.LocalStore/README.md`): opening it fails with `PolicyDenied` and a message that names the flag, and nothing is written to disk. Nothing uses the store yet; work item 2.2 persists conversations and the Outbound log through it. |
-| `indexing` | Pillion Host does not discover, hash or index repository files and does not create or open index databases (`index\<id>\index.db`, see `src/Pillion.Indexing/README.md`): opening an index fails with `PolicyDenied` and a message that names the flag, nothing is written to disk and the retention sweep does nothing. An index needs `localStore` as well, because it is a Local Store database. Nothing calls the indexing code yet; work item 2.9 wires the pipeline. |
+| `indexing` | Pillion Host does not discover, hash or index repository files and does not create or open index databases (`index\<id>\index.db`, see `src/Pillion.Indexing/README.md`): opening an index fails with `PolicyDenied` and a message that names the flag, nothing is written to disk and the retention sweep does nothing. An index needs `localStore` as well, because it is a Local Store database. With the flag on, the host indexes the roots of the solution or folder the extension reports (`IContextService.SetWorkspaceAsync`, work item 2.9; see the host README, Indexing pipeline); with it off the index status is Idle with no roots and the index controls are refused with `PolicyDenied`. |
 | `embeddings` | The embedding gateway (`IModelGateway.EmbedAsync`, work item 2.6) fails with `PolicyDenied` and a message that names the flag; it also needs `modelGateway`. Chat, autocomplete and model listing are unaffected. Embeddings never leave the machine unless `cloudSwitches.embedding` is turned on as well (it is off by default; Local-only always wins). |
 | `bundledEmbeddings` | The bundled embedding provider (`bundled`, work item 2.7) is not built or routed to: the ONNX model shipped with the extension (`bge-small-en-v1.5`) and the models downloaded on request stop being offered, and the Embedding task class uses Ollama or another configured local embedding model instead (or fails with `ModelNotInstalled` when there is none). Nothing else changes. |
 | `workspaceQueries` | Visual Studio refuses Pillion Host's `FindReferencesAsync` and `CallersOfAsync` calls with `PolicyDenied` and a message that names the flag, and Pillion Host stops asking: `find_references` and `callers_of` (for `@symbol` and chat) are answered from the index's approximate reference edges only, marked approximate (work item 2.14). Nothing else changes. |
@@ -366,6 +366,32 @@ in place. A warning from the host (for example "no change proposed") is shown ab
 closes when you apply or discard, when the document closes, or when the caret moves further from the scope than the
 editor shows lines. Every control is in the tab order with a screen-reader name; while the prompt has focus, keys the
 editor would otherwise take (typing, Backspace, arrows, Ctrl+A/C/V/X/Z, Enter, Esc, Tab) go to the prompt.
+
+## Mentions
+
+Type `@` in the Chat window's input to pin context to the conversation (behind the `mentions` flag). The picker groups its
+entries under headings (kinds, files, folders, symbols, docs, and the options of `@git` and `@output`), each with its kind's
+icon and a hint line, and is driven from the keyboard: Up and Down move, Enter or Tab pick, Esc closes. Every pin shows its
+token count; `@kind:value` names the kind explicitly.
+
+| Mention | What is pinned | Where it comes from |
+| --- | --- | --- |
+| `@file`, `@folder` | The file, or a folder outline (each file's first-chunk summary and its top definitions) | The open index's file list, fuzzy matched; the solution's file list when there is no index |
+| `@symbol` | The definition's code and a summary of its references | The index's symbols; references from Roslyn for C# and VB, the index otherwise |
+| `@docs` | A Markdown or text document, chunk by chunk up to the limit; bare `@docs` lists them | The index, plus the folders in `mentions.docsFolders` |
+| `@solution` | The repo map, focused on the open documents | The index |
+| `@git` | The working-tree diff (`@git`), the staged changes (`@git:staged`) or the last commits (`@git:log:5`), with secrets redacted | The repository of the open folder (LibGit2Sharp) |
+| `@output`, `@build`, `@tests` | An Output pane's tail (`@output:build`, `debug`, `tests`), the last build's outcome and output, the Tests pane's failures | Visual Studio |
+| `@selection`, `@clipboard`, `@errors` | The editor selection, the clipboard text, the Error List | Visual Studio |
+
+A file the exclusion globs or the secret-file rules refuse needs approval before it is pinned, and an approved one never goes
+to a cloud model; `@git` lists such files without their changes, and `@symbol` shows no reference snippet from them. To let
+`@docs` search documentation outside the repository, list the folders in `settings.json` (full paths, or relative to the
+first open folder; empty by default):
+
+```json
+{ "mentions": { "docsFolders": ["C:\\docs\\handbook", "docs/adr"] } }
+```
 
 ## IDE signals
 

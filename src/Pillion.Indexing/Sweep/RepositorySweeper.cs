@@ -22,6 +22,9 @@ public sealed class RepositorySweeper
     /// <summary>How close a row's modified time may be to its <c>indexed_at</c> before size and time alone are not trusted.</summary>
     public const long RacyWindowMilliseconds = 2000;
 
+    /// <summary>How many entries pass between two progress reports.</summary>
+    public const int ProgressInterval = 256;
+
     private readonly ScanOptions _options;
 
     /// <summary>Initializes a new instance of the <see cref="RepositorySweeper"/> class.</summary>
@@ -38,10 +41,26 @@ public sealed class RepositorySweeper
     /// <param name="cancellationToken">Cancels the sweep.</param>
     /// <returns>The added, changed, touched, unchanged and deleted sets and what was excluded.</returns>
     /// <exception cref="DirectoryNotFoundException">The root does not exist.</exception>
-    public async Task<SweepResult> SweepAsync(
+    public Task<SweepResult> SweepAsync(
         string rootPath,
         IReadOnlyList<FileRecord> stored,
         PartitionResolver? partitions = null,
+        CancellationToken cancellationToken = default) =>
+        SweepAsync(rootPath, stored, partitions, progress: null, cancellationToken);
+
+    /// <summary>Sweeps a root against the stored rows, reporting progress.</summary>
+    /// <param name="rootPath">The repository root directory.</param>
+    /// <param name="stored">Every stored row (see <see cref="FilesRepository.GetAllAsync"/>); empty for a first sweep.</param>
+    /// <param name="partitions">Chooses the partition of each file; the top-level folder when <see langword="null"/>.</param>
+    /// <param name="progress">Receives the counts so far now and then (every <see cref="ProgressInterval"/> entries, when the first file is hashed, and at the end); called from the sweep's worker threads. Optional.</param>
+    /// <param name="cancellationToken">Cancels the sweep.</param>
+    /// <returns>The added, changed, touched, unchanged and deleted sets and what was excluded.</returns>
+    /// <exception cref="DirectoryNotFoundException">The root does not exist.</exception>
+    public async Task<SweepResult> SweepAsync(
+        string rootPath,
+        IReadOnlyList<FileRecord> stored,
+        PartitionResolver? partitions,
+        IProgress<SweepProgress>? progress,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(stored);
@@ -62,6 +81,7 @@ public sealed class RepositorySweeper
             MaxFileBytes = _options.MaxFileBytes,
             MaxDegreeOfParallelism = _options.MaxDegreeOfParallelism,
             IgnoreCase = _options.IgnoreCase,
+            TaskScheduler = _options.TaskScheduler,
             SkipContentChecks = (path, size, modified) => storedByPath.TryGetValue(path, out var row) && IsUnchanged(row, size, modified),
         });
 
@@ -74,14 +94,25 @@ public sealed class RepositorySweeper
         var unreadable = new ConcurrentBag<string>();
         var present = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         var hashed = 0;
+        var seen = 0;
 
         await Parallel.ForEachAsync(
             scanner.Walk(rootFull, cancellationToken),
-            new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, _options.MaxDegreeOfParallelism), CancellationToken = cancellationToken },
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Math.Max(1, _options.MaxDegreeOfParallelism),
+                CancellationToken = cancellationToken,
+                TaskScheduler = _options.TaskScheduler ?? TaskScheduler.Default,
+            },
             (candidate, token) =>
             {
                 token.ThrowIfCancellationRequested();
                 var entry = candidate.Resolve();
+                if (progress is not null && Interlocked.Increment(ref seen) % ProgressInterval == 0)
+                {
+                    progress.Report(new SweepProgress(Volatile.Read(ref seen), Volatile.Read(ref hashed)));
+                }
+
                 if (!entry.Decision.IsIncluded)
                 {
                     if (entry.Decision.IsSecretBearing)
@@ -121,7 +152,11 @@ public sealed class RepositorySweeper
                 FileFingerprint fingerprint;
                 try
                 {
-                    Interlocked.Increment(ref hashed);
+                    if (Interlocked.Increment(ref hashed) == 1)
+                    {
+                        progress?.Report(new SweepProgress(Volatile.Read(ref seen), 1));
+                    }
+
                     fingerprint = FileHasher.Hash(Path.Combine(rootFull, entry.RelativePath.Replace('/', Path.DirectorySeparatorChar)));
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -156,6 +191,7 @@ public sealed class RepositorySweeper
                 return ValueTask.CompletedTask;
             }).ConfigureAwait(false);
 
+        progress?.Report(new SweepProgress(Volatile.Read(ref seen), Volatile.Read(ref hashed)));
         var deleted = stored.Where(row => !present.ContainsKey(row.Path)).OrderBy(r => r.Path, StringComparer.OrdinalIgnoreCase).ToList();
         return new SweepResult
         {

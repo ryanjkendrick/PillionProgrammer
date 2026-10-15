@@ -113,6 +113,12 @@ internal sealed class ScriptedContextService : IContextService
         }
     }
 
+    public Task SetWorkspaceAsync(WorkspaceDescription workspace, CancellationToken cancellationToken)
+    {
+        Record(nameof(SetWorkspaceAsync));
+        return Task.CompletedTask;
+    }
+
     public Task<IndexInfo[]> ListIndexesAsync(CancellationToken cancellationToken)
     {
         Record(nameof(ListIndexesAsync));
