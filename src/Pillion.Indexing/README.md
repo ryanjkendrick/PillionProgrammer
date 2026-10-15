@@ -57,7 +57,7 @@ Rules, in the order they are applied to a file (the first that fires is the reas
 | 2 | Secret-bearing name: `.env`, `.env.*`, `*.pfx`, `*.pem`, `*.key`, `*.p12`, `secrets.json`, `appsettings.*.json`, `*.publishsettings`, `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `*.ppk`, `*.jks`, `*.keystore`, `.netrc`, `.pgpass` | `SecretBearing` |
 | 3 | `.gitignore` at every level (deeper files override shallower ones; `!` negation; anchoring; directory-only; `**`) | `GitIgnore` |
 | 4 | `.pillionignore` at the root, same syntax; it comes after `.gitignore`, so its `!` rules re-include what `.gitignore` ignored | `PillionIgnore` |
-| 5 | Built-in names, files or folders, at any depth: `bin`, `obj`, `node_modules`, `.git`, `.vs`, `packages` | `BuiltIn` |
+| 5 | Built-in names, files or folders, at any depth: `bin`, `obj`, `node_modules`, `.git`, `.vs`. `packages` only for a folder at the repository root that looks like a NuGet packages folder (a `repositories.config`, or a `*.nupkg` one or two levels down); any other `packages` is source. A `!` rule in the root `.pillionignore` (`!packages/`, `!bin/`) opts back in to a built-in name, except `.git`; `indexing.exclude` and the secret list cannot be opted back in to | `BuiltIn` |
 | 6 | The `indexing.exclude` setting (and repository policy `exclude`), same syntax relative to the root | `UserExclude` |
 | 7 | Generated names `*.g.cs`, `*.g.i.cs`, `*.designer.cs`, `*.generated.cs` (and the `.vb` forms) | `GeneratedFile` |
 | 8 | Minified `*.min.js`, `*.min.css` | `MinifiedFile` |

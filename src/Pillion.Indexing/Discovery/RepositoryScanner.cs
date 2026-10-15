@@ -209,7 +209,7 @@ public sealed class RepositoryScanner
             return ignored;
         }
 
-        if (NameRules.MatchBuiltIn(entry.Name) is { } builtIn)
+        if (MatchBuiltIn(entry, relative, full, pillion, isDirectory: true) is { } builtIn)
         {
             return new FileDecision(ExclusionReason.BuiltIn, builtIn);
         }
@@ -244,7 +244,7 @@ public sealed class RepositoryScanner
             return ignored;
         }
 
-        if (NameRules.MatchBuiltIn(entry.Name) is { } builtIn)
+        if (MatchBuiltIn(entry, relative, string.Empty, pillion, isDirectory: false) is { } builtIn)
         {
             return new FileDecision(ExclusionReason.BuiltIn, builtIn);
         }
@@ -265,6 +265,32 @@ public sealed class RepositoryScanner
         }
 
         return FileDecision.Included;
+    }
+
+    /// <summary>
+    /// Matches the built-in exclusions. <c>packages</c> counts only for a directory at the repository root that looks like
+    /// a NuGet packages folder; elsewhere it is source. A <c>.pillionignore</c> negation (<c>!packages/</c>, <c>!bin/</c>)
+    /// opts back in to any built-in name except <c>.git</c>; <c>indexing.exclude</c> and the secret list cannot be opted
+    /// back in to.
+    /// </summary>
+    private static string? MatchBuiltIn(RawEntry entry, string relative, string full, IgnoreRules? pillion, bool isDirectory)
+    {
+        var name = NameRules.MatchBuiltIn(entry.Name);
+        if (name is null
+            && isDirectory
+            && entry.Name.Equals(NameRules.PackagesName, StringComparison.OrdinalIgnoreCase)
+            && relative.Length == entry.Name.Length
+            && NameRules.LooksLikeNuGetPackagesFolder(full))
+        {
+            name = NameRules.PackagesName;
+        }
+
+        if (name is null)
+        {
+            return null;
+        }
+
+        return name != ".git" && pillion?.Match(relative, isDirectory).Verdict == IgnoreVerdict.Included ? null : name;
     }
 
     /// <summary>

@@ -52,7 +52,6 @@ public sealed class ScannerTests
     [InlineData("obj")]
     [InlineData("node_modules")]
     [InlineData(".vs")]
-    [InlineData("packages")]
     [InlineData("BIN")]
     public async Task TheBuiltInFolders_AreExcludedOnceAndNotEntered_AtAnyDepth(string folder)
     {
@@ -69,6 +68,147 @@ public sealed class ScannerTests
         Assert.True(entries[folder].IsDirectory);
         Assert.DoesNotContain(entries.Keys, k => k.EndsWith("a.cs", StringComparison.Ordinal) || k.EndsWith("b.cs", StringComparison.Ordinal));
         Assert.Equal(folder.ToLowerInvariant(), entries[folder].Decision.Detail);
+    }
+
+    [Theory]
+    [InlineData("packages/repositories.config")]
+    [InlineData("packages/Newtonsoft.Json.13.0.1/Newtonsoft.Json.13.0.1.nupkg")]
+    [InlineData("packages/Some.Package/1.0.0/some.package.1.0.0.nupkg")]
+    [InlineData("packages/loose.NUPKG")]
+    public async Task ARootPackagesFolderThatLooksLikeNuGet_IsExcluded(string marker)
+    {
+        using var temp = new TempDirectory();
+        temp.Write("src/keep.cs");
+        temp.Write(marker, "x");
+        temp.Write("packages/Newtonsoft.Json.13.0.1/lib/net45/Newtonsoft.Json.dll.txt");
+
+        var entries = await ScanAsync(temp);
+
+        AssertIncluded(entries, "src/keep.cs");
+        AssertExcluded(entries, "packages", ExclusionReason.BuiltIn);
+        Assert.True(entries["packages"].IsDirectory);
+        Assert.Equal("packages", entries["packages"].Decision.Detail);
+        Assert.DoesNotContain(entries.Keys, k => k.StartsWith("packages/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task APackagesFolderOfSource_IsIndexed_AnywhereItIs()
+    {
+        using var temp = new TempDirectory();
+        temp.Write("packages/app/src/index.ts", "export {}");
+        temp.Write("packages/lib/package.json", "{}");
+        temp.Write("packages/deep/a/b/c/x.nupkg", "too deep to count");
+        temp.Write("services/packages/readme.md", "# docs");
+
+        var entries = await ScanAsync(temp);
+
+        AssertIncluded(entries, "packages/app/src/index.ts");
+        AssertIncluded(entries, "packages/lib/package.json");
+        AssertIncluded(entries, "packages/deep/a/b/c/x.nupkg");
+        AssertIncluded(entries, "services/packages/readme.md");
+        Assert.DoesNotContain(entries.Values, e => e.Decision.Reason == ExclusionReason.BuiltIn);
+    }
+
+    [Fact]
+    public async Task ANuGetLookingPackagesFolderBelowTheRoot_IsSource()
+    {
+        using var temp = new TempDirectory();
+        temp.Write("src/packages/repositories.config", "<repositories/>");
+        temp.Write("src/packages/Foo.1.0.0/Foo.1.0.0.nupkg", "x");
+
+        var entries = await ScanAsync(temp);
+
+        AssertIncluded(entries, "src/packages/repositories.config");
+        AssertIncluded(entries, "src/packages/Foo.1.0.0/Foo.1.0.0.nupkg");
+    }
+
+    [Fact]
+    public async Task APackagesFileAtTheRoot_IsNotABuiltIn()
+    {
+        using var temp = new TempDirectory();
+        temp.Write("packages", "a file called packages");
+
+        var entries = await ScanAsync(temp);
+
+        AssertIncluded(entries, "packages");
+    }
+
+    [Fact]
+    public async Task APillionIgnoreNegation_ReIncludesABuiltInName_SoAMonorepoCanOptBackIn()
+    {
+        using var temp = new TempDirectory();
+        temp.Write(".pillionignore", "!packages/\n!tools/bin/\n!vendor/node_modules/\n");
+        temp.Write("packages/repositories.config", "<repositories/>");
+        temp.Write("packages/lib/x.ts", "export {}");
+        temp.Write("tools/bin/run.cs", "class R {}");
+        temp.Write("vendor/node_modules/pkg/index.js", "x");
+        temp.Write("other/bin/skipped.cs", "class S {}");
+        temp.Write("node_modules/skipped.js", "x");
+
+        var entries = await ScanAsync(temp);
+
+        AssertIncluded(entries, "packages/repositories.config");
+        AssertIncluded(entries, "packages/lib/x.ts");
+        AssertIncluded(entries, "tools/bin/run.cs");
+        AssertIncluded(entries, "vendor/node_modules/pkg/index.js");
+        AssertExcluded(entries, "other/bin", ExclusionReason.BuiltIn);
+        AssertExcluded(entries, "node_modules", ExclusionReason.BuiltIn);
+    }
+
+    [Fact]
+    public async Task ANegationOfAFolderName_ReIncludesItAtAnyDepth_ButNotTheGitFolder()
+    {
+        using var temp = new TempDirectory();
+        temp.Write(".pillionignore", "!obj/\n!.git/\n");
+        temp.Write("a/obj/x.cs", "class X {}");
+        temp.Write(".git/config", "[core]");
+
+        var entries = await ScanAsync(temp);
+
+        AssertIncluded(entries, "a/obj/x.cs");
+        AssertExcluded(entries, ".git", ExclusionReason.BuiltIn);
+    }
+
+    [Fact]
+    public async Task OnlyAPillionIgnoreNegation_ReIncludesBuiltIns_NotTheSettingOrTheSecretList()
+    {
+        using var temp = new TempDirectory();
+        temp.Write(".pillionignore", "!generated/\n!.env\n!secrets.json\n!obj/\n");
+        temp.Write("generated/a.cs", "class A {}");
+        temp.Write(".env", "KEY=1");
+        temp.Write("secrets.json", "{}");
+        temp.Write("obj/b.cs", "class B {}");
+
+        // indexing.exclude cannot be undone by a .pillionignore negation, and neither can the secret list.
+        var entries = await ScanAsync(temp, new ScanOptions { ExcludePatterns = ["generated/"], MaxDegreeOfParallelism = 2 });
+
+        AssertExcluded(entries, "generated", ExclusionReason.UserExclude);
+        AssertExcluded(entries, ".env", ExclusionReason.SecretBearing);
+        AssertExcluded(entries, "secrets.json", ExclusionReason.SecretBearing);
+        AssertIncluded(entries, "obj/b.cs");
+
+        // And a negation inside indexing.exclude does not re-include a built-in.
+        temp.Write("bin/c.cs", "class C {}");
+        var viaSetting = await ScanAsync(temp, new ScanOptions { ExcludePatterns = ["!bin/"], MaxDegreeOfParallelism = 2 });
+        AssertExcluded(viaSetting, "bin", ExclusionReason.BuiltIn);
+    }
+
+    [Fact]
+    public void TheNuGetCheck_LooksOneAndTwoLevelsDown()
+    {
+        using var temp = new TempDirectory();
+        temp.Write("a/id.1.0.0/id.1.0.0.nupkg", "x");
+        temp.Write("b/id/1.0.0/id.1.0.0.nupkg", "x");
+        temp.Write("c/id/1.0.0/lib/x.nupkg", "x");
+        temp.Write("d/repositories.config", "x");
+        temp.MakeDirectory("e");
+
+        Assert.True(NameRules.LooksLikeNuGetPackagesFolder(temp.File("a")));
+        Assert.True(NameRules.LooksLikeNuGetPackagesFolder(temp.File("b")));
+        Assert.False(NameRules.LooksLikeNuGetPackagesFolder(temp.File("c")));
+        Assert.True(NameRules.LooksLikeNuGetPackagesFolder(temp.File("d")));
+        Assert.False(NameRules.LooksLikeNuGetPackagesFolder(temp.File("e")));
+        Assert.False(NameRules.LooksLikeNuGetPackagesFolder(temp.File("missing")));
     }
 
     [Fact]

@@ -87,7 +87,8 @@ public static class NameRules
     {
         foreach (var builtIn in BuiltInNames)
         {
-            if (name.Equals(builtIn, StringComparison.OrdinalIgnoreCase))
+            // "packages" is not a plain name rule: it depends on where the folder is and what it holds.
+            if (builtIn != PackagesName && name.Equals(builtIn, StringComparison.OrdinalIgnoreCase))
             {
                 return builtIn;
             }
@@ -95,6 +96,36 @@ public static class NameRules
 
         return null;
     }
+
+    /// <summary>
+    /// Determines whether a folder looks like a NuGet <c>packages</c> folder (the legacy <c>packages.config</c> restore
+    /// target): it holds a <c>repositories.config</c>, or a <c>*.nupkg</c> one or two levels down
+    /// (<c>packages\Id.1.0.0\Id.1.0.0.nupkg</c>, <c>packages\id\1.0.0\id.1.0.0.nupkg</c>). Any other folder with that
+    /// name is source (a JavaScript monorepo's <c>packages</c>).
+    /// </summary>
+    /// <param name="fullPath">The folder to look at.</param>
+    /// <returns><see langword="true"/> for a NuGet packages folder.</returns>
+    public static bool LooksLikeNuGetPackagesFolder(string fullPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fullPath);
+        try
+        {
+            if (File.Exists(Path.Combine(fullPath, "repositories.config")))
+            {
+                return true;
+            }
+
+            var options = new EnumerationOptions { RecurseSubdirectories = true, MaxRecursionDepth = 2, IgnoreInaccessible = true, MatchCasing = MatchCasing.CaseInsensitive };
+            return Directory.EnumerateFiles(fullPath, "*.nupkg", options).Any();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>The built-in name whose exclusion depends on the folder (see <see cref="LooksLikeNuGetPackagesFolder"/>).</summary>
+    internal const string PackagesName = "packages";
 
     /// <summary>Determines whether a file name marks a secret-bearing file.</summary>
     /// <param name="fileName">A file name (not a path).</param>

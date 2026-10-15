@@ -15,7 +15,7 @@ public enum ExclusionReason
     /// <summary>A rule in the root's <c>.pillionignore</c> ignores the path.</summary>
     PillionIgnore,
 
-    /// <summary>The name is one of the built-in exclusions: <c>bin</c>, <c>obj</c>, <c>node_modules</c>, <c>.git</c>, <c>.vs</c>, <c>packages</c>.</summary>
+    /// <summary>The name is one of the built-in exclusions: <c>bin</c>, <c>obj</c>, <c>node_modules</c>, <c>.git</c>, <c>.vs</c>, or a NuGet <c>packages</c> folder at the root. A <c>.pillionignore</c> negation opts back in (except for <c>.git</c>).</summary>
     BuiltIn,
 
     /// <summary>A pattern of the <c>indexing.exclude</c> setting (or a repository policy's <c>exclude</c>) matches the path.</summary>
