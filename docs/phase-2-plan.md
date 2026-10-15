@@ -15,27 +15,27 @@ The design document is the specification: https://claude.ai/code/artifact/02f3ee
 
 Gate 2 is "recall at 10 of 0.85 on fixture repos; 1,000,000 lines indexed in 30 minutes on CPU" (section 17), plus the other section 13 budgets this phase makes measurable. Everything is measured on the reference machine (8-core CPU, 32 GB, 8 GB GPU), online and with the network disabled.
 
-| Criterion | Target | Evidence |
-| --- | --- | --- |
-| Retrieval quality | Recall at 10 of 0.85 and the mean reciprocal rank recorded on the fixture repositories with the bundled model; 0.90 with the code model if it ships; int8 recall loss against float32 within 2 points (section 15) | Retrieval evaluation slice (2.16) |
-| Initial index, 100,000 lines (about 10,000 chunks), bundled model, CPU | 3 minutes or less | Performance suite on a fixture repository |
-| Initial index, 1,000,000 lines, CPU | 30 minutes or less, in the background, partial results searchable after the first minute | Performance suite on a generated repository |
-| One saved file becomes searchable | 500 ms or less | Performance suite through the IDE save path |
-| Branch switch touching 500 files | 30 s or less | Performance suite with a scripted checkout |
-| Semantic search query | p50 100 ms, p95 300 ms on a 100,000-chunk index, hybrid without the reranker | Performance suite |
-| Context assembly with retrieval | p50 150 ms, p95 400 ms on a 100,000-chunk index | Performance suite |
-| Workspace query answered by devenv.exe | p50 300 ms, p95 2 s, off the UI thread, one in flight, at most 5 a second | Integration test and performance suite |
-| Host memory while indexing | 1.5 GB or less by default; the embedding batch halves under pressure, then indexing pauses | Performance suite |
-| Index on disk | About 1.5 KB per chunk | Performance suite |
-| Indexing never disturbs the IDE | Below-normal priority, at most half the cores; paused during build, test and debug and on battery saver; keystroke latency unchanged with indexing running | Component test plus the Gate 1 keystroke scenario with indexing on |
-| Persistence | Conversations, pins and the Outbound log survive a host restart and a Visual Studio restart; two hosts (two Visual Studio instances) share one index with one writer; a stale lock is reclaimed | Component tests with two hosts; integration test |
-| Encryption at rest | `index.db` and `conversations.db` unreadable without the DPAPI-protected key; the key file has a user-only ACL; no plain-text copy of chunk text outside the database | Component test; a scripted check that opens the file with plain SQLite and fails |
-| Secret-file exclusion | Secret-bearing files are not indexed, are listed in the Index window, and need per-file approval as a pin | Component test; the phase 1 approval path |
-| Cited answers | Chat replies that used retrieved chunks cite `file:line` spans; citations open the location | Integration test |
-| Autocomplete prefix stability | Retrieved snippets in the autocomplete prompt are at most three, placed before the prefix and unchanged across keystrokes in the same member; the Gate 1 autocomplete rows do not regress | Gate 1 scenarios re-run with retrieval on |
-| Offline run | Every check above with the network adapter disabled, local models only (bundled embeddings, Ollama) | `tools/gate0/Invoke-OfflineRun.ps1 -Phase 2` |
-| CI | Green on develop with the 18.x job and the 17.14 integration-test job | CI run |
-| Feature flags | Every work item behind a flag; tests green; nothing lands red | CI run; flag list in the README |
+| Criterion | Target | Evidence | Status ([gate-2-report.md](gate-2-report.md)) |
+| --- | --- | --- | --- |
+| Retrieval quality | Recall at 10 of 0.85 and the mean reciprocal rank recorded on the fixture repositories with the bundled model; 0.90 with the code model if it ships; int8 recall loss against float32 within 2 points (section 15) | Retrieval evaluation slice (2.16) | Pass on this repository's sets (bge-small 0.967, int8 loss 0.0); the external fixture repositories wait on #50 |
+| Initial index, 100,000 lines (about 10,000 chunks), bundled model, CPU | 3 minutes or less | Performance suite on a fixture repository | Fail on real code (3.86 min; generated 1.48 min); pending the product owner (#90) |
+| Initial index, 1,000,000 lines, CPU | 30 minutes or less, in the background, partial results searchable after the first minute | Performance suite on a generated repository | Fail on real code (35.3 min; generated 15.7 min); partial results pass; pending the product owner (#90) |
+| One saved file becomes searchable | 500 ms or less | Performance suite through the IDE save path | Pass (272 ms max through the IDE) |
+| Branch switch touching 500 files | 30 s or less | Performance suite with a scripted checkout | Pass for the realistic diff (26.5 s); whole-file rewrite 92 s; definition pending the product owner |
+| Semantic search query | p50 100 ms, p95 300 ms on a 100,000-chunk index, hybrid without the reranker | Performance suite | Pass (p50 82 ms, p95 140 ms on 121,001 chunks) |
+| Context assembly with retrieval | p50 150 ms, p95 400 ms on a 100,000-chunk index | Performance suite | Pass (p50 53 ms, p95 160 ms) |
+| Workspace query answered by devenv.exe | p50 300 ms, p95 2 s, off the UI thread, one in flight, at most 5 a second | Integration test and performance suite | Pass (p50 14 ms) |
+| Host memory while indexing | 1.5 GB or less by default; the embedding batch halves under pressure, then indexing pauses | Performance suite | Pass (peak 853 MB) |
+| Index on disk | About 1.5 KB per chunk | Performance suite | Fail on real code (2.2 KB a chunk); pending the product owner (#90) |
+| Indexing never disturbs the IDE | Below-normal priority, at most half the cores; paused during build, test and debug and on battery saver; keystroke latency unchanged with indexing running | Component test plus the Gate 1 keystroke scenario with indexing on | Pass (+0.12 ms p50, +0.26 ms p95) |
+| Persistence | Conversations, pins and the Outbound log survive a host restart and a Visual Studio restart; two hosts (two Visual Studio instances) share one index with one writer; a stale lock is reclaimed | Component tests with two hosts; integration test | Pass |
+| Encryption at rest | `index.db` and `conversations.db` unreadable without the DPAPI-protected key; the key file has a user-only ACL; no plain-text copy of chunk text outside the database | Component test; a scripted check that opens the file with plain SQLite and fails | Pass |
+| Secret-file exclusion | Secret-bearing files are not indexed, are listed in the Index window, and need per-file approval as a pin | Component test; the phase 1 approval path | Pass |
+| Cited answers | Chat replies that used retrieved chunks cite `file:line` spans; citations open the location | Integration test | Pass (see the report's open issue 3) |
+| Autocomplete prefix stability | Retrieved snippets in the autocomplete prompt are at most three, placed before the prefix and unchanged across keystrokes in the same member; the Gate 1 autocomplete rows do not regress | Gate 1 scenarios re-run with retrieval on | Fail on the keystroke p95 (+4.2 ms); the latency rows hold |
+| Offline run | Every check above with the network adapter disabled, local models only (bundled embeddings, Ollama) | `tools/gate0/Invoke-OfflineRun.ps1 -Phase 2` | Pending the product owner |
+| CI | Green on develop with the 18.x job and the 17.14 integration-test job | CI run | Pass on develop (phase 1 code); this branch fixes the phase 2 branch's CI failures |
+| Feature flags | Every work item behind a flag; tests green; nothing lands red | CI run; flag list in the README | Pass |
 
 ## Work items
 
