@@ -12,6 +12,9 @@ Context/                            ContextRpcService (IContextService): @file, 
                                     IndexStatusNotifier (indexStatusChanged, contract 1.3)
 Conversations/                      ConversationRpcService (IConversationService, contract 1.3): a stub until work item 2.2
 Rpc/                                RpcServer, RpcConnection, PillionJsonRpc, handshake, IRpcTarget, IVsixConnection
+WorkspaceQueries/                   IWorkspaceQueries (work item 2.14): find_references and callers_of for @symbol and chat,
+                                    from the VSIX's Roslyn workspace, falling back to the index's approximate edges
+                                    (ISymbolGraphProvider, empty until the index supplies graphs)
 Logging/                            Rolling JSON-lines file sink and retention
 ```
 
