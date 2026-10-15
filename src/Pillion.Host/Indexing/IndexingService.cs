@@ -136,6 +136,39 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     /// <summary>Gets the memory governor (tests).</summary>
     internal MemoryGovernor Memory => _memory;
 
+    /// <summary>Gets the roots open now (tests search their storage directly).</summary>
+    internal IReadOnlyList<RootIndex> OpenRoots
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. _roots.Values];
+            }
+        }
+    }
+
+    /// <summary>
+    /// Asks for another run over the roots this host owns (all of them, or one): a full sweep that indexes whatever changed.
+    /// The watcher of work item 2.10 calls it; tests use it to re-index after editing the tree.
+    /// </summary>
+    /// <param name="rootPath">The root, or <see langword="null"/> for every root.</param>
+    internal void RequestRun(string? rootPath = null)
+    {
+        lock (_gate)
+        {
+            foreach (var (key, root) in _roots)
+            {
+                if (rootPath is null || string.Equals(key, Key(rootPath), StringComparison.OrdinalIgnoreCase))
+                {
+                    root.NeedsRun = true;
+                }
+            }
+        }
+
+        Wake();
+    }
+
     /// <inheritdoc/>
     public Task StartAsync(CancellationToken cancellationToken)
     {
