@@ -132,6 +132,13 @@ internal static class RetrievalRunner
                 warnings.Add(string.Create(CultureInfo.InvariantCulture, $"{chunks - embedded} of {chunks} chunks have no vector (last error: {status.LastError ?? "none"})."));
             }
 
+            if (model.Provider == ModelSpec.Ollama && identity is not null)
+            {
+                var placement = await ModelIdentity.OllamaPlacementAsync(model, options.OllamaEndpoint, cancellationToken).ConfigureAwait(false);
+                identity = identity with { Details = identity.Details + "; after indexing: " + placement };
+                await log.WriteLineAsync("  Ollama: " + placement).ConfigureAwait(false);
+            }
+
             var stats = environment.Indexing.LastRunStatistics;
             var index = new IndexFigures(corpusFiles.Count, files.Count, chunks, embedded, stats?.Lines ?? 0, clock.Elapsed.TotalSeconds, stats?.EmbeddingTime.TotalSeconds ?? 0);
             await log.WriteLineAsync(string.Create(CultureInfo.InvariantCulture, $"  indexed {index.IndexedFiles} files, {index.Chunks} chunks ({index.EmbeddedChunks} embedded) in {index.Seconds:0.0} s")).ConfigureAwait(false);

@@ -67,7 +67,7 @@ internal static class ModelIdentity
             if (percent >= lastPercent + 10 || p.BytesReceived == p.TotalBytes)
             {
                 lastPercent = percent;
-                log.WriteLine(string.Create(CultureInfo.InvariantCulture, $"    {p.File} ({p.FileIndex + 1}/{p.FileCount}): {percent}%"));
+                log.WriteLine(string.Create(CultureInfo.InvariantCulture, $"    {p.File}: {percent}%"));
             }
         });
         await downloader.DownloadAsync(manifestModel.Id, progress, includeOptional: false, cancellationToken).ConfigureAwait(false);
@@ -147,6 +147,36 @@ internal static class ModelIdentity
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or KeyNotFoundException)
         {
             return [];
+        }
+    }
+
+    /// <summary>Describes where Ollama holds a model now (its context size and how much of it is in GPU memory), as <c>/api/ps</c> reports it.</summary>
+    /// <param name="model">The model.</param>
+    /// <param name="endpoint">The Ollama endpoint.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns>The description, or a note that the model is not loaded or Ollama did not answer.</returns>
+    public static async Task<string> OllamaPlacementAsync(ModelSpec model, string endpoint, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var http = new HttpClient { BaseAddress = new Uri(endpoint), Timeout = TimeSpan.FromSeconds(10) };
+            var ps = await http.GetFromJsonAsync<JsonElement>("api/ps", cancellationToken).ConfigureAwait(false);
+            foreach (var entry in ps.GetProperty("models").EnumerateArray())
+            {
+                if (SameOllamaModel(entry.GetProperty("name").GetString() ?? string.Empty, model.ModelId))
+                {
+                    var size = entry.GetProperty("size").GetInt64();
+                    var vram = entry.GetProperty("size_vram").GetInt64();
+                    var context = entry.TryGetProperty("context_length", out var c) ? c.GetInt32() : 0;
+                    return string.Create(CultureInfo.InvariantCulture, $"loaded at num_ctx {context}, {vram / 1048576.0:N0} of {size / 1048576.0:N0} MiB in GPU memory ({(vram == 0 ? "CPU" : vram >= size ? "GPU" : "split")})");
+                }
+            }
+
+            return "not loaded when checked";
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException)
+        {
+            return "placement unknown (" + ex.Message + ")";
         }
     }
 
