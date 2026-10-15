@@ -42,6 +42,29 @@ internal sealed partial class ReadOnlyIndexCatalog : IIndexCatalog, IAsyncDispos
         _logger = _loggerFactory.CreateLogger<ReadOnlyIndexCatalog>();
     }
 
+    /// <summary>Gets the number of index databases this catalog has open (tests check that a root the pipeline owns is never opened twice).</summary>
+    internal int OpenCount
+    {
+        get
+        {
+            _gate.Wait();
+            try
+            {
+                return _open.Count;
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets or sets a filter on normalised roots this catalog must not open: the roots the indexing pipeline has open, so the
+    /// same database never gets a second, read-only opener (set by <see cref="Indexing.LiveIndexCatalog"/>). <see langword="null"/> skips none.
+    /// </summary>
+    internal Func<string, bool>? SkipRoot { get; set; }
+
     /// <inheritdoc/>
     public async Task<IReadOnlyList<CatalogIndex>> GetIndexesAsync(IReadOnlyList<string> roots, CancellationToken cancellationToken)
     {
@@ -54,6 +77,7 @@ internal sealed partial class ReadOnlyIndexCatalog : IIndexCatalog, IAsyncDispos
         var wanted = roots.Where(r => !string.IsNullOrWhiteSpace(r)).Select(IndexIdentity.NormalizeRoot).ToHashSet(StringComparer.Ordinal);
         var folders = FindFolders()
             .Where(f => wanted.Count == 0 || wanted.Contains(f.NormalizedRoot))
+            .Where(f => SkipRoot?.Invoke(f.NormalizedRoot) != true)
             .GroupBy(f => f.NormalizedRoot, StringComparer.Ordinal)
             .Select(g => g.OrderByDescending(f => f.State.LastOpenedUtc).First())
             .OrderBy(f => f.NormalizedRoot, StringComparer.Ordinal)

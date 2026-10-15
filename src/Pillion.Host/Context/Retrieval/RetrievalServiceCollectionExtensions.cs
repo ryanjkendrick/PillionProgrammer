@@ -40,9 +40,7 @@ internal static class RetrievalServiceCollectionExtensions
         // through the gateway, which takes the snippet source).
         services.TryAddSingleton(sp => new CodeContextRetriever(
             sp,
-            sp.GetRequiredService<IIndexCatalog>(),
             sp.GetRequiredService<IFeatureFlags>(),
-            sp.GetService<WorkspaceQueries.ISymbolGraphProvider>(),
             sp.GetService<ILogger<CodeContextRetriever>>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IContextSource, RetrievalContextSource>(sp => new RetrievalContextSource(
             sp.GetRequiredService<CodeContextRetriever>(),

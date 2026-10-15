@@ -52,40 +52,47 @@ internal sealed partial class CodeContextRetriever
         "self", "from", "and", "not", "or", "pass", "none", "None", "True", "False", "End", "Sub", "Dim", "As", "Then",
     };
 
-    private readonly IServiceProvider _services;
-    private readonly IIndexCatalog _catalog;
+    private readonly Lazy<IRetrievalService> _retrieval;
+    private readonly Lazy<IIndexCatalog> _catalog;
+    private readonly Lazy<ISymbolGraphProvider?> _graphs;
     private readonly IFeatureFlags _features;
-    private readonly ISymbolGraphProvider? _graphs;
     private readonly ILogger _logger;
-    private IRetrievalService? _retrieval;
 
     /// <summary>Initializes a new instance of the <see cref="CodeContextRetriever"/> class.</summary>
-    /// <param name="services">Resolves the <see cref="IRetrievalService"/> on first use.</param>
-    /// <param name="catalog">The open indexes.</param>
+    /// <param name="services">
+    /// Resolves the <see cref="IRetrievalService"/>, the <see cref="IIndexCatalog"/> and the <see cref="ISymbolGraphProvider"/>
+    /// on first use: the gateway takes the autocomplete snippet source built on this class, while retrieval embeds questions
+    /// through the gateway and the indexing pipeline's live catalog embeds chunks through it, so resolving them eagerly would
+    /// be a dependency cycle.
+    /// </param>
     /// <param name="features">The feature flags.</param>
-    /// <param name="graphs">The symbol graphs the indexing pipeline supplies, used when the catalog's indexes carry none.</param>
     /// <param name="logger">The logger.</param>
-    public CodeContextRetriever(IServiceProvider services, IIndexCatalog catalog, IFeatureFlags features, ISymbolGraphProvider? graphs = null, ILogger<CodeContextRetriever>? logger = null)
+    public CodeContextRetriever(IServiceProvider services, IFeatureFlags features, ILogger<CodeContextRetriever>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(services);
-        ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(features);
-        _services = services;
-        _catalog = catalog;
+        _retrieval = new(services.GetRequiredService<IRetrievalService>);
+        _catalog = new(services.GetRequiredService<IIndexCatalog>);
+        _graphs = new(services.GetService<ISymbolGraphProvider>);
         _features = features;
-        _graphs = graphs;
         _logger = logger ?? NullLogger<CodeContextRetriever>.Instance;
     }
 
-    /// <summary>Initializes a new instance of the <see cref="CodeContextRetriever"/> class over a given retrieval service (tests, benchmarks).</summary>
+    /// <summary>Initializes a new instance of the <see cref="CodeContextRetriever"/> class over given services (tests, benchmarks).</summary>
     /// <param name="retrieval">The retrieval service.</param>
     /// <param name="catalog">The open indexes.</param>
     /// <param name="features">The feature flags.</param>
-    /// <param name="graphs">The symbol graphs, or <see langword="null"/>.</param>
+    /// <param name="graphs">The symbol graphs used when the catalog's indexes carry none, or <see langword="null"/>.</param>
     internal CodeContextRetriever(IRetrievalService retrieval, IIndexCatalog catalog, IFeatureFlags features, ISymbolGraphProvider? graphs = null)
-        : this(new ServiceCollection().BuildServiceProvider(), catalog, features, graphs)
     {
-        _retrieval = retrieval;
+        ArgumentNullException.ThrowIfNull(retrieval);
+        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(features);
+        _retrieval = new(retrieval);
+        _catalog = new(catalog);
+        _graphs = new(graphs);
+        _features = features;
+        _logger = NullLogger<CodeContextRetriever>.Instance;
     }
 
     /// <summary>Gets a value indicating whether <c>features.retrieval</c> is on.</summary>
@@ -103,7 +110,7 @@ internal sealed partial class CodeContextRetriever
 
         try
         {
-            return (await _catalog.GetIndexesAsync([], cancellationToken).ConfigureAwait(false)).Count > 0;
+            return (await _catalog.Value.GetIndexesAsync([], cancellationToken).ConfigureAwait(false)).Count > 0;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -118,8 +125,9 @@ internal sealed partial class CodeContextRetriever
     /// <param name="focusFiles">Full paths of the files that get the focus boost, most relevant first.</param>
     /// <param name="timeBudget">The search's time budget, or <see langword="null"/> for the retriever's default.</param>
     /// <param name="cancellationToken">Cancels the search.</param>
+    /// <param name="mode">The legs to run: <see cref="RetrievalSearchMode.Hybrid"/> (chat, inline edits) or <see cref="RetrievalSearchMode.LexicalAndSymbol"/> (autocomplete: no query embedding).</param>
     /// <returns>The chunks; none when retrieval is off, nothing is indexed, or the search failed.</returns>
-    public async Task<RetrievedCode> RetrieveAsync(string query, int maxResults, IReadOnlyList<string> focusFiles, TimeSpan? timeBudget, CancellationToken cancellationToken)
+    public async Task<RetrievedCode> RetrieveAsync(string query, int maxResults, IReadOnlyList<string> focusFiles, TimeSpan? timeBudget, CancellationToken cancellationToken, RetrievalSearchMode mode = RetrievalSearchMode.Hybrid)
     {
         if (!IsEnabled || string.IsNullOrWhiteSpace(query) || maxResults <= 0)
         {
@@ -129,13 +137,12 @@ internal sealed partial class CodeContextRetriever
         var watch = Stopwatch.StartNew();
         try
         {
-            _retrieval ??= _services.GetRequiredService<IRetrievalService>();
-            var response = await _retrieval.RetrieveAsync(
+            var response = await _retrieval.Value.RetrieveAsync(
                 new RetrievalQuery
                 {
                     Text = query.Length > 2000 ? query[..2000] : query,
                     MaxResults = maxResults,
-                    Mode = RetrievalSearchMode.Hybrid,
+                    Mode = mode,
                     IncludeText = true,
                     FocusFiles = focusFiles,
                     TimeBudget = timeBudget,
@@ -163,11 +170,11 @@ internal sealed partial class CodeContextRetriever
 
         try
         {
-            var indexes = await _catalog.GetIndexesAsync([], cancellationToken).ConfigureAwait(false);
+            var indexes = await _catalog.Value.GetIndexesAsync([], cancellationToken).ConfigureAwait(false);
             var result = indexes.Where(i => i.Graph is not null).Select(i => new RootGraph(i.RootPath, i.Graph!)).ToList();
-            if (result.Count == 0 && _graphs is not null)
+            if (result.Count == 0 && _graphs.Value is { } graphs)
             {
-                result.AddRange((await _graphs.GetGraphsAsync(cancellationToken).ConfigureAwait(false)).Select(g => new RootGraph(g.RootPath, g.Graph)));
+                result.AddRange((await graphs.GetGraphsAsync(cancellationToken).ConfigureAwait(false)).Select(g => new RootGraph(g.RootPath, g.Graph)));
             }
 
             return result;

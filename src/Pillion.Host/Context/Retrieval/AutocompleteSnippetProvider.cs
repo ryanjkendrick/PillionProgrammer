@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Pillion.ContextEngine.Retrieval;
 using Pillion.Contracts;
 using Pillion.ModelGateway;
 using Pillion.ModelGateway.Editing;
@@ -8,9 +9,10 @@ namespace Pillion.Host.Context.Retrieval;
 
 /// <summary>
 /// The retrieved snippets of autocomplete prompts (design section 7, Autocomplete prompt budget; work item 2.12): at most
-/// <see cref="AutocompleteSnippets.MaxSnippets"/> chunks from other files, found by hybrid retrieval with the enclosing
-/// declaration and the identifiers around the caret as the query, the open documents as focus files and a budget of
-/// <see cref="TimeBudget"/>. A degraded search gives no snippets.
+/// <see cref="AutocompleteSnippets.MaxSnippets"/> chunks from other files, found by the lexical and symbol legs of hybrid
+/// retrieval (<see cref="SearchMode"/>, no query embedding) with the enclosing declaration and the identifiers around the
+/// caret as the query, the open documents as focus files and a budget of <see cref="TimeBudget"/>. A degraded search gives
+/// no snippets.
 /// </summary>
 /// <remarks>
 /// The snippets are chosen once per document and enclosing member and returned unchanged for every keystroke in it, until
@@ -23,6 +25,13 @@ internal sealed partial class AutocompleteSnippetProvider : IAutocompleteSnippet
 {
     /// <summary>The time budget of one snippet search (design section 13 leaves autocomplete little room).</summary>
     public static readonly TimeSpan TimeBudget = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// The legs a snippet search runs: lexical and exact symbol names, no vector leg. One query embedding with the bundled model
+    /// on the CPU takes longer than the whole budget (about 134 ms measured), which would leave every hybrid search degraded
+    /// and so every member without snippets (lead's decision on PR 92).
+    /// </summary>
+    public const RetrievalSearchMode SearchMode = RetrievalSearchMode.LexicalAndSymbol;
 
     /// <summary>How long the snippets of one member are reused.</summary>
     public static readonly TimeSpan ReuseTime = TimeSpan.FromSeconds(30);
@@ -128,7 +137,7 @@ internal sealed partial class AutocompleteSnippetProvider : IAutocompleteSnippet
         }
 
         var focus = (request.OpenDocuments ?? []).Where(p => !string.IsNullOrWhiteSpace(p)).Take(8).ToList();
-        var found = await _retriever.RetrieveAsync(query, AutocompleteSnippets.MaxSnippets * 3, focus, TimeBudget, CancellationToken.None).ConfigureAwait(false);
+        var found = await _retriever.RetrieveAsync(query, AutocompleteSnippets.MaxSnippets * 3, focus, TimeBudget, CancellationToken.None, SearchMode).ConfigureAwait(false);
         if (found.Degraded)
         {
             LogDegraded(_logger, request.RequestId, found.TotalMs);
