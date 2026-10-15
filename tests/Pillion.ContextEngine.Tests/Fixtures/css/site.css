@@ -1,0 +1,27 @@
+@import url("reset.css");
+
+/* Layout. */
+body,
+html {
+  margin: 0;
+  padding: 0;
+}
+
+.card > .title {
+  font-weight: bold;
+}
+
+@media (max-width: 600px) {
+  .card {
+    width: 100%;
+  }
+
+  .nav {
+    display: none;
+  }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

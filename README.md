@@ -37,6 +37,7 @@ src/
   Pillion.LocalStore/            Encrypted SQLite databases (conversations.db) for the host (net10.0); see its README
   Pillion.Indexing/              Repository discovery, hashing, index identity and writer election (net10.0); see its README
   Pillion.Host/                  Pillion Host console process (net10.0); see its README for the launch protocol
+  Pillion.ContextEngine/         Context Engine: chunkers (Roslyn, tree-sitter, Razor, SQL, window); see its README
   Pillion.VisualStudio/          The Visual Studio extension (net48, produces Pillion.VisualStudio.vsix)
   Pillion.VisualStudio.Core/     Host supervisor, RPC client and logger for the extension (net48, no VS SDK)
 tests/
@@ -46,6 +47,7 @@ tests/
   Pillion.Host.Tests/
   Pillion.LocalStore.Tests/      Encryption, keys, WAL, writer queue, migrations and the conversations repository
   Pillion.Indexing.Tests/        Exclusion rules, gitignore matching, hashing and sweeps, writer lock election, retention
+  Pillion.ContextEngine.Tests/   Chunker unit tests on fixtures, property-based tests (CsCheck), benchmarks
   Pillion.VisualStudio.Tests/    Supervisor, launch protocol and signature policy tests (net48)
   Pillion.VisualStudio.IntegrationTests/         Tests inside the Visual Studio 2026 Experimental Instance; see its README
   Pillion.VisualStudio.IntegrationTests.VS2022/  The same tests built for Visual Studio 2022 17.14

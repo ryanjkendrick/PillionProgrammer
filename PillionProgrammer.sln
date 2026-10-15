@@ -1,4 +1,4 @@
-﻿
+
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
@@ -42,6 +42,10 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Pillion.Indexing", "src\Pillion.Indexing\Pillion.Indexing.csproj", "{0BBB0B32-37DD-490C-8947-B34A3964B3F8}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Pillion.Indexing.Tests", "tests\Pillion.Indexing.Tests\Pillion.Indexing.Tests.csproj", "{58D2193A-2655-42ED-A07C-BD006829D57A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Pillion.ContextEngine", "src\Pillion.ContextEngine\Pillion.ContextEngine.csproj", "{9BAE20D9-1C9E-419D-A2E0-85A37430B7BF}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Pillion.ContextEngine.Tests", "tests\Pillion.ContextEngine.Tests\Pillion.ContextEngine.Tests.csproj", "{B865D9B1-4BA4-422A-9A59-72585E8D89FD}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -121,6 +125,14 @@ Global
 		{58D2193A-2655-42ED-A07C-BD006829D57A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{58D2193A-2655-42ED-A07C-BD006829D57A}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{58D2193A-2655-42ED-A07C-BD006829D57A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9BAE20D9-1C9E-419D-A2E0-85A37430B7BF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9BAE20D9-1C9E-419D-A2E0-85A37430B7BF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9BAE20D9-1C9E-419D-A2E0-85A37430B7BF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9BAE20D9-1C9E-419D-A2E0-85A37430B7BF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B865D9B1-4BA4-422A-9A59-72585E8D89FD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B865D9B1-4BA4-422A-9A59-72585E8D89FD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B865D9B1-4BA4-422A-9A59-72585E8D89FD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B865D9B1-4BA4-422A-9A59-72585E8D89FD}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -144,5 +156,7 @@ Global
 		{76232E9D-1405-4B16-A8B8-EF9DE4F24AF5} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{0BBB0B32-37DD-490C-8947-B34A3964B3F8} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{58D2193A-2655-42ED-A07C-BD006829D57A} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{9BAE20D9-1C9E-419D-A2E0-85A37430B7BF} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{B865D9B1-4BA4-422A-9A59-72585E8D89FD} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal
