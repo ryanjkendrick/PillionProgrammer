@@ -153,6 +153,10 @@ pipe `ContractV13RpcTests` and `HandshakeCompatibilityTests` in the host tests).
   | `MentionRequest` | `Arguments` | 8 | `string[]`: for `git`, `diff` (default), `staged`, `log` with a count, or a revision range; for `output`, the pane |
   | `MentionResolution` | `Citations` | 12 | `Citation[]`: the spans the content came from (for example a symbol's definition and references) |
 
+  No member was added for the pane text of `output`, `build` and `tests`: as the `MentionKinds` documentation says, the
+  client sends it as `Payload`. For a `symbol` that is ambiguous, `Candidates` holds values that resolve to one definition,
+  `Dotted.Name#<full path>:<1-based line>`, rather than paths; the client sends one back as the value after `@symbol:`.
+
 - **Workspace queries (work item 2.14).** A host-to-VSIX method beside `FindReferencesAsync`. The VSIX enforces the
   budgets: one workspace query in flight, 2 s each, at most five a second; over the concurrency or rate limit a call fails
   at once with `Cancelled`, and one that reaches 2 s returns what it found with `Truncated`. The host falls back to the

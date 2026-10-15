@@ -53,6 +53,7 @@ public class SettingsStoreTests
         Assert.Equal(1536, settings.Indexing.MaxMemoryMb);
         Assert.True(settings.Indexing.PauseOnBattery);
         Assert.Equal(30, settings.Indexing.RetentionDays);
+        Assert.Empty(settings.Mentions.DocsFolders);
         Assert.Equal(LogLevel.Information, settings.Logging.Level);
         Assert.False(settings.Logging.RpcTrace);
     }
@@ -131,6 +132,7 @@ public class SettingsStoreTests
             store.Set(SettingsSections.Approvals, new ApprovalSettings { Mode = ApprovalMode.AutoSafe });
             store.Set(SettingsSections.CostCaps, new Dictionary<string, CostCap> { ["openai"] = new() { DailyUsd = 5m, MonthlyUsd = 50.5m }, ["azure"] = new() { DailyUsd = 1m } });
             store.Set(SettingsSections.Indexing, new IndexingSettings { Exclude = ["**/bin/**", "*.log"], MaxMemoryMb = 2048, PauseOnBattery = false, RetentionDays = 7 });
+            store.Set(SettingsSections.Mentions, new MentionsSettings { DocsFolders = [@"C:\docs\handbook", "docs/adr"] });
             store.Set(SettingsSections.Logging, new LoggingSettings { Level = LogLevel.Debug, RpcTrace = true });
         }
 
@@ -161,6 +163,8 @@ public class SettingsStoreTests
         Assert.Equal(2048, s.Indexing.MaxMemoryMb);
         Assert.False(s.Indexing.PauseOnBattery);
         Assert.Equal(7, s.Indexing.RetentionDays);
+        Assert.Equal([@"C:\docs\handbook", "docs/adr"], s.Mentions.DocsFolders);
+        Assert.Contains("\"docs/adr\"", reloaded.GetJson("mentions.docsFolders"), StringComparison.Ordinal); // camelCase on disk
         Assert.Equal(LogLevel.Debug, s.Logging.Level);
         Assert.True(s.Logging.RpcTrace);
 
@@ -238,7 +242,7 @@ public class SettingsStoreTests
         Assert.Equal(first, third);
         Assert.Contains("\n  \"version\": 1,", first, StringComparison.Ordinal);
         Assert.Equal(
-            ["version", "providers", "routing", "models", "cloudSwitches", "privacy", "approvals", "costCaps", "indexing", "logging", "features"],
+            ["version", "providers", "routing", "models", "cloudSwitches", "privacy", "approvals", "costCaps", "indexing", "mentions", "logging", "features"],
             ReadFile(store).Select(p => p.Key));
     }
 

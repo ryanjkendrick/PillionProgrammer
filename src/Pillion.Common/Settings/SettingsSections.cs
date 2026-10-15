@@ -30,6 +30,9 @@ public static class SettingsSections
     /// <summary>The indexing section.</summary>
     public const string Indexing = "indexing";
 
+    /// <summary>The chat mentions section (<c>mentions.docsFolders</c>, work item 2.13).</summary>
+    public const string Mentions = "mentions";
+
     /// <summary>The logging section.</summary>
     public const string Logging = "logging";
 
@@ -47,6 +50,7 @@ public static class SettingsSections
         Approvals,
         CostCaps,
         Indexing,
+        Mentions,
         Logging,
         Features,
     ];

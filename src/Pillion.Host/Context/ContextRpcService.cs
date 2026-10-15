@@ -4,9 +4,11 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Pillion.Contracts;
+using Pillion.Host.Context.Mentions;
 using Pillion.Host.Context.Retrieval;
 using Pillion.Host.Indexing;
 using Pillion.Host.Rpc;
+using Pillion.Host.WorkspaceQueries;
 using Pillion.ModelGateway;
 
 namespace Pillion.Host.Context;
@@ -23,6 +25,14 @@ namespace Pillion.Host.Context;
 /// <see cref="DeleteIndexAsync"/> and <see cref="ListIndexesAsync"/> fail with <see cref="PillionErrorCode.NotImplemented"/>
 /// until work items 2.9 and 2.15 wire <c>Pillion.Indexing</c> into the host. The status reports
 /// <see cref="IndexPhase.Idle"/> with no roots, which is true: this host builds no index yet.
+/// </remarks>
+/// <remarks>
+/// Mentions v2 (work item 2.13, in the <c>ContextRpcService.*.cs</c> parts): <c>@file</c> and <c>@folder</c> resolve through the
+/// open index of the root (its <c>files</c> table, fuzzy matched; folder outlines from the symbol graph with each file's first
+/// chunk as its summary) and fall back to the client's file list when there is no index or the index has no match;
+/// <c>@symbol</c>, <c>@docs</c>, <c>@solution</c> and <c>@git</c> read the index, the repo map and the repository; <c>@output</c>,
+/// <c>@build</c> and <c>@tests</c> fit the text the VSIX sends as the payload. A bare <c>@name</c> tries a file, then a symbol,
+/// then a folder; <see cref="MentionRequest.Qualifier"/> pins the kind.
 /// </remarks>
 /// <remarks>
 /// Files honour the effective <c>indexing.exclude</c> globs and the built-in secret-file rules
@@ -44,6 +54,24 @@ internal sealed partial class ContextRpcService : IContextService
     /// <summary>The most files enumerated from disk when the client sent no file list.</summary>
     internal const int MaxEnumeratedFiles = 20000;
 
+    /// <summary>The token limit of <c>@symbol</c> when the request sets none.</summary>
+    internal const int DefaultSymbolMaxTokens = 6000;
+
+    /// <summary>The token limit of <c>@docs</c> when the request sets none.</summary>
+    internal const int DefaultDocsMaxTokens = 8000;
+
+    /// <summary>The token limit of <c>@solution</c> (the repo map) when the request sets none.</summary>
+    internal const int DefaultSolutionMaxTokens = 4000;
+
+    /// <summary>The token limit of <c>@git</c> when the request sets none.</summary>
+    internal const int DefaultGitMaxTokens = 8000;
+
+    /// <summary>The token limit of <c>@output</c>, <c>@build</c> and <c>@tests</c> when the request sets none.</summary>
+    internal const int DefaultSignalMaxTokens = 4000;
+
+    /// <summary>The most citations a resolution carries.</summary>
+    internal const int MaxCitations = 50;
+
     private static readonly string[] SkippedFolders = [".git", ".vs", "bin", "obj", "node_modules"];
 
     private readonly ITokenCounter _tokens;
@@ -52,15 +80,30 @@ internal sealed partial class ContextRpcService : IContextService
     private readonly IndexingService? _indexing;
     private readonly ILogger _logger;
     private readonly IRetrievalService? _retrieval;
+    private readonly MentionIndexReader _index;
+    private readonly IWorkspaceQueries? _queries;
+    private readonly IVsixConnection? _vsix;
 
     /// <summary>Initializes a new instance of the <see cref="ContextRpcService"/> class.</summary>
     /// <param name="tokens">Counts tokens.</param>
-    /// <param name="settings">Supplies the effective <c>indexing.exclude</c> globs.</param>
+    /// <param name="settings">Supplies the effective <c>indexing.exclude</c> globs and <c>mentions.docsFolders</c>.</param>
     /// <param name="router">Names the default chat model whose tokenizer counts the content; without one the estimating counter is used.</param>
     /// <param name="logger">The logger.</param>
     /// <param name="retrieval">Answers searches (work item 2.11); without it searches return no hits.</param>
     /// <param name="indexing">The indexing pipeline (work item 2.9); without one the index methods answer as if nothing were indexed.</param>
-    public ContextRpcService(ITokenCounter tokens, IGatewaySettingsSource settings, IModelRouter? router = null, ILogger<ContextRpcService>? logger = null, IRetrievalService? retrieval = null, IndexingService? indexing = null)
+    /// <param name="catalog">The open indexes (work item 2.11's catalog) the mentions read; without it they use the client's file list only.</param>
+    /// <param name="queries">Finds a symbol's references for <c>@symbol</c> (Roslyn through the VSIX, the index otherwise); without it the index's edges answer.</param>
+    /// <param name="vsix">The connection to Visual Studio, for the open documents <c>@solution</c> focuses on; without it there is no focus.</param>
+    public ContextRpcService(
+        ITokenCounter tokens,
+        IGatewaySettingsSource settings,
+        IModelRouter? router = null,
+        ILogger<ContextRpcService>? logger = null,
+        IRetrievalService? retrieval = null,
+        IIndexCatalog? catalog = null,
+        IWorkspaceQueries? queries = null,
+        IVsixConnection? vsix = null,
+        IndexingService? indexing = null)
     {
         ArgumentNullException.ThrowIfNull(tokens);
         ArgumentNullException.ThrowIfNull(settings);
@@ -70,6 +113,9 @@ internal sealed partial class ContextRpcService : IContextService
         _indexing = indexing;
         _logger = logger ?? NullLogger<ContextRpcService>.Instance;
         _retrieval = retrieval;
+        _index = new MentionIndexReader(catalog, _logger);
+        _queries = queries;
+        _vsix = vsix;
     }
 
     /// <inheritdoc/>
@@ -133,20 +179,31 @@ internal sealed partial class ContextRpcService : IContextService
     public async Task<MentionResolution> ResolveMentionAsync(MentionRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var parsed = MentionParser.Parse(request.Mention, request.Kind);
-        var maxTokens = request.MaxTokens > 0 ? request.MaxTokens : DefaultMaxTokens;
+        request.WorkspaceRoots ??= [];
+        request.CandidateFiles ??= [];
+        request.Arguments ??= [];
+        var parsed = MentionParser.Parse(request.Mention, string.IsNullOrWhiteSpace(request.Kind) ? request.Qualifier : request.Kind);
+        var maxTokens = request.MaxTokens > 0 ? request.MaxTokens : DefaultMaxTokensFor(parsed.Kind);
         var counter = _tokens.ForModel(DefaultModelId());
-        var context = new Resolution(request, parsed, maxTokens, counter, new FileAccessPolicy(_settings.GetCurrent().Exclude));
+        var effective = _settings.GetCurrent();
+        var context = new Resolution(request, parsed, maxTokens, counter, new FileAccessPolicy(effective.Exclude), _index);
 
         try
         {
             return parsed.Kind switch
             {
-                "file" => await ResolveFileAsync(context, cancellationToken).ConfigureAwait(false),
-                "folder" => await ResolveFolderAsync(context, cancellationToken).ConfigureAwait(false),
-                "selection" => ResolvePayload(context, "Selection", "There is no selection to pin."),
-                "clipboard" => ResolvePayload(context, "Clipboard", "The clipboard holds no text."),
-                "errors" => ResolveErrors(context),
+                MentionKinds.File => await ResolveFileAsync(context, cancellationToken).ConfigureAwait(false),
+                MentionKinds.Folder => await ResolveFolderAsync(context, cancellationToken).ConfigureAwait(false),
+                MentionKinds.Selection => ResolvePayload(context, "Selection", "There is no selection to pin."),
+                MentionKinds.Clipboard => ResolvePayload(context, "Clipboard", "The clipboard holds no text."),
+                MentionKinds.Errors => ResolveErrors(context),
+                MentionKinds.Symbol => await ResolveSymbolAsync(context, cancellationToken).ConfigureAwait(false),
+                MentionKinds.Docs => await ResolveDocsAsync(context, effective.Settings.Mentions.DocsFolders, cancellationToken).ConfigureAwait(false),
+                MentionKinds.Solution => await ResolveSolutionAsync(context, cancellationToken).ConfigureAwait(false),
+                MentionKinds.Git => await ResolveGitAsync(context, cancellationToken).ConfigureAwait(false),
+                MentionKinds.Output => ResolveOutput(context),
+                MentionKinds.Build => ResolveBuild(context),
+                MentionKinds.Tests => ResolveTests(context),
                 "" => await ResolveFuzzyAsync(context, cancellationToken).ConfigureAwait(false),
                 var other => context.Unresolved(other, $"@{other} is not available in this version."),
             };
@@ -155,6 +212,11 @@ internal sealed partial class ContextRpcService : IContextService
         {
             LogReadFailed(_logger, parsed.Kind, ex.GetType().Name);
             return context.Unresolved(parsed.Kind, "The file could not be read: " + ex.Message);
+        }
+        catch (LibGit2Sharp.LibGit2SharpException ex)
+        {
+            LogReadFailed(_logger, parsed.Kind, ex.GetType().Name);
+            return context.Unresolved(parsed.Kind, "The repository could not be read: " + ex.Message);
         }
     }
 
@@ -175,19 +237,39 @@ internal sealed partial class ContextRpcService : IContextService
         return "unknown";
     }
 
-    private static async Task<MentionResolution> ResolveFuzzyAsync(Resolution context, CancellationToken cancellationToken)
+    /// <summary>The token limit of a kind when the request sets none.</summary>
+    /// <param name="kind">The kind.</param>
+    /// <returns>The limit.</returns>
+    internal static int DefaultMaxTokensFor(string kind) => kind switch
+    {
+        MentionKinds.Symbol => DefaultSymbolMaxTokens,
+        MentionKinds.Docs => DefaultDocsMaxTokens,
+        MentionKinds.Solution => DefaultSolutionMaxTokens,
+        MentionKinds.Git => DefaultGitMaxTokens,
+        MentionKinds.Output or MentionKinds.Build or MentionKinds.Tests => DefaultSignalMaxTokens,
+        _ => DefaultMaxTokens,
+    };
+
+    private async Task<MentionResolution> ResolveFuzzyAsync(Resolution context, CancellationToken cancellationToken)
     {
         if (context.Parsed.Value.Length == 0)
         {
             return context.Unresolved(string.Empty, "Type a name after @, for example @Program.cs.");
         }
 
-        // A file wins over a folder, except when the file side only has loose letter-order guesses.
+        // A file wins over a symbol and a folder, except when the file side only has loose letter-order guesses; a symbol
+        // whose name matches exactly comes next.
         var asFile = await ResolveFileAsync(context, cancellationToken).ConfigureAwait(false);
         var fileWasLoose = context.Loose;
         if (asFile.IsResolved || asFile.RequiresApproval || (asFile.Candidates.Length > 0 && !fileWasLoose))
         {
             return asFile;
+        }
+
+        var asSymbol = await ResolveSymbolAsync(context, cancellationToken, exactOnly: true).ConfigureAwait(false);
+        if (asSymbol.IsResolved || asSymbol.RequiresApproval)
+        {
+            return asSymbol;
         }
 
         var asFolder = await ResolveFolderAsync(context, cancellationToken).ConfigureAwait(false);
@@ -197,119 +279,6 @@ internal sealed partial class ContextRpcService : IContextService
         }
 
         return asFile.Candidates.Length > 0 ? asFile : asFolder.Candidates.Length > 0 ? asFolder : asFile;
-    }
-
-    private static async Task<MentionResolution> ResolveFileAsync(Resolution context, CancellationToken cancellationToken)
-    {
-        var value = context.Parsed.Value;
-        if (value.Length == 0)
-        {
-            return context.Unresolved("file", "Name a file, for example @file:Program.cs.");
-        }
-
-        var request = context.Request;
-        var candidates = GetCandidateFiles(request);
-        var path = FindExactFile(value, request.WorkspaceRoots, candidates);
-        if (path is null)
-        {
-            var match = FileMatcher.Match(value, candidates);
-            if (match.Single is { } single)
-            {
-                path = single;
-            }
-            else if (match.Candidates.Count > 0)
-            {
-                return context.Ambiguous(
-                    "file",
-                    [.. match.Candidates],
-                    match.IsLoose ? $"No file is named '{value}'; these are the closest." : $"{match.Candidates.Count} files match '{value}'; pick one.",
-                    match.IsLoose);
-            }
-            else
-            {
-                return context.Unresolved("file", candidates.Count == 0 && request.WorkspaceRoots.Length == 0
-                    ? $"No file list or workspace folder was supplied, so '{value}' cannot be found."
-                    : $"No file matches '{value}'.");
-            }
-        }
-
-        if (!IsInWorkspace(path, request.WorkspaceRoots, candidates))
-        {
-            return context.Unresolved("file", "The file is outside the open solution or folder.");
-        }
-
-        var file = new FileInfo(path);
-        if (!file.Exists)
-        {
-            return context.Unresolved("file", $"The file '{path}' does not exist.");
-        }
-
-        var (text, wasCut, binary) = await ReadFileAsync(file, cancellationToken).ConfigureAwait(false);
-        if (binary)
-        {
-            return context.Unresolved("file", "The file is binary.");
-        }
-
-        var access = context.Policy.Check(path, () => text);
-        if (!access.IsAllowed && !request.ApprovedSensitive)
-        {
-            var refused = context.Unresolved("file", access.Reason + " Approve it to pin the file.");
-            refused.FilePath = path;
-            refused.DisplayName = file.Name;
-            refused.RequiresApproval = true;
-            return refused;
-        }
-
-        var resolution = context.Resolved("file", file.Name, path, text, wasCut);
-        resolution.IsSensitive = !access.IsAllowed;
-        return resolution;
-    }
-
-    private static async Task<MentionResolution> ResolveFolderAsync(Resolution context, CancellationToken cancellationToken)
-    {
-        var value = context.Parsed.Value;
-        if (value.Length == 0)
-        {
-            return context.Unresolved("folder", "Name a folder, for example @folder:src/Api.");
-        }
-
-        var request = context.Request;
-        var candidates = GetCandidateFiles(request);
-        var directory = FindExactFolder(value, request.WorkspaceRoots, candidates);
-        if (directory is null)
-        {
-            var match = FileMatcher.Match(value, FolderPaths(candidates, request.WorkspaceRoots));
-            if (match.Single is { } single)
-            {
-                directory = single;
-            }
-            else if (match.Candidates.Count > 0)
-            {
-                return context.Ambiguous(
-                    "folder",
-                    [.. match.Candidates],
-                    match.IsLoose ? $"No folder is named '{value}'; these are the closest." : $"{match.Candidates.Count} folders match '{value}'; pick one.",
-                    match.IsLoose);
-            }
-            else
-            {
-                return context.Unresolved("folder", $"No folder matches '{value}'.");
-            }
-        }
-
-        if (request.WorkspaceRoots.Length > 0 && !request.WorkspaceRoots.Any(r => IsUnder(directory, r)))
-        {
-            return context.Unresolved("folder", "The folder is outside the open solution or folder.");
-        }
-
-        var files = candidates.Where(f => IsUnder(f, directory)).ToList();
-        if (files.Count == 0 && Directory.Exists(directory))
-        {
-            files = EnumerateFiles(directory);
-        }
-
-        var outline = await BuildOutlineAsync(directory, files, context.Policy, cancellationToken).ConfigureAwait(false);
-        return context.Resolved("folder", Path.GetFileName(directory.TrimEnd('\\', '/')) is { Length: > 0 } name ? name + "/" : directory, directory, outline, false);
     }
 
     private static MentionResolution ResolvePayload(Resolution context, string displayName, string emptyReason)
@@ -617,13 +586,26 @@ internal sealed partial class ContextRpcService : IContextService
     private static partial void LogReadFailed(ILogger logger, string kind, string exceptionType);
 
     /// <summary>One mention being resolved: the request, its parse, the limit, the counter and the file policy.</summary>
-    private sealed class Resolution(MentionRequest request, ParsedMention parsed, int maxTokens, IModelTokenCounter counter, FileAccessPolicy policy)
+    private sealed class Resolution(MentionRequest request, ParsedMention parsed, int maxTokens, IModelTokenCounter counter, FileAccessPolicy policy, MentionIndexReader index)
     {
+        private IReadOnlyList<MentionIndexView>? _views;
+
         public MentionRequest Request => request;
 
         public ParsedMention Parsed => parsed;
 
         public FileAccessPolicy Policy => policy;
+
+        public int MaxTokens => maxTokens;
+
+        public IModelTokenCounter Counter => counter;
+
+        /// <summary>Gets a value indicating whether the last <see cref="Ambiguous"/> answer held only letter-order guesses.</summary>
+        public bool Loose { get; private set; }
+
+        /// <summary>The open indexes of the request's roots, read once per request.</summary>
+        public async Task<IReadOnlyList<MentionIndexView>> GetViewsAsync(CancellationToken cancellationToken) =>
+            _views ??= await index.GetAsync(request.WorkspaceRoots, cancellationToken).ConfigureAwait(false);
 
         public MentionResolution Unresolved(string kind, string reason) => new()
         {
@@ -633,9 +615,6 @@ internal sealed partial class ContextRpcService : IContextService
             Reason = reason,
         };
 
-        /// <summary>Gets a value indicating whether the last <see cref="Ambiguous"/> answer held only letter-order guesses.</summary>
-        public bool Loose { get; private set; }
-
         public MentionResolution Ambiguous(string kind, string[] candidates, string reason, bool loose)
         {
             Loose = loose;
@@ -644,21 +623,35 @@ internal sealed partial class ContextRpcService : IContextService
             return result;
         }
 
-        public MentionResolution Resolved(string kind, string displayName, string? filePath, string content, bool alreadyCut)
+        /// <summary>A file refused only because it is excluded or looks secret: the client asks, then resolves again with approval.</summary>
+        public MentionResolution NeedsApproval(string kind, string path, string displayName, string reason)
         {
-            var fitted = TextTruncation.KeepHead(content, maxTokens, counter);
-            return new MentionResolution
-            {
-                Mention = request.Mention,
-                IsResolved = true,
-                Kind = kind,
-                DisplayName = displayName,
-                FilePath = filePath,
-                Content = fitted.Text,
-                TokenCount = fitted.Tokens,
-                Truncated = fitted.Truncated || alreadyCut,
-            };
+            var refused = Unresolved(kind, reason);
+            refused.FilePath = path;
+            refused.DisplayName = displayName;
+            refused.RequiresApproval = true;
+            return refused;
         }
+
+        public MentionResolution Resolved(string kind, string displayName, string? filePath, string content, bool alreadyCut, Citation[]? citations = null) =>
+            Make(kind, displayName, filePath, TextTruncation.KeepHead(content, maxTokens, counter), alreadyCut, citations);
+
+        /// <summary>Resolves with the end of the content kept (output panes, build logs): the oldest lines go first.</summary>
+        public MentionResolution ResolvedTail(string kind, string displayName, string content, Citation[]? citations = null) =>
+            Make(kind, displayName, null, TailTruncation.KeepTail(content, maxTokens, counter), false, citations);
+
+        private MentionResolution Make(string kind, string displayName, string? filePath, TruncatedText fitted, bool alreadyCut, Citation[]? citations) => new()
+        {
+            Mention = request.Mention,
+            IsResolved = true,
+            Kind = kind,
+            DisplayName = displayName,
+            FilePath = filePath,
+            Content = fitted.Text,
+            TokenCount = fitted.Tokens,
+            Truncated = fitted.Truncated || alreadyCut,
+            Citations = citations ?? [],
+        };
     }
 }
 

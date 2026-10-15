@@ -36,6 +36,7 @@ public sealed class IdeSignalsHub : IIdeSignals, IDisposable
     private BuildActivity _activity = new(false, null);
     private int _projectsBuilt;
     private string? _activeDocument;
+    private LastBuildRecord? _lastBuild;
 
     /// <summary>Initializes a new instance of the <see cref="IdeSignalsHub"/> class.</summary>
     /// <param name="clock">The time source.</param>
@@ -146,6 +147,21 @@ public sealed class IdeSignalsHub : IIdeSignals, IDisposable
         }
     }
 
+    /// <summary>The most characters of a pane kept for a mention (<c>@output</c>, <c>@build</c>, <c>@tests</c>).</summary>
+    public const int MentionPaneChars = 64 * 1024;
+
+    /// <inheritdoc/>
+    public LastBuildRecord? LastBuild
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return _lastBuild;
+            }
+        }
+    }
+
     /// <summary>Reports that a solution build, rebuild or clean began.</summary>
     public void NotifyBuildStarted()
     {
@@ -189,6 +205,18 @@ public sealed class IdeSignalsHub : IIdeSignals, IDisposable
             changed = _activity.IsBuilding;
             _activity = new BuildActivity(false, null);
             _projectsBuilt = 0;
+        }
+
+        var record = new LastBuildRecord(success, args.ProjectCount, args.Duration, now, output: null);
+        lock (_stateGate)
+        {
+            _lastBuild = record;
+        }
+
+        // Keep the Build pane's tail as it is now, so @build still has it after a debug session or a cleared pane.
+        if (Output is not null)
+        {
+            _ = Task.Run(() => CaptureBuildOutputAsync(record));
         }
 
         Record("BuildFinished", $"success={success.ToString().ToLowerInvariant()} projects={args.ProjectCount} duration={args.Duration.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture)}s");
@@ -383,6 +411,27 @@ public sealed class IdeSignalsHub : IIdeSignals, IDisposable
     }
 
     private void Record(string kind, string detail) => _ring.Add(new IdeSignalEvent(_clock.UtcNow, kind, detail));
+
+    private async Task CaptureBuildOutputAsync(LastBuildRecord record)
+    {
+        try
+        {
+            var text = await GetOutputPaneTextAsync("Build", MentionPaneChars, CancellationToken.None).ConfigureAwait(false);
+            lock (_stateGate)
+            {
+                if (ReferenceEquals(_lastBuild, record))
+                {
+                    _lastBuild = new LastBuildRecord(record.Success, record.ProjectCount, record.Duration, record.FinishedAt, text ?? string.Empty);
+                }
+            }
+        }
+#pragma warning disable CA1031 // The capture is best effort; @build then reads the pane as it is.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            _log?.Debug("signals.build.capture.failed", "Keeping the Build pane's tail failed.", ("error", ex.GetType().Name));
+        }
+    }
 
     /// <summary>Queues work so events are raised one at a time, in order, on the thread pool.</summary>
     private void Enqueue(Action work)

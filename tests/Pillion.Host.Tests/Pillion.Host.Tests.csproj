@@ -19,6 +19,8 @@
           CopyToOutputDirectory="PreserveNewest" />
     <!-- The Context Engine's generator of synthetic C# repositories, for the throughput tests. -->
     <Compile Include="..\Pillion.ContextEngine.Tests\Symbols\SyntheticRepository.cs" Link="Indexing\SyntheticRepository.cs" />
+    <!-- The Context Engine's chunker fixtures, the sources of the small index the mention tests build (work item 2.13). -->
+    <None Include="..\Pillion.ContextEngine.Tests\Fixtures\**\*" LinkBase="ContextEngineFixtures" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

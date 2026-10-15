@@ -134,7 +134,11 @@ public sealed class MentionPin
         other is not null
         && string.Equals(Kind, other.Kind, StringComparison.OrdinalIgnoreCase)
         && string.Equals(Resolution.FilePath ?? string.Empty, other.FilePath ?? string.Empty, StringComparison.OrdinalIgnoreCase)
-        && (!string.IsNullOrEmpty(Resolution.FilePath) || !MentionSyntax.TakesValue(Kind) || string.Equals(Resolution.Mention, other.Mention, StringComparison.OrdinalIgnoreCase));
+        && (Kind == MentionSyntax.Symbol
+            ? string.Equals(DisplayName, string.IsNullOrWhiteSpace(other.DisplayName) ? other.Mention : other.DisplayName, StringComparison.Ordinal) && FirstLine(Resolution) == FirstLine(other)
+            : !string.IsNullOrEmpty(Resolution.FilePath) || MentionSyntax.IsSingleton(Kind) || string.Equals(Resolution.Mention, other.Mention, StringComparison.OrdinalIgnoreCase));
+
+    private static int FirstLine(MentionResolution resolution) => resolution.Citations is { Length: > 0 } citations ? citations[0].StartLine : -1;
 
     /// <inheritdoc/>
     public override string ToString() => DisplayName;
