@@ -649,7 +649,33 @@ public sealed class ConversationPersistenceTests : IDisposable
         Assert.True(vm.DeleteAllConversationsCommand.CanExecute(null));
     }
 
-    private async Task<ChatViewModel> StartAsync(bool confirm = true)
+    [Fact]
+    public async Task ASpanCitation_OpensWithTheSpanSelected_WhenTheWindowCanSelectSpans()
+    {
+        var spans = new List<(string Path, int Start, int End)>();
+        using var vm = await StartAsync(openSpan: (path, start, end) => spans.Add((path, start, end)));
+        var script = _models.Next();
+        vm.InputText = "Where is the total?";
+        var send = vm.SendAsync();
+        await script.Started.Task.WithTimeout(Timeout);
+        script.SendFinalWithCitations(
+            "In ComputeTotal.",
+            new Citation { FilePath = ProgramPath, StartLine = 8, EndLine = 11, ReplyOffset = 3 },
+            new Citation { FilePath = ProgramPath, StartLine = 20, EndLine = 24, ReplyOffset = -1 });
+        await send.WithTimeout(Timeout);
+
+        var turn = vm.Turns.Last();
+        var link = Assert.Single(turn.ExplicitCitations);
+        Assert.Equal("Program.cs:9-12", link.Text);
+        var source = Assert.Single(turn.ImplicitCitations);
+        Assert.Equal("Sources (1)", turn.SourcesText);
+        vm.OpenCitationCommand.Execute(link);
+        vm.OpenCitationCommand.Execute(source);
+        Assert.Equal([(ProgramPath, 8, 11), (ProgramPath, 20, 24)], spans);
+        Assert.Empty(_opened); // the line-only action is the fallback
+    }
+
+    private async Task<ChatViewModel> StartAsync(bool confirm = true, Action<string, int, int>? openSpan = null)
     {
         var vm = new ChatViewModel(
             _connection,
@@ -659,6 +685,7 @@ public sealed class ConversationPersistenceTests : IDisposable
                 FlushInterval = TimeSpan.Zero,
                 ConversationEvents = _events,
                 OpenCitation = (path, line) => _opened.Enqueue((path, line)),
+                OpenCitationSpan = openSpan,
                 ConfirmDelete = c =>
                 {
                     _confirmations.Add(c.Title);
