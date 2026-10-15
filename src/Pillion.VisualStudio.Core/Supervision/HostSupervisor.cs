@@ -62,6 +62,9 @@ public sealed class HostSupervisor : IHostConnection, IDisposable
     public event EventHandler<HostSettingsChangedEventArgs>? SettingsChanged;
 
     /// <inheritdoc/>
+    public event EventHandler<HostIndexStatusChangedEventArgs>? IndexStatusChanged;
+
+    /// <inheritdoc/>
     public ConnectivityState? Connectivity
     {
         get
@@ -426,6 +429,7 @@ public sealed class HostSupervisor : IHostConnection, IDisposable
         session.HostStateChanged += OnSessionHostStateChanged;
         session.ConnectivityChanged += OnSessionConnectivityChanged;
         session.SettingsChanged += OnSessionSettingsChanged;
+        session.IndexStatusChanged += OnSessionIndexStatusChanged;
         try
         {
             // The connectivity notification may have arrived during the handshake, before this subscription.
@@ -462,6 +466,7 @@ public sealed class HostSupervisor : IHostConnection, IDisposable
             session.HostStateChanged -= OnSessionHostStateChanged;
             session.ConnectivityChanged -= OnSessionConnectivityChanged;
             session.SettingsChanged -= OnSessionSettingsChanged;
+            session.IndexStatusChanged -= OnSessionIndexStatusChanged;
             SetConnectivity(session, null, force: true);
             var owned = false;
             lock (_gate)
@@ -570,6 +575,38 @@ public sealed class HostSupervisor : IHostConnection, IDisposable
 #pragma warning restore CA1031
             {
                 _log.Error("supervisor.settings_handler_failed", "A SettingsChanged handler threw.", ("error", ex.GetType().Name), ("detail", ex.Message));
+            }
+        }
+    }
+
+    /// <summary>Forwards the current session's <c>indexStatusChanged</c> notification (a stale session's is ignored).</summary>
+    private void OnSessionIndexStatusChanged(object? sender, HostIndexStatusChangedEventArgs e)
+    {
+        lock (_gate)
+        {
+            if (!ReferenceEquals(sender, _session))
+            {
+                return;
+            }
+        }
+
+        var handlers = IndexStatusChanged;
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (EventHandler<HostIndexStatusChangedEventArgs> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(this, e);
+            }
+#pragma warning disable CA1031 // A faulty subscriber must not break supervision.
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                _log.Error("supervisor.index_status_handler_failed", "An IndexStatusChanged handler threw.", ("error", ex.GetType().Name), ("detail", ex.Message));
             }
         }
     }

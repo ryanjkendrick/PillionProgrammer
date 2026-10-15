@@ -134,6 +134,11 @@ internal sealed class FakeSession(int processId, HostState initialState) : IHost
     public void ReportSettingsChanged(params string[] sections) =>
         SettingsChanged?.Invoke(this, new HostSettingsChangedEventArgs(sections));
 
+    public event EventHandler<HostIndexStatusChangedEventArgs>? IndexStatusChanged;
+
+    public void ReportIndexStatus(IndexStatus status) =>
+        IndexStatusChanged?.Invoke(this, new HostIndexStatusChangedEventArgs(status));
+
     public int ProcessId { get; } = processId;
 
     public HostState LatestHostState => _latest;
