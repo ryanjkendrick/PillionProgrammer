@@ -25,7 +25,7 @@ public sealed class FeatureFlagTests : IDisposable
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
     private static readonly string[] AllFlags =
-        ["chat", "modelGateway", "connectivityProbes", "cloudProviders", "ollamaProvider", "openAICompatibleProvider", "anthropicProvider", "geminiProvider", "mistralProvider", "azureOpenAIProvider", "autocomplete", "inlineChat", "mentions", "outboundLogView", "localStore", "indexing", "embeddings", "bundledEmbeddings"];
+        ["chat", "modelGateway", "connectivityProbes", "cloudProviders", "ollamaProvider", "openAICompatibleProvider", "anthropicProvider", "geminiProvider", "mistralProvider", "azureOpenAIProvider", "autocomplete", "inlineChat", "mentions", "outboundLogView", "localStore", "indexing", "embeddings", "bundledEmbeddings", "retrieval", "reranker"];
 
     private readonly TempDirectory _data = new();
     private readonly FakeSettings _settings = new();
@@ -47,13 +47,13 @@ public sealed class FeatureFlagTests : IDisposable
         var flags = host.Services.GetRequiredService<IFeatureFlags>();
 
         Assert.IsType<SettingsFeatureFlags>(flags);
-        Assert.All(AllFlags, name => Assert.True(flags.IsEnabled(name), name));
+        Assert.All(AllFlags, name => Assert.Equal(name != FeatureNames.Reranker, flags.IsEnabled(name)));
         _settings.Update(s => s.Features.Chat = false);
         Assert.False(flags.IsEnabled("chat"));
     }
 
     [Fact]
-    public async Task EffectiveFeatures_ReportsEveryFlagOn_ByDefault()
+    public async Task EffectiveFeatures_ReportsEveryFlagOnExceptTheReranker_ByDefault()
     {
         await using var host = await StartAsync();
         await using var client = await host.ConnectAndHandshakeAsync();
@@ -62,7 +62,7 @@ public sealed class FeatureFlagTests : IDisposable
 
         var features = JsonNode.Parse(json!)!.AsObject();
         Assert.Equal(AllFlags, features.Select(p => p.Key));
-        Assert.All(features, p => Assert.True(p.Value!.GetValue<bool>(), p.Key));
+        Assert.All(features, p => Assert.Equal(p.Key != FeatureNames.Reranker, p.Value!.GetValue<bool>()));
     }
 
     [Fact]
@@ -446,10 +446,10 @@ public sealed class FeatureFlagStoreTests : IDisposable
         var settings = client.Attach<ISettingsService>();
         var models = client.Attach<IModelService>();
 
-        // A fresh settings file has the features section with everything on.
+        // A fresh settings file has the features section with everything on except the reranker (licence review pending).
         var raw = JsonNode.Parse((await settings.GetAsync("features", CancellationToken.None).WaitAsync(Wait))!)!.AsObject();
         Assert.Equal(FeatureNames.All.Count, raw.Count);
-        Assert.All(raw, p => Assert.True(p.Value!.GetValue<bool>(), p.Key));
+        Assert.All(raw, p => Assert.Equal(p.Key != FeatureNames.Reranker, p.Value!.GetValue<bool>()));
         Assert.NotEmpty(await models.ListModelsAsync(CancellationToken.None).WaitAsync(Wait));
 
         await settings.SetAsync("features.modelGateway", "false", CancellationToken.None).WaitAsync(Wait);

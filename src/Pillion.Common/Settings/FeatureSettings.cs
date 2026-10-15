@@ -56,6 +56,12 @@ public static class FeatureNames
     /// <summary>The bundled embedding provider: the in-process ONNX Runtime model shipped with the extension and the models downloaded on request (work item 2.7). It also needs <see cref="Embeddings"/>.</summary>
     public const string BundledEmbeddings = "bundledEmbeddings";
 
+    /// <summary>Hybrid retrieval: <c>IContextService.SearchAsync</c> and <c>SearchDetailedAsync</c> over the open indexes (work item 2.11). An index also needs <see cref="Indexing"/> and <see cref="LocalStore"/>.</summary>
+    public const string Retrieval = "retrieval";
+
+    /// <summary>The cross-encoder reranker of hybrid retrieval (work item 2.11). Off by default until the licence review in design section 18; no reranker ships yet.</summary>
+    public const string Reranker = "reranker";
+
     /// <summary>Gets every feature flag name, in the order they are written to <c>settings.json</c>.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
@@ -77,12 +83,15 @@ public static class FeatureNames
         Indexing,
         Embeddings,
         BundledEmbeddings,
+        Retrieval,
+        Reranker,
     ];
 }
 
 /// <summary>
-/// The feature flags. Every flag defaults to <see langword="true"/>: a feature is on unless the user or a repository
-/// policy (<c>disabledFeatures</c>) switches it off. A policy can only switch a flag off.
+/// The feature flags. Every flag defaults to <see langword="true"/> except <see cref="Reranker"/>, which waits on a licence
+/// review: a feature is on unless the user or a repository policy (<c>disabledFeatures</c>) switches it off. A policy can
+/// only switch a flag off.
 /// </summary>
 public sealed class FeatureSettings : SettingsNode
 {
@@ -146,6 +155,8 @@ public sealed class FeatureSettings : SettingsNode
             "indexing" => Indexing,
             "embeddings" => Embeddings,
             "bundledembeddings" => BundledEmbeddings,
+            "retrieval" => Retrieval,
+            "reranker" => Reranker,
             _ => true,
         };
     }
@@ -212,6 +223,12 @@ public sealed class FeatureSettings : SettingsNode
             case "bundledembeddings":
                 BundledEmbeddings = false;
                 break;
+            case "retrieval":
+                Retrieval = false;
+                break;
+            case "reranker":
+                Reranker = false;
+                break;
         }
     }
 
@@ -237,4 +254,18 @@ public sealed class FeatureSettings : SettingsNode
     /// extension (and models downloaded on request) runs in the host, with no network. When off, the provider is hidden from routing.
     /// </summary>
     public bool BundledEmbeddings { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether Pillion Host answers workspace searches with hybrid retrieval (lexical,
+    /// vector and symbol candidates fused with Reciprocal Rank Fusion). When off, <c>SearchAsync</c> and
+    /// <c>SearchDetailedAsync</c> fail with a policy error.
+    /// </summary>
+    public bool Retrieval { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether hybrid retrieval may rerank its top candidates with the cross-encoder.
+    /// <b>Off by default</b>: the reranker waits on the licence review in design section 18, and this version ships only a
+    /// reranker that keeps the fused order, so turning it on changes nothing yet.
+    /// </summary>
+    public bool Reranker { get; set; }
 }

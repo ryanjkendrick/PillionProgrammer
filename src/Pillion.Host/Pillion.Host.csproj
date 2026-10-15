@@ -27,6 +27,8 @@
     <ProjectReference Include="..\Pillion.Common\Pillion.Common.csproj" />
     <ProjectReference Include="..\Pillion.ModelGateway\Pillion.ModelGateway.csproj" />
     <ProjectReference Include="..\Pillion.LocalStore\Pillion.LocalStore.csproj" />
+    <ProjectReference Include="..\Pillion.Indexing\Pillion.Indexing.csproj" />
+    <ProjectReference Include="..\Pillion.ContextEngine\Pillion.ContextEngine.csproj" />
   </ItemGroup>
 
   <ItemGroup>
