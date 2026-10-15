@@ -109,7 +109,11 @@ internal sealed class ChatToolWindow : ToolWindowPane
     /// <summary>Opens a file in the editor and puts the caret on a line (a cited span under a reply). Must be called on the UI thread.</summary>
     /// <param name="path">The full path of the file.</param>
     /// <param name="line">The zero-based line.</param>
-    public static void OpenCitation(string path, int line) => OpenCitationSpan(path, line, line);
+    public static void OpenCitation(string path, int line)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        OpenCitationSpan(path, line, line);
+    }
 
     /// <summary>
     /// Opens a file in the editor with a cited span selected, its first line centred (work item 2.12). A one-line span puts the
