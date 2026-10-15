@@ -27,6 +27,10 @@
     <ProjectReference Include="..\Pillion.Common\Pillion.Common.csproj" />
     <ProjectReference Include="..\Pillion.ModelGateway\Pillion.ModelGateway.csproj" />
     <ProjectReference Include="..\Pillion.LocalStore\Pillion.LocalStore.csproj" />
+    <!-- The indexing pipeline (work item 2.9): discovery, hashing and ownership, then chunkers and symbols. The Context Engine
+         brings the tree-sitter native libraries under runtimes\<rid>\native\, which flow into the host's output and publish. -->
+    <ProjectReference Include="..\Pillion.Indexing\Pillion.Indexing.csproj" />
+    <ProjectReference Include="..\Pillion.ContextEngine\Pillion.ContextEngine.csproj" />
   </ItemGroup>
 
   <ItemGroup>

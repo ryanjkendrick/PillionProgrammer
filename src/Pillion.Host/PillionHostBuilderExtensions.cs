@@ -1,18 +1,23 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Pillion.Common;
 using Pillion.Common.Connectivity;
 using Pillion.Common.Settings;
 using Pillion.Contracts;
 using Pillion.Host.Connectivity;
 using Pillion.Host.Context;
+using Pillion.Host.Indexing;
 using Pillion.Host.Conversations;
 using Pillion.Host.Lifecycle;
 using Pillion.Host.Logging;
 using Pillion.Host.Models;
 using Pillion.Host.Rpc;
 using Pillion.Host.Settings;
+using Pillion.Indexing;
+using Pillion.Indexing.Ownership;
+using Pillion.Indexing.Retention;
 using Pillion.LocalStore;
 using Pillion.ModelGateway;
 using Pillion.ModelGateway.Providers.Bundled;
@@ -116,6 +121,41 @@ internal static class PillionHostBuilderExtensions
         // until then).
         builder.Services.AddPillionLocalStore();
         builder.Services.AddRpcTarget<IConversationService, ConversationRpcService>();
+
+        // The indexing pipeline (work item 2.9), behind features.indexing: the index stores and retention of Pillion.Indexing,
+        // the gateway's embeddings, IDE activity from the ideActivityChanged notification, and the status through
+        // IndexStatusNotifier. It starts indexing when the extension calls IContextService.SetWorkspaceAsync.
+        builder.Services.TryAddSingleton(sp => new IndexRetentionPolicy(
+            sp.GetRequiredService<IGatewaySettingsSource>().GetCurrent().Settings.Indexing.RetentionDays));
+        builder.Services.AddPillionIndexing();
+        builder.Services.TryAddSingleton<IdeActivityMonitor>();
+        builder.Services.TryAddSingleton<IPowerStatus, Win32PowerStatus>();
+        builder.Services.TryAddSingleton<IMemorySampler, ProcessMemorySampler>();
+        builder.Services.TryAddSingleton(new IndexingOptions());
+        builder.Services.TryAddSingleton<IIndexEmbedder>(sp => new GatewayIndexEmbedder(
+            sp.GetRequiredService<IModelRouter>(),
+            sp.GetRequiredService<IModelGateway>(),
+            sp.GetRequiredService<ModelCatalog>(),
+            sp.GetService<BundledModelRuntime>()));
+        builder.Services.TryAddSingleton(sp => new IndexingService(
+            sp.GetRequiredService<IndexStoreFactory>(),
+            sp.GetRequiredService<IndexRetention>(),
+            sp.GetRequiredService<IIndexEmbedder>(),
+            sp.GetRequiredService<IGatewaySettingsSource>(),
+            sp.GetRequiredService<IFeatureFlags>(),
+            sp.GetRequiredService<IndexStatusNotifier>(),
+            sp.GetRequiredService<IdeActivityMonitor>(),
+            sp.GetRequiredService<IPowerStatus>(),
+            sp.GetRequiredService<IMemorySampler>(),
+            sp.GetRequiredService<IndexingOptions>(),
+            sp.GetRequiredService<PillionHostOptions>().PipeName,
+            sp.GetService<TimeProvider>(),
+            sp.GetService<ILoggerFactory>(),
+            sp.GetService<IVsixConnection>()));
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<IndexingService>());
+        builder.Services.AddRpcNotification(
+            IdeActivityMonitor.NotificationName,
+            sp => new Action<IdeActivity>(sp.GetRequiredService<IdeActivityMonitor>().Set));
 
         // RPC targets for the agent service are registered here by a later work item.
         return builder;

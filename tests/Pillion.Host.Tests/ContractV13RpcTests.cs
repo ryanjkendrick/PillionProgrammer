@@ -89,7 +89,7 @@ public sealed class ContractV13RpcTests : IDisposable
     }
 
     [Fact]
-    public async Task TheIndex_IsReportedHonestlyAsAbsent_AndItsControlsAreNotImplementedYet()
+    public async Task BeforeAnyWorkspace_TheIndexIsReportedAsAbsent_AndItsControlsAnswerForAnEmptyMachine()
     {
         await using var host = await StartAsync();
         await using var client = await host.ConnectAndHandshakeAsync();
@@ -105,17 +105,56 @@ public sealed class ContractV13RpcTests : IDisposable
         Assert.Empty(search.Results);
         Assert.False(search.Degraded);
 
-        foreach (var call in new Func<Task>[]
+        var excluded = await context.ListExcludedFilesAsync(new ExcludedFilesRequest { RootPath = _data.Path }, CancellationToken.None).WaitAsync(Wait);
+        Assert.Empty(excluded.Items);
+        Assert.Equal(0, excluded.TotalCount);
+        Assert.Empty(await context.ListIndexesAsync(CancellationToken.None).WaitAsync(Wait));
+        Assert.False(await context.DeleteIndexAsync("0123456789abcdef0123456789abcdef", CancellationToken.None).WaitAsync(Wait));
+
+        // No workspace is open, so there is no root to rebuild.
+        var error = await ErrorOfAsync(() => context.RebuildIndexAsync(_data.Path, CancellationToken.None));
+        Assert.Equal(PillionErrorCode.PolicyDenied, error.Code);
+    }
+
+    [Fact]
+    public async Task WithTheIndexingFlagOff_TheIndexControlsAreRefusedNamingTheFlag_AndTheStatusIsIdle()
+    {
+        _flags.Disabled.Add(FeatureNames.Indexing);
+        await using var host = await StartAsync();
+        await using var client = await host.ConnectAndHandshakeAsync();
+        var context = client.Attach<IContextService>();
+
+        await context.SetWorkspaceAsync(new WorkspaceDescription { FolderPath = _data.Path }, CancellationToken.None).WaitAsync(Wait);
+        var status = await context.GetIndexStatusAsync(CancellationToken.None).WaitAsync(Wait);
+        Assert.Equal(IndexPhase.Idle, status.Phase);
+        Assert.Empty(status.Roots);
+
+        var error = await ErrorOfAsync(() => context.ListIndexesAsync(CancellationToken.None));
+        Assert.Equal(PillionErrorCode.PolicyDenied, error.Code);
+        Assert.Contains("indexing", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TheIdeActivityNotification_ReachesTheHost_AndIsForgottenWhenTheClientLeaves()
+    {
+        await using var host = await StartAsync();
+        var monitor = host.Services.GetRequiredService<Pillion.Host.Indexing.IdeActivityMonitor>();
+        await using (var client = await host.ConnectAndHandshakeAsync())
         {
-            () => context.ListExcludedFilesAsync(new ExcludedFilesRequest { RootPath = _data.Path }, CancellationToken.None),
-            () => context.RebuildIndexAsync(_data.Path, CancellationToken.None),
-            () => context.DeleteIndexAsync("0123456789abcdef0123456789abcdef", CancellationToken.None),
-            () => context.ListIndexesAsync(CancellationToken.None),
-        })
+            await client.Rpc.NotifyAsync("ideActivityChanged", IdeActivity.Build | IdeActivity.Debug).WaitAsync(Wait);
+            await WaitUntilAsync(() => monitor.Current == (IdeActivity.Build | IdeActivity.Debug));
+        }
+
+        await WaitUntilAsync(() => monitor.Current == IdeActivity.None);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow + Wait;
+        while (!condition())
         {
-            var error = await ErrorOfAsync(call);
-            Assert.Equal(PillionErrorCode.NotImplemented, error.Code);
-            Assert.Equal("work item 2.15", error.Details);
+            Assert.True(DateTime.UtcNow < deadline, "The condition was not met in time.");
+            await Task.Delay(20);
         }
     }
 

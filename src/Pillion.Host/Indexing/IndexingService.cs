@@ -1,0 +1,972 @@
+using System.Diagnostics;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Pillion.Common.Settings;
+using Pillion.ContextEngine;
+using Pillion.Contracts;
+using Pillion.Host.Context;
+using Pillion.Host.Rpc;
+using Pillion.Indexing.Ownership;
+using Pillion.Indexing.Retention;
+using Pillion.Indexing.Roots;
+using Pillion.Indexing.Sweep;
+using Pillion.LocalStore;
+using Pillion.ModelGateway;
+
+namespace Pillion.Host.Indexing;
+
+/// <summary>
+/// The indexing pipeline's owner in the host (work item 2.9, design sections 7, 10 and 13), behind <c>features.indexing</c>.
+/// When the extension reports the open solution or folder (<see cref="SetWorkspace"/>), it resolves the repository roots,
+/// opens each root's index through <see cref="IndexStoreFactory"/> (as its writer, or read-only when another host owns it)
+/// and runs an <see cref="IndexPass"/> for every root it owns, one root at a time, on below-normal threads. It pauses for the
+/// user, for builds, test runs and debugging (the <c>ideActivityChanged</c> notification), for battery saver (when
+/// <c>indexing.pauseOnBattery</c> is set) and for the memory cap, and publishes its status through
+/// <see cref="IndexStatusNotifier"/>.
+/// </summary>
+/// <remarks>
+/// A host that only reads an index does not index it and forwards nothing: it checks every
+/// <see cref="IndexingOptions.ReaderPollInterval"/> whether the owner is still alive and, when it is not, opens the index
+/// again (taking <c>writer.lock</c>) and runs a full sweep, which picks up whatever changed meanwhile. Forwarding requests to
+/// the owner over its pipe needs a host-to-host handshake that does not exist yet; see the host README.
+/// </remarks>
+internal sealed partial class IndexingService : IHostedService, IAsyncDisposable, IDisposable
+{
+    /// <summary>What a rebuild runs before indexing again: every file (and by cascade its chunks, vectors and symbols), and the meta rows the old content fixed.</summary>
+    private static readonly string[] WipeStatements =
+    [
+        "DELETE FROM files",
+        "DELETE FROM meta WHERE key IN ('symbols_version', 'vector_dimensions')",
+    ];
+
+    private readonly IndexStoreFactory _factory;
+    private readonly IndexRetention _retention;
+    private readonly IIndexEmbedder _embedder;
+    private readonly IGatewaySettingsSource _settings;
+    private readonly IFeatureFlags _features;
+    private readonly IndexStatusNotifier _notifier;
+    private readonly IdeActivityMonitor _activity;
+    private readonly IPowerStatus _power;
+    private readonly IndexingOptions _options;
+    private readonly string _pipeName;
+    private readonly TimeProvider _time;
+    private readonly ILogger _logger;
+    private readonly IVsixConnection? _vsix;
+    private readonly PauseGate _pause = new();
+    private readonly MemoryGovernor _memory;
+    private readonly PipelineScheduler _scheduler;
+    private readonly SemaphoreSlim _wake = new(0, int.MaxValue);
+    private readonly Lock _gate = new();
+    private readonly Dictionary<string, RootIndex> _roots = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _rebuild = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _suppressed = new(StringComparer.Ordinal);
+    private readonly CancellationTokenSource _stopping = new();
+    private WorkspaceDescription? _workspace;
+    private int _workspaceVersion;
+    private int _appliedWorkspaceVersion = -1;
+    private Task _loop = Task.CompletedTask;
+    private ITimer? _powerTimer;
+    private CancellationTokenSource? _runCancellation;
+    private IndexPass? _currentPass;
+    private RootIndex? _currentRoot;
+    private string? _lastError;
+    private bool _failed;
+    private bool _started;
+    private int _disposed;
+
+    /// <summary>Initializes a new instance of the <see cref="IndexingService"/> class.</summary>
+    /// <param name="factory">Opens indexes.</param>
+    /// <param name="retention">Lists and deletes index folders.</param>
+    /// <param name="embedder">Embeds chunks.</param>
+    /// <param name="settings">The effective settings (exclusions, memory cap, battery rule).</param>
+    /// <param name="features">The feature flags (<c>indexing</c>).</param>
+    /// <param name="notifier">Publishes the status.</param>
+    /// <param name="activity">What the IDE is busy with.</param>
+    /// <param name="power">Reads battery saver.</param>
+    /// <param name="memory">Samples the working set.</param>
+    /// <param name="options">The tunables.</param>
+    /// <param name="hostPipeName">This host's pipe name, recorded in <c>writer.lock</c>.</param>
+    /// <param name="time">The clock.</param>
+    /// <param name="loggerFactory">The logger factory.</param>
+    /// <param name="vsix">The extension connection: IDE activity is forgotten when it drops. Optional.</param>
+    public IndexingService(
+        IndexStoreFactory factory,
+        IndexRetention retention,
+        IIndexEmbedder embedder,
+        IGatewaySettingsSource settings,
+        IFeatureFlags features,
+        IndexStatusNotifier notifier,
+        IdeActivityMonitor activity,
+        IPowerStatus power,
+        IMemorySampler memory,
+        IndexingOptions options,
+        string hostPipeName,
+        TimeProvider? time = null,
+        ILoggerFactory? loggerFactory = null,
+        IVsixConnection? vsix = null)
+    {
+        _factory = factory;
+        _retention = retention;
+        _embedder = embedder;
+        _settings = settings;
+        _features = features;
+        _notifier = notifier;
+        _activity = activity;
+        _power = power;
+        _options = options;
+        _pipeName = hostPipeName;
+        _time = time ?? TimeProvider.System;
+        _vsix = vsix;
+        loggerFactory ??= NullLoggerFactory.Instance;
+        _logger = loggerFactory.CreateLogger<IndexingService>();
+        _memory = new MemoryGovernor(memory, _pause, MemoryCapBytes, options, _time, _logger);
+        _scheduler = new PipelineScheduler(options.MaxDegreeOfParallelism);
+    }
+
+    /// <summary>Gets the statistics of the last run that finished, for logs and tests.</summary>
+    public PassStatistics? LastRunStatistics { get; private set; }
+
+    /// <summary>Gets the pipeline's scheduler (tests check its concurrency).</summary>
+    internal PipelineScheduler Scheduler => _scheduler;
+
+    /// <summary>Gets the pause reasons (tests).</summary>
+    internal PauseGate Pause => _pause;
+
+    /// <summary>Gets the memory governor (tests).</summary>
+    internal MemoryGovernor Memory => _memory;
+
+    /// <inheritdoc/>
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            if (_started)
+            {
+                return Task.CompletedTask;
+            }
+
+            _started = true;
+        }
+
+        _activity.Changed += OnActivityChanged;
+        _pause.Changed += OnPauseChanged;
+        _features.Changed += OnSettingsChanged;
+        _settings.Changed += OnSettingsChanged;
+        if (_vsix is not null)
+        {
+            _vsix.ConnectionChanged += OnVsixConnectionChanged;
+        }
+
+        ApplyActivity();
+        ApplyPower();
+        _powerTimer = _time.CreateTimer(_ => ApplyPower(), null, _options.PowerPollInterval, _options.PowerPollInterval);
+        _loop = Task.Run(() => LoopAsync(_stopping.Token), CancellationToken.None);
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await _stopping.CancelAsync().ConfigureAwait(false);
+        lock (_gate)
+        {
+            _runCancellation?.Cancel();
+        }
+
+        try
+        {
+            await _loop.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Stopping: the loop ends at its next checkpoint.
+        }
+    }
+
+    /// <inheritdoc/>
+    public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+    /// <inheritdoc/>
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        await StopAsync(CancellationToken.None).ConfigureAwait(false);
+        _activity.Changed -= OnActivityChanged;
+        _pause.Changed -= OnPauseChanged;
+        _features.Changed -= OnSettingsChanged;
+        _settings.Changed -= OnSettingsChanged;
+        if (_vsix is not null)
+        {
+            _vsix.ConnectionChanged -= OnVsixConnectionChanged;
+        }
+
+        _powerTimer?.Dispose();
+        _memory.Dispose();
+        List<RootIndex> roots;
+        lock (_gate)
+        {
+            roots = [.. _roots.Values];
+            _roots.Clear();
+        }
+
+        foreach (var root in roots)
+        {
+            await root.DisposeAsync().ConfigureAwait(false);
+        }
+
+        _scheduler.Dispose();
+        _wake.Dispose();
+        _stopping.Dispose();
+    }
+
+    /// <summary>Takes what is open in Visual Studio and starts indexing it (<see cref="IContextService.SetWorkspaceAsync"/>).</summary>
+    /// <param name="workspace">The solution and projects, or the folder.</param>
+    public void SetWorkspace(WorkspaceDescription workspace)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        var wanted = RepositoryRoots.Resolve(WorkspacePaths(workspace)).Select(r => Key(r.Path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        lock (_gate)
+        {
+            _workspace = workspace;
+
+            // The same roots (the extension sends the workspace again after every project load): nothing to restart.
+            if (!_failed && _suppressed.Count == 0 && _appliedWorkspaceVersion == _workspaceVersion && wanted.SetEquals(_roots.Keys))
+            {
+                return;
+            }
+
+            _workspaceVersion++;
+            _suppressed.Clear();
+            _runCancellation?.Cancel();
+        }
+
+        LogWorkspace(_logger, workspace.SolutionPath is not null ? "solution" : workspace.FolderPath is not null ? "folder" : "nothing", workspace.ProjectPaths.Length);
+        Wake();
+    }
+
+    /// <summary>Pauses or resumes indexing for the user (<see cref="IContextService.PauseIndexingAsync"/>).</summary>
+    /// <param name="pause">Whether to pause.</param>
+    public void SetUserPause(bool pause) => _pause.Set(IndexPauseReason.User, pause);
+
+    /// <summary>Wipes a root's index and indexes it again (<see cref="IContextService.RebuildIndexAsync"/>).</summary>
+    /// <param name="rootPath">The root.</param>
+    /// <exception cref="PillionRpcException">The flag is off, the root is not open, or another host owns its index.</exception>
+    public void Rebuild(string rootPath)
+    {
+        EnsureEnabled();
+        ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
+        var key = Key(rootPath);
+        lock (_gate)
+        {
+            if (!_roots.TryGetValue(key, out var root))
+            {
+                // Not open: a root of the workspace whose index was deleted (or failed to open) is opened again, from scratch.
+                var inWorkspace = _workspace is not null
+                    && RepositoryRoots.Resolve(WorkspacePaths(_workspace)).Any(r => string.Equals(Key(r.Path), key, StringComparison.OrdinalIgnoreCase));
+                if (!inWorkspace)
+                {
+                    throw Denied($"'{rootPath}' is not a repository root of the open solution or folder, so there is no index to rebuild.");
+                }
+
+                _suppressed.Clear();
+                _workspaceVersion++;
+            }
+            else if (!root.IsWriter)
+            {
+                throw Denied("Another Visual Studio instance owns this index; rebuild it from there (or close that instance and try again).");
+            }
+            else
+            {
+                _rebuild.Add(key);
+                if (ReferenceEquals(_currentRoot, root))
+                {
+                    _runCancellation?.Cancel();
+                }
+            }
+        }
+
+        Wake();
+    }
+
+    /// <summary>Deletes an index folder (<see cref="IContextService.DeleteIndexAsync"/>); an index this host has open is closed first.</summary>
+    /// <param name="indexId">The index id.</param>
+    /// <param name="cancellationToken">Cancels waiting for the run to stop.</param>
+    /// <returns><see langword="true"/> when deleted; <see langword="false"/> when there is no such index.</returns>
+    /// <exception cref="PillionRpcException">The flag is off, another live host owns the index, or the folder could not be deleted.</exception>
+    public async Task<bool> DeleteIndexAsync(string indexId, CancellationToken cancellationToken)
+    {
+        EnsureEnabled();
+        RootIndex? open = null;
+        lock (_gate)
+        {
+            foreach (var (key, root) in _roots)
+            {
+                if (string.Equals(root.Store.Identity.Id, indexId, StringComparison.Ordinal))
+                {
+                    if (!root.IsWriter)
+                    {
+                        throw Denied("Another Visual Studio instance owns this index; it cannot be deleted while that instance has it open.");
+                    }
+
+                    open = root;
+                    _roots.Remove(key);
+                    _suppressed.Add(indexId);
+                    if (ReferenceEquals(_currentRoot, root))
+                    {
+                        _runCancellation?.Cancel();
+                    }
+
+                    break;
+                }
+            }
+        }
+
+        if (open is not null)
+        {
+            await WaitForRunToStopAsync(open, cancellationToken).ConfigureAwait(false);
+            await open.DisposeAsync().ConfigureAwait(false);
+        }
+
+        var outcome = _retention.Delete(indexId);
+        Publish();
+        return outcome switch
+        {
+            IndexDeleteOutcome.Deleted => true,
+            IndexDeleteOutcome.NotFound => false,
+            IndexDeleteOutcome.InUse => throw Denied("Another Visual Studio instance owns this index; it cannot be deleted while that instance has it open."),
+            _ => throw new PillionRpcException(new PillionError
+            {
+                Code = PillionErrorCode.StorageUnavailable,
+                Message = "The index folder could not be deleted completely; a file in it is in use. Try again later.",
+                Details = indexId,
+            }),
+        };
+    }
+
+    /// <summary>Lists every index folder on the machine (<see cref="IContextService.ListIndexesAsync"/>).</summary>
+    /// <returns>The indexes, ordered by root path.</returns>
+    /// <exception cref="PillionRpcException">The flag is off.</exception>
+    public IndexInfo[] ListIndexes()
+    {
+        EnsureEnabled();
+        HashSet<string> open;
+        lock (_gate)
+        {
+            open = [.. _roots.Values.Select(r => r.Store.Identity.Id)];
+        }
+
+        return [.. _retention.GetUsage()
+            .Select(u => new IndexInfo
+            {
+                IndexId = u.Id,
+                RootPath = u.RootPath,
+                EmbeddingModelId = u.EmbeddingModel,
+                ChunkerVersion = u.ChunkerVersion,
+                DiskBytes = u.DiskBytes,
+                LastUsedUtc = u.LastUsedUtc.UtcDateTime,
+                RootExists = u.RootExists,
+                IsInUse = u.InUse,
+                IsOpen = open.Contains(u.Id),
+            })
+            .OrderBy(i => i.RootPath ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(i => i.IndexId, StringComparer.Ordinal)];
+    }
+
+    /// <summary>Pages the files a root's last sweep excluded (<see cref="IContextService.ListExcludedFilesAsync"/>).</summary>
+    /// <param name="request">The root and the page.</param>
+    /// <returns>The page; empty for a root that is not open or not swept yet.</returns>
+    /// <exception cref="PillionRpcException">The flag is off.</exception>
+    public ExcludedFilesPage ListExcludedFiles(ExcludedFilesRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        EnsureEnabled();
+        IReadOnlyList<ExcludedFile> excluded;
+        lock (_gate)
+        {
+            excluded = string.IsNullOrWhiteSpace(request.RootPath) || !_roots.TryGetValue(Key(request.RootPath), out var root) ? [] : root.Excluded;
+        }
+
+        var matching = request.SecretOnly ? excluded.Where(e => e.IsSecretBearing).ToList() : excluded;
+        var limit = request.Limit <= 0 ? 200 : Math.Min(request.Limit, 1000);
+        var offset = Math.Max(0, request.Offset);
+        return new ExcludedFilesPage
+        {
+            Items = [.. matching.Skip(offset).Take(limit)],
+            TotalCount = matching.Count,
+            HasMore = offset + limit < matching.Count,
+        };
+    }
+
+    /// <summary>Builds the status as <see cref="IContextService.GetIndexStatusAsync"/> returns it.</summary>
+    /// <returns>The status.</returns>
+    public IndexStatus GetStatus() => BuildStatus(withDiskUse: true);
+
+    private static string Key(string path)
+    {
+        try
+        {
+            return Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return path;
+        }
+    }
+
+    private static PillionRpcException Denied(string message) =>
+        new(new PillionError { Code = PillionErrorCode.PolicyDenied, Message = message });
+
+    private static List<string> WorkspacePaths(WorkspaceDescription workspace)
+    {
+        var paths = new List<string>();
+        if (!string.IsNullOrWhiteSpace(workspace.FolderPath))
+        {
+            paths.Add(workspace.FolderPath);
+        }
+
+        if (!string.IsNullOrWhiteSpace(workspace.SolutionPath))
+        {
+            paths.Add(workspace.SolutionPath);
+        }
+
+        paths.AddRange(workspace.ProjectPaths.Where(p => !string.IsNullOrWhiteSpace(p)));
+        return paths;
+    }
+
+    private static List<IndexedProject> Projects(WorkspaceDescription workspace)
+    {
+        var projects = new List<IndexedProject>();
+        foreach (var path in workspace.ProjectPaths.Where(p => !string.IsNullOrWhiteSpace(p)))
+        {
+            try
+            {
+                projects.Add(Directory.Exists(path)
+                    ? new IndexedProject(Path.GetFileName(Path.TrimEndingDirectorySeparator(path)), path)
+                    : IndexedProject.FromProjectFile(path));
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                // A path that is not usable gives no partition.
+            }
+        }
+
+        return projects;
+    }
+
+    private long MemoryCapBytes()
+    {
+        var mb = _settings.GetCurrent().Settings.Indexing.MaxMemoryMb;
+        return mb <= 0 ? 0 : mb * 1024L * 1024L;
+    }
+
+    private void EnsureEnabled()
+    {
+        if (!_features.IsEnabled(FeatureNames.Indexing))
+        {
+            throw Denied(IndexStoreFactory.IndexingDisabledMessage);
+        }
+    }
+
+    private void Wake()
+    {
+        try
+        {
+            _wake.Release();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposed.
+        }
+    }
+
+    private void OnActivityChanged(object? sender, EventArgs e) => ApplyActivity();
+
+    private void OnPauseChanged(object? sender, EventArgs e) => Publish();
+
+    private void OnSettingsChanged(object? sender, EventArgs e)
+    {
+        ApplyPower();
+        lock (_gate)
+        {
+            // The exclusions or the flag may have changed: look at the roots again.
+            _workspaceVersion++;
+        }
+
+        Wake();
+    }
+
+    private void OnVsixConnectionChanged(object? sender, EventArgs e)
+    {
+        if (_vsix is { IsConnected: false })
+        {
+            _activity.Set(IdeActivity.None);
+        }
+    }
+
+    private void ApplyActivity()
+    {
+        var activity = _activity.Current;
+        _pause.Set(IndexPauseReason.Build, activity.HasFlag(IdeActivity.Build));
+        _pause.Set(IndexPauseReason.Test, activity.HasFlag(IdeActivity.Test));
+        _pause.Set(IndexPauseReason.Debug, activity.HasFlag(IdeActivity.Debug));
+    }
+
+    private void ApplyPower()
+    {
+        bool saver;
+        try
+        {
+            saver = _settings.GetCurrent().Settings.Indexing.PauseOnBattery && _power.IsBatterySaverOn();
+        }
+#pragma warning disable CA1031 // Reading the power state must never take indexing down.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            LogPowerFailed(_logger, ex);
+            saver = false;
+        }
+
+        _pause.Set(IndexPauseReason.Battery, saver);
+    }
+
+    private async Task LoopAsync(CancellationToken stopping)
+    {
+        while (!stopping.IsCancellationRequested)
+        {
+            try
+            {
+                await ReconcileAsync(stopping).ConfigureAwait(false);
+                await RunDueRootsAsync(stopping).ConfigureAwait(false);
+                await CheckReadersAsync(stopping).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (stopping.IsCancellationRequested)
+            {
+                break;
+            }
+#pragma warning disable CA1031 // The loop must survive anything one root throws; the error is reported in the status.
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                Fail(ex);
+            }
+
+            Publish();
+            try
+            {
+                await _wake.WaitAsync(HasReaders() ? _options.ReaderPollInterval : Timeout.InfiniteTimeSpan, stopping).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
+    }
+
+    private bool HasReaders()
+    {
+        lock (_gate)
+        {
+            return _roots.Values.Any(r => !r.IsWriter);
+        }
+    }
+
+    /// <summary>Opens the indexes of the workspace's roots and closes the others (or all of them while the flag is off).</summary>
+    private async Task ReconcileAsync(CancellationToken stopping)
+    {
+        WorkspaceDescription? workspace;
+        int version;
+        lock (_gate)
+        {
+            workspace = _workspace;
+            version = _workspaceVersion;
+        }
+
+        if (version == _appliedWorkspaceVersion)
+        {
+            return;
+        }
+
+        var enabled = _features.IsEnabled(FeatureNames.Indexing);
+
+        var wanted = new List<RepositoryRoot>();
+        if (enabled && workspace is not null)
+        {
+            wanted.AddRange(RepositoryRoots.Resolve(WorkspacePaths(workspace)).Where(r => Directory.Exists(r.Path)));
+        }
+
+        // Close what is no longer wanted.
+        List<RootIndex> closing;
+        lock (_gate)
+        {
+            var keep = wanted.Select(r => Key(r.Path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            closing = [.. _roots.Where(kv => !keep.Contains(kv.Key)).Select(kv => kv.Value)];
+            foreach (var root in closing)
+            {
+                _roots.Remove(Key(root.Path));
+            }
+        }
+
+        foreach (var root in closing)
+        {
+            await root.DisposeAsync().ConfigureAwait(false);
+        }
+
+        if (wanted.Count == 0)
+        {
+            _appliedWorkspaceVersion = version;
+            _failed = false;
+            _lastError = null;
+            return;
+        }
+
+        IndexEmbeddingModel model;
+        try
+        {
+            model = _embedder.ResolveModel();
+        }
+        catch (PillionRpcException ex)
+        {
+            _appliedWorkspaceVersion = version;
+            Fail(ex);
+            return;
+        }
+
+        var projects = Projects(workspace!);
+        foreach (var repository in wanted)
+        {
+            stopping.ThrowIfCancellationRequested();
+            var key = Key(repository.Path);
+            lock (_gate)
+            {
+                if (_roots.TryGetValue(key, out var existing))
+                {
+                    if (string.Equals(existing.Model.ModelId, model.ModelId, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    // The embedding model changed: the index is a different one (design section 10).
+                    _roots.Remove(key);
+                    closing = [existing];
+                }
+                else
+                {
+                    closing = [];
+                }
+            }
+
+            foreach (var old in closing)
+            {
+                await old.DisposeAsync().ConfigureAwait(false);
+            }
+
+            var identity = new IndexIdentity(repository.Path, model.ModelId, ContextEngineVersions.ChunkerVersion);
+            if (_suppressed.Contains(identity.Id))
+            {
+                continue;
+            }
+
+            var opened = await OpenAsync(repository, model, projects, stopping).ConfigureAwait(false);
+            if (opened is not null)
+            {
+                lock (_gate)
+                {
+                    _roots[key] = opened;
+                }
+            }
+        }
+
+        _appliedWorkspaceVersion = version;
+        if (!_failed)
+        {
+            _lastError = null;
+        }
+    }
+
+    private async Task<RootIndex?> OpenAsync(RepositoryRoot repository, IndexEmbeddingModel model, IReadOnlyList<IndexedProject> projects, CancellationToken stopping)
+    {
+        try
+        {
+            var store = await _factory.OpenAsync(new IndexRequest(repository.Path, model.ModelId, ContextEngineVersions.ChunkerVersion, _pipeName), stopping).ConfigureAwait(false);
+            var root = new RootIndex(repository, store, model, projects);
+            await root.RefreshCountsAsync(stopping).ConfigureAwait(false);
+            LogOpened(_logger, store.Identity.Id, root.Path, root.IsWriter ? "writer" : "reader");
+            return root;
+        }
+        catch (Exception ex) when (ex is LocalStoreException or IOException or UnauthorizedAccessException)
+        {
+            Fail(ex);
+            return null;
+        }
+    }
+
+    private async Task RunDueRootsAsync(CancellationToken stopping)
+    {
+        while (!stopping.IsCancellationRequested && _features.IsEnabled(FeatureNames.Indexing))
+        {
+            RootIndex? root;
+            bool rebuild;
+            lock (_gate)
+            {
+                root = _roots.Values.FirstOrDefault(r => r.IsWriter && (r.NeedsRun || _rebuild.Contains(Key(r.Path))));
+                if (root is null)
+                {
+                    return;
+                }
+
+                rebuild = _rebuild.Remove(Key(root.Path));
+                root.NeedsRun = false;
+                _runCancellation = CancellationTokenSource.CreateLinkedTokenSource(stopping);
+                _currentRoot = root;
+            }
+
+            var token = _runCancellation.Token;
+            var pass = new IndexPass(root, _embedder, _options, _scheduler, _pause, _memory, _settings.GetCurrent().Exclude, Publish, _logger);
+            try
+            {
+                if (rebuild)
+                {
+                    await WipeAsync(root, token).ConfigureAwait(false);
+                }
+
+                lock (_gate)
+                {
+                    _currentPass = pass;
+                    _failed = false;
+                    _lastError = null;
+                }
+
+                Publish();
+                await pass.RunAsync(token).ConfigureAwait(false);
+                LastRunStatistics = pass.Statistics;
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested && !stopping.IsCancellationRequested)
+            {
+                // Cancelled by a workspace change, a rebuild or a delete: the next round decides what runs.
+                lock (_gate)
+                {
+                    if (_roots.ContainsValue(root) && !_rebuild.Contains(Key(root.Path)))
+                    {
+                        root.NeedsRun = true;
+                    }
+                }
+            }
+#pragma warning disable CA1031 // One root's failure is reported in the status; the others still run.
+            catch (Exception ex) when (!stopping.IsCancellationRequested)
+#pragma warning restore CA1031
+            {
+                Fail(ex);
+            }
+            finally
+            {
+                lock (_gate)
+                {
+                    _currentPass = null;
+                    _currentRoot = null;
+                    _runCancellation?.Dispose();
+                    _runCancellation = null;
+                }
+
+                Publish();
+            }
+
+            // A workspace change cancelled the run: reconcile before running anything else.
+            if (_workspaceVersion != _appliedWorkspaceVersion)
+            {
+                return;
+            }
+        }
+    }
+
+    private async Task WipeAsync(RootIndex root, CancellationToken cancellationToken)
+    {
+        LogRebuild(_logger, root.Store.Identity.Id);
+        await root.Storage.WriteAsync(
+            (session, _) =>
+            {
+                foreach (var sql in WipeStatements)
+                {
+                    using var command = session.Connection.CreateCommand();
+                    command.Transaction = session.Transaction;
+                    command.CommandText = sql;
+                    command.ExecuteNonQuery();
+                }
+
+                return true;
+            },
+            cancellationToken).ConfigureAwait(false);
+        await root.Store.Database.VacuumAsync(cancellationToken).ConfigureAwait(false);
+        root.ResetSession();
+        root.Excluded = [];
+        root.TotalFileCount = -1;
+        await root.RefreshCountsAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task CheckReadersAsync(CancellationToken stopping)
+    {
+        List<RootIndex> readers;
+        lock (_gate)
+        {
+            readers = [.. _roots.Values.Where(r => !r.IsWriter)];
+        }
+
+        foreach (var reader in readers)
+        {
+            if (reader.Store.GetLiveWriter() is not null)
+            {
+                continue;
+            }
+
+            // The owner is gone: open again, which reclaims the stale lock; this host becomes the writer and sweeps.
+            var key = Key(reader.Path);
+            lock (_gate)
+            {
+                _roots.Remove(key);
+            }
+
+            await reader.DisposeAsync().ConfigureAwait(false);
+            WorkspaceDescription? workspace;
+            lock (_gate)
+            {
+                workspace = _workspace;
+            }
+
+            var reopened = await OpenAsync(reader.Root, reader.Model, workspace is null ? [] : Projects(workspace), stopping).ConfigureAwait(false);
+            if (reopened is not null)
+            {
+                lock (_gate)
+                {
+                    _roots[key] = reopened;
+                }
+
+                Wake();
+            }
+        }
+    }
+
+    private async Task WaitForRunToStopAsync(RootIndex root, CancellationToken cancellationToken)
+    {
+        var deadline = Stopwatch.GetTimestamp();
+        while (true)
+        {
+            lock (_gate)
+            {
+                if (!ReferenceEquals(_currentRoot, root))
+                {
+                    return;
+                }
+            }
+
+            if (Stopwatch.GetElapsedTime(deadline) > TimeSpan.FromSeconds(30))
+            {
+                return;
+            }
+
+            await Task.Delay(20, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private void Fail(Exception ex)
+    {
+        var message = ex is PillionRpcException rpc ? rpc.Error.Message : ex.Message;
+        lock (_gate)
+        {
+            _failed = true;
+            _lastError = message;
+        }
+
+        LogFailed(_logger, ex, message);
+    }
+
+    private void Publish()
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        _notifier.Publish(BuildStatus(withDiskUse: false));
+    }
+
+    private IndexStatus BuildStatus(bool withDiskUse)
+    {
+        if (!_features.IsEnabled(FeatureNames.Indexing))
+        {
+            return new IndexStatus();
+        }
+
+        lock (_gate)
+        {
+            var pass = _currentPass;
+            var paused = _pause.IsPaused;
+            var running = pass is not null;
+            // Paused whenever a reason holds and there is an index to work on, so the Index window can say why.
+            var phase = paused && (running || _roots.Count > 0)
+                ? IndexPhase.Paused
+                : running
+                    ? (pass!.Progress.Phase == IndexPhase.Idle ? IndexPhase.Discovering : pass.Progress.Phase)
+                    : _failed ? IndexPhase.Failed : IndexPhase.Idle;
+
+            var roots = _roots.Values.OrderBy(r => r.Path, StringComparer.OrdinalIgnoreCase).Select(r => new IndexRootStatus
+            {
+                RootPath = r.Path,
+                IndexId = r.Store.Identity.Id,
+                Role = r.ContractRole,
+                IndexedFileCount = (int)Math.Min(int.MaxValue, r.IndexedFileCount),
+                TotalFileCount = Math.Max(0, r.TotalFileCount),
+                ExcludedFileCount = r.Excluded.Count,
+                SecretFileCount = r.SecretFileCount,
+                ChunkCount = r.ChunkCount,
+                DiskBytes = withDiskUse ? r.Store.Folder.GetDiskUsageBytes() : 0,
+                LastFullSweepUtc = r.Store.State.LastFullSweepUtc?.UtcDateTime,
+                EmbeddingModelId = r.Model.ModelId,
+                ChunkerVersion = r.Store.Identity.ChunkerVersion,
+                SchemaVersion = r.Store.Database.SchemaVersion,
+            }).ToArray();
+
+            var lastUpdated = _roots.Values.Select(r => r.LastUpdatedUtc).Where(t => t is not null).DefaultIfEmpty(null).Max();
+            return new IndexStatus
+            {
+                IsIndexing = running && !paused,
+                IsPaused = paused,
+                IndexedFileCount = roots.Sum(r => r.IndexedFileCount),
+                TotalFileCount = roots.Sum(r => r.TotalFileCount),
+                LastUpdatedUtc = lastUpdated?.UtcDateTime,
+                Phase = phase,
+                PauseReason = phase == IndexPhase.Paused ? _pause.Current : IndexPauseReason.None,
+                Roots = roots,
+                ExcludedSecretFileCount = roots.Sum(r => r.SecretFileCount),
+                LastError = phase == IndexPhase.Failed ? _lastError : null,
+                Progress = running
+                    ? new IndexProgress
+                    {
+                        FilesDone = pass!.Progress.FilesDone,
+                        FilesTotal = pass.Progress.FilesTotal,
+                        ChunksDone = pass.Progress.ChunksDone,
+                        EstimatedRemainingSeconds = pass.Progress.EstimateRemainingSeconds(),
+                    }
+                    : null,
+            };
+        }
+    }
+
+    [LoggerMessage(EventId = 2910, Level = LogLevel.Information, Message = "The extension reported the workspace: {Kind} with {Projects} projects.")]
+    private static partial void LogWorkspace(ILogger logger, string kind, int projects);
+
+    [LoggerMessage(EventId = 2911, Level = LogLevel.Information, Message = "Index {IndexId} for {Root} is open as the {Role}.")]
+    private static partial void LogOpened(ILogger logger, string indexId, string root, string role);
+
+    [LoggerMessage(EventId = 2912, Level = LogLevel.Warning, Message = "Indexing failed: {Reason}")]
+    private static partial void LogFailed(ILogger logger, Exception exception, string reason);
+
+    [LoggerMessage(EventId = 2913, Level = LogLevel.Information, Message = "Index {IndexId} is wiped for a rebuild.")]
+    private static partial void LogRebuild(ILogger logger, string indexId);
+
+    [LoggerMessage(EventId = 2914, Level = LogLevel.Debug, Message = "The battery saver state could not be read; indexing is not paused for it.")]
+    private static partial void LogPowerFailed(ILogger logger, Exception exception);
+}

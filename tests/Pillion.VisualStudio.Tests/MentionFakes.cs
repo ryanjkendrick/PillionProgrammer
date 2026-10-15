@@ -48,6 +48,8 @@ internal sealed class FakeMentionService : IContextService
     public Task<bool> DeleteIndexAsync(string indexId, CancellationToken cancellationToken) => Task.FromResult(false);
 
     public Task<IndexInfo[]> ListIndexesAsync(CancellationToken cancellationToken) => Task.FromResult<IndexInfo[]>([]);
+
+    public Task SetWorkspaceAsync(WorkspaceDescription workspace, CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
 /// <summary>An <see cref="IDiagnosticsService"/> whose preview and Outbound records are set by the test.</summary>
