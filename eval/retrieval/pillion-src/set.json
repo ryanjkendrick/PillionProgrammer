@@ -1,0 +1,7 @@
+{
+  "name": "pillion-src",
+  "description": "Natural-language questions over this repository's own src folder (MIT), written by reading the code: where something is done, which class handles something, questions naming a symbol, and conceptual questions. The corpus is the live src folder, so expected files and symbols must be kept up to date when the code moves (the harness warns about expected files that left the corpus and symbols no chunk breadcrumb holds).",
+  "corpus": [
+    { "path": "../../../src", "as": "src" }
+  ]
+}

@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The AI evaluation harness (design section 15; work item 2.16, the retrieval slice). A console tool, never shipped: it
+    composes the host's indexing pipeline, Model Gateway and retrieval service in process (as the host tests do), indexes a
+    golden set's corpus into a temporary encrypted index and scores the searches. See eval/README.md.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Pillion.Eval</RootNamespace>
+    <AssemblyName>Pillion.Eval</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\Pillion.Host\Pillion.Host.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Pillion.Eval.Tests" />
+  </ItemGroup>
+
+</Project>
