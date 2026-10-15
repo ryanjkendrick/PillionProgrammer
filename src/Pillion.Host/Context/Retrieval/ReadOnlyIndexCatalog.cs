@@ -18,12 +18,20 @@ namespace Pillion.Host.Context.Retrieval;
 /// disposed, and each one's vector cache is warmed in the background when it opens. Serves nothing while
 /// <c>features.indexing</c> or <c>features.localStore</c> is off.
 /// </summary>
+/// <remarks>
+/// It serves the roots it is asked for by name. A request without roots gets nothing unless the catalog was made with
+/// <c>servesEveryIndex</c>: the host's retrieval never does (it asks the live catalog, which knows the open workspace's
+/// roots; issue #98), so an index of another folder on this machine cannot reach a prompt. Only tools that list every
+/// index on purpose (the evaluation harness, tests of a standalone index folder) opt in; the Index window's Indexes tab
+/// lists the folders through <see cref="Pillion.Indexing.Retention.IndexRetention"/> without opening them.
+/// </remarks>
 internal sealed partial class ReadOnlyIndexCatalog : IIndexCatalog, IAsyncDisposable
 {
     private readonly PillionPaths _paths;
     private readonly IFeatureFlags _features;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger _logger;
+    private readonly bool _servesEveryIndex;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<string, CatalogIndex> _open = new(StringComparer.Ordinal);
     private bool _disposed;
@@ -32,12 +40,17 @@ internal sealed partial class ReadOnlyIndexCatalog : IIndexCatalog, IAsyncDispos
     /// <param name="paths">Where the index folders live.</param>
     /// <param name="features">The feature flags.</param>
     /// <param name="loggerFactory">The logger factory.</param>
-    public ReadOnlyIndexCatalog(PillionPaths paths, IFeatureFlags features, ILoggerFactory? loggerFactory = null)
+    /// <param name="servesEveryIndex">
+    /// Whether a request without roots gets every index on this machine. Never set for retrieval, the mentions or the repo
+    /// map; only for tools that read every index on purpose. When <see langword="false"/> (the default) such a request gets nothing.
+    /// </param>
+    public ReadOnlyIndexCatalog(PillionPaths paths, IFeatureFlags features, ILoggerFactory? loggerFactory = null, bool servesEveryIndex = false)
     {
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(features);
         _paths = paths;
         _features = features;
+        _servesEveryIndex = servesEveryIndex;
         _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
         _logger = _loggerFactory.CreateLogger<ReadOnlyIndexCatalog>();
     }
@@ -75,6 +88,11 @@ internal sealed partial class ReadOnlyIndexCatalog : IIndexCatalog, IAsyncDispos
         }
 
         var wanted = roots.Where(r => !string.IsNullOrWhiteSpace(r)).Select(IndexIdentity.NormalizeRoot).ToHashSet(StringComparer.Ordinal);
+        if (wanted.Count == 0 && !_servesEveryIndex)
+        {
+            return [];
+        }
+
         var folders = FindFolders()
             .Where(f => wanted.Count == 0 || wanted.Contains(f.NormalizedRoot))
             .Where(f => SkipRoot?.Invoke(f.NormalizedRoot) != true)

@@ -189,7 +189,9 @@ returns the same hits as `SearchDetailedAsync` without the timings. `SearchReque
 `RetrievalOptions.TimeBudget` (300 ms; register a `RetrievalOptions` singleton to change it).
 
 - `IIndexCatalog` gives the open `IndexStorage` (and `SymbolGraph`, when the host keeps one) per repository root, for the
-  request's `Roots` or every index when there are none. `ReadOnlyIndexCatalog`, registered with `TryAdd`, finds index
+  request's `Roots` or, when there are none, the open workspace's roots, never every index on disk (issue #98).
+  `ReadOnlyIndexCatalog` serves only the roots it is asked for unless it is made with `servesEveryIndex: true`, which
+  retrieval never does (tools that read every index on purpose may). Registered with `TryAdd`, it finds index
   folders by `state.json` under `index\`, picks the most recently opened one per root, opens it read-only (the reader path
   of `IndexStoreFactory`: nothing created, migrated or locked), keeps it open until the host stops and warms its vector
   cache in the background; it serves nothing while `indexing` or `localStore` is off. The indexing pipeline (work item 2.9)
@@ -291,9 +293,12 @@ Work item 2.9, design sections 7, 10 and 13, behind `features.indexing` (an inde
 `LiveIndexCatalog` is the `IIndexCatalog` of retrieval (work item 2.11) and the `ISymbolGraphProvider` of the workspace
 queries (2.14), registered before `AddPillionRetrieval` and the empty provider. Searches use the very `IndexStorage` the
 pipeline writes through (or reads, on a reader host), with the symbol graph of the last refresh, so a root this host has
-open is never opened a second time and new chunks are searchable as soon as a batch is stored. Indexes on the machine the
-pipeline does not have open (another repository, or before the extension reports the workspace) still come from 2.11's
-read-only catalog. When an index opens, two reader connections are opened and the in-memory vector copy loaded in the
+open is never opened a second time and new chunks are searchable as soon as a batch is stored. It serves only the indexes
+of the open workspace's roots (`IndexingService.WorkspaceRoots`, resolved from what the extension reported; issue #98):
+a request without roots means those roots, a named root outside them gets nothing, and with nothing open nothing is
+served, so chat assembles without retrieved chunks. A workspace root the pipeline has not opened yet is read through
+2.11's read-only catalog, asked for that root by name. Indexes of other folders are visible only in the Index window's
+Indexes tab (`ListIndexesAsync`, which lists folders without opening them). When an index opens, two reader connections are opened and the in-memory vector copy loaded in the
 background, so the first search pays for neither.
 
 ### Resource rules (design section 13)

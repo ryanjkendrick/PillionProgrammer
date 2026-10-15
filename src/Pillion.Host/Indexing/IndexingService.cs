@@ -74,6 +74,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     private readonly HashSet<string> _suppressed = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _stopping = new();
     private WorkspaceDescription? _workspace;
+    private string[] _workspaceRoots = [];
     private int _workspaceVersion;
     private int _appliedWorkspaceVersion = -1;
     private Task _loop = Task.CompletedTask;
@@ -198,6 +199,22 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     }
 
     /// <summary>
+    /// Gets the repository roots of the solution or folder open in Visual Studio (full paths, as <see cref="SetWorkspace"/>
+    /// resolved them); empty while nothing is open. Retrieval, the mentions and the repo map read only these roots' indexes
+    /// (design sections 7 and 12; issue #98): an index of another folder on this machine never reaches a prompt.
+    /// </summary>
+    internal IReadOnlyList<string> WorkspaceRoots
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _workspaceRoots;
+            }
+        }
+    }
+
+    /// <summary>
     /// Asks for another run over the roots this host owns (all of them, or one): a full sweep that indexes whatever changed.
     /// The watcher of work item 2.10 calls it; tests use it to re-index after editing the tree.
     /// </summary>
@@ -311,10 +328,12 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     public void SetWorkspace(WorkspaceDescription workspace)
     {
         ArgumentNullException.ThrowIfNull(workspace);
-        var wanted = RepositoryRoots.Resolve(WorkspacePaths(workspace)).Select(r => Key(r.Path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var resolved = RepositoryRoots.Resolve(WorkspacePaths(workspace)).Select(r => Key(r.Path)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var wanted = resolved.ToHashSet(StringComparer.OrdinalIgnoreCase);
         lock (_gate)
         {
             _workspace = workspace;
+            _workspaceRoots = resolved;
 
             // The same roots (the extension sends the workspace again after every project load): nothing to restart.
             if (!_failed && _suppressed.Count == 0 && _appliedWorkspaceVersion == _workspaceVersion && wanted.SetEquals(_roots.Keys))

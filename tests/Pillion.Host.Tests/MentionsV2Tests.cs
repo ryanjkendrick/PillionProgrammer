@@ -412,7 +412,7 @@ public sealed class MentionsV2Tests : IAsyncLifetime, IDisposable
     {
         var catalog = new ReadOnlyIndexCatalog(new PillionPaths(_data.Path), new TestIndex.AllOn());
         _catalogs.Add(catalog);
-        var service = new ContextRpcService(TokenCounter.Default, new StaticGatewaySettingsSource(_settings), catalog: catalog, queries: queries);
+        var service = new ContextRpcService(TokenCounter.Default, new StaticGatewaySettingsSource(_settings), catalog: new WorkspaceCatalog(catalog, _repo.Path), queries: queries);
         return service.ResolveMentionAsync(request, CancellationToken.None);
     }
 

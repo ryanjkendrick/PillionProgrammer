@@ -118,7 +118,7 @@ internal sealed partial class MentionIndexReader
     public bool HasCatalog => _catalog is not null;
 
     /// <summary>Gets the views of the indexes that cover the roots.</summary>
-    /// <param name="roots">The workspace roots; an index whose root is one of them, contains one, or lies inside one is used. Empty means every index the catalog serves.</param>
+    /// <param name="roots">The workspace roots; an index whose root is one of them, contains one, or lies inside one is used. Empty means every index the catalog serves: those of the open workspace's roots.</param>
     /// <param name="cancellationToken">Cancels the call.</param>
     /// <returns>The views; empty when nothing is indexed (or the catalog is off).</returns>
     public async Task<IReadOnlyList<MentionIndexView>> GetAsync(IReadOnlyList<string> roots, CancellationToken cancellationToken)
@@ -131,7 +131,7 @@ internal sealed partial class MentionIndexReader
         IReadOnlyList<CatalogIndex> indexes;
         try
         {
-            // Every index the catalog serves, then keep those related to the roots: a solution's folder can sit inside the
+            // The workspace's indexes (the catalog serves no others), then keep those related to the roots: a solution's folder can sit inside the
             // repository root that was indexed, or hold several indexed repositories.
             indexes = await _catalog.GetIndexesAsync([], cancellationToken).ConfigureAwait(false);
         }
