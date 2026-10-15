@@ -5,16 +5,19 @@ namespace Pillion.LocalStore.Index;
 
 /// <summary>
 /// The <c>symbols</c> and <c>symbol_refs</c> tables (design section 10): syntax-derived definitions and name-based
-/// reference edges, all approximate. This is storage only; extraction and the repo map are work item 2.5.
+/// reference edges, all approximate (index schema version 3, <see cref="IndexSymbolsSchema"/>). This is storage only;
+/// extraction, resolution and the repo map are work item 2.5 (Pillion.ContextEngine).
 /// </summary>
 public interface ISymbolRepository
 {
     /// <summary>
-    /// Replaces the symbols of a file. Its old symbols go, and with them (by cascade) every reference from or to them,
-    /// including references recorded in other files, which the extractor re-resolves when it next visits those files.
+    /// Replaces the symbols of a file. Symbols with a stable <see cref="NewSymbol.Id"/> are upserted: a symbol whose id
+    /// is already stored keeps its row, and references from other files to it survive. Every other old symbol of the
+    /// file goes, and with it (by cascade) every reference from or to it, including references recorded in other files,
+    /// which the extractor re-resolves when it next visits those files. Symbols without an id get a new one.
     /// </summary>
     /// <param name="fileId">The file; it must exist.</param>
-    /// <param name="symbols">The new symbols.</param>
+    /// <param name="symbols">The new symbols; stable ids must be unique within the list.</param>
     /// <param name="cancellationToken">Cancels the call.</param>
     /// <returns>The new symbol ids, in order.</returns>
     Task<IReadOnlyList<long>> ReplaceFileSymbolsAsync(long fileId, IReadOnlyList<NewSymbol> symbols, CancellationToken cancellationToken = default);
@@ -66,13 +69,24 @@ public interface ISymbolRepository
     /// <param name="cancellationToken">Cancels the call.</param>
     /// <returns>The count.</returns>
     Task<long> CountSymbolsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Gets the symbol rules version the stored symbols were built with (<see cref="IndexSymbolsSchema.MetaKeys.SymbolsVersion"/>).</summary>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns>The version, or <see langword="null"/> when the symbols were never built (or the schema was migrated since).</returns>
+    Task<string?> GetSymbolsVersionAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Records the symbol rules version after the symbols have been (re)built, separately from the chunker version.</summary>
+    /// <param name="version">The version (<c>ContextEngineVersions.SymbolsVersion</c>).</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns>A task that completes when it is stored.</returns>
+    Task SetSymbolsVersionAsync(string version, CancellationToken cancellationToken = default);
 }
 
-/// <summary>The <see cref="ISymbolRepository"/> over an index database at schema version 2 or later.</summary>
+/// <summary>The <see cref="ISymbolRepository"/> over an index database at schema version 3 or later.</summary>
 public sealed class SymbolRepository : ISymbolRepository
 {
     private const string SymbolColumns = "id, file_id, name, kind, container, start_line, end_line, signature";
-    private const string ReferenceColumns = "from_symbol_id, to_symbol_id, file_id, line, kind";
+    private const string ReferenceColumns = "from_symbol_id, to_symbol_id, file_id, line, kind, ambiguous, candidates";
     private readonly EncryptedDatabase _database;
 
     /// <summary>Initializes a new instance of the <see cref="SymbolRepository"/> class.</summary>
@@ -90,14 +104,35 @@ public sealed class SymbolRepository : ISymbolRepository
         return _database.WriteAsync<IReadOnlyList<long>>(
             (connection, transaction, token) =>
             {
-                Sql.Execute(connection, transaction, "DELETE FROM symbols WHERE file_id = $file", ("$file", fileId));
+                // Keep the rows whose stable ids come back (their references from other files stay valid); drop the rest.
+                var keep = new HashSet<long>();
+                foreach (var symbol in symbols)
+                {
+                    ArgumentNullException.ThrowIfNull(symbol);
+                    ArgumentException.ThrowIfNullOrEmpty(symbol.Name);
+                    if (symbol.Id is { } id)
+                    {
+                        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(id, nameof(symbols));
+                        if (!keep.Add(id))
+                        {
+                            throw new ArgumentException($"The symbol id {id} appears twice.", nameof(symbols));
+                        }
+                    }
+                }
+
+                DeleteOtherSymbols(connection, transaction, fileId, keep);
                 using var insert = Sql.Command(
                     connection,
                     transaction,
                     """
-                    INSERT INTO symbols (file_id, name, kind, container, start_line, end_line, signature)
-                    VALUES ($file, $name, $kind, $container, $start, $end, $signature) RETURNING id
+                    INSERT INTO symbols (id, file_id, name, kind, container, start_line, end_line, signature)
+                    VALUES ($id, $file, $name, $kind, $container, $start, $end, $signature)
+                    ON CONFLICT (id) DO UPDATE SET
+                        file_id = excluded.file_id, name = excluded.name, kind = excluded.kind, container = excluded.container,
+                        start_line = excluded.start_line, end_line = excluded.end_line, signature = excluded.signature
+                    RETURNING id
                     """,
+                    ("$id", null),
                     ("$file", fileId),
                     ("$name", string.Empty),
                     ("$kind", string.Empty),
@@ -110,14 +145,13 @@ public sealed class SymbolRepository : ISymbolRepository
                 {
                     token.ThrowIfCancellationRequested();
                     var symbol = symbols[i];
-                    ArgumentNullException.ThrowIfNull(symbol);
-                    ArgumentException.ThrowIfNullOrEmpty(symbol.Name);
-                    insert.Parameters[1].Value = symbol.Name;
-                    insert.Parameters[2].Value = symbol.Kind ?? string.Empty;
-                    insert.Parameters[3].Value = (object?)symbol.Container ?? DBNull.Value;
-                    insert.Parameters[4].Value = symbol.StartLine;
-                    insert.Parameters[5].Value = symbol.EndLine;
-                    insert.Parameters[6].Value = (object?)symbol.Signature ?? DBNull.Value;
+                    insert.Parameters[0].Value = (object?)symbol.Id ?? DBNull.Value;
+                    insert.Parameters[2].Value = symbol.Name;
+                    insert.Parameters[3].Value = symbol.Kind ?? string.Empty;
+                    insert.Parameters[4].Value = (object?)symbol.Container ?? DBNull.Value;
+                    insert.Parameters[5].Value = symbol.StartLine;
+                    insert.Parameters[6].Value = symbol.EndLine;
+                    insert.Parameters[7].Value = (object?)symbol.Signature ?? DBNull.Value;
                     ids[i] = Convert.ToInt64(insert.ExecuteScalar(), CultureInfo.InvariantCulture);
                 }
 
@@ -137,12 +171,17 @@ public sealed class SymbolRepository : ISymbolRepository
                 using var insert = Sql.Command(
                     connection,
                     transaction,
-                    "INSERT INTO symbol_refs (from_symbol_id, to_symbol_id, file_id, line, kind) VALUES ($from, $to, $file, $line, $kind)",
+                    """
+                    INSERT INTO symbol_refs (from_symbol_id, to_symbol_id, file_id, line, kind, ambiguous, candidates)
+                    VALUES ($from, $to, $file, $line, $kind, $ambiguous, $candidates)
+                    """,
                     ("$from", null),
                     ("$to", 0L),
                     ("$file", fileId),
                     ("$line", 0),
-                    ("$kind", string.Empty));
+                    ("$kind", string.Empty),
+                    ("$ambiguous", 0),
+                    ("$candidates", 1));
                 foreach (var reference in references)
                 {
                     token.ThrowIfCancellationRequested();
@@ -151,6 +190,8 @@ public sealed class SymbolRepository : ISymbolRepository
                     insert.Parameters[1].Value = reference.ToSymbolId;
                     insert.Parameters[3].Value = reference.Line;
                     insert.Parameters[4].Value = reference.Kind ?? string.Empty;
+                    insert.Parameters[5].Value = reference.Ambiguous ? 1 : 0;
+                    insert.Parameters[6].Value = Math.Max(1, reference.Candidates);
                     insert.ExecuteNonQuery();
                 }
 
@@ -199,6 +240,54 @@ public sealed class SymbolRepository : ISymbolRepository
     public Task<long> CountSymbolsAsync(CancellationToken cancellationToken = default) =>
         _database.ReadAsync((connection, _) => Task.FromResult(Sql.ScalarLong(connection, null, "SELECT count(*) FROM symbols")), cancellationToken);
 
+    /// <inheritdoc/>
+    public Task<string?> GetSymbolsVersionAsync(CancellationToken cancellationToken = default) =>
+        _database.ReadAsync((connection, _) => Task.FromResult(Sql.ReadMeta(connection, null, IndexSymbolsSchema.MetaKeys.SymbolsVersion)), cancellationToken);
+
+    /// <inheritdoc/>
+    public Task SetSymbolsVersionAsync(string version, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(version);
+        return _database.WriteAsync(
+            (connection, transaction, _) =>
+            {
+                Sql.WriteMeta(connection, transaction, IndexSymbolsSchema.MetaKeys.SymbolsVersion, version);
+                return Task.CompletedTask;
+            },
+            cancellationToken);
+    }
+
+    /// <summary>Deletes the file's symbols whose ids are not in <paramref name="keep"/> (cascading to their references).</summary>
+    private static void DeleteOtherSymbols(SqliteConnection connection, SqliteTransaction transaction, long fileId, HashSet<long> keep)
+    {
+        if (keep.Count == 0)
+        {
+            Sql.Execute(connection, transaction, "DELETE FROM symbols WHERE file_id = $file", ("$file", fileId));
+            return;
+        }
+
+        var stale = new List<long>();
+        using (var select = Sql.Command(connection, transaction, "SELECT id FROM symbols WHERE file_id = $file", ("$file", fileId)))
+        using (var reader = select.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                var id = reader.GetInt64(0);
+                if (!keep.Contains(id))
+                {
+                    stale.Add(id);
+                }
+            }
+        }
+
+        using var delete = Sql.Command(connection, transaction, "DELETE FROM symbols WHERE id = $id", ("$id", 0L));
+        foreach (var id in stale)
+        {
+            delete.Parameters[0].Value = id;
+            delete.ExecuteNonQuery();
+        }
+    }
+
     private static SymbolRecord ReadSymbol(SqliteDataReader reader) => new(
         reader.GetInt64(0),
         reader.GetInt64(1),
@@ -214,7 +303,9 @@ public sealed class SymbolRepository : ISymbolRepository
         reader.GetInt64(1),
         reader.GetInt64(2),
         reader.GetInt32(3),
-        reader.GetString(4));
+        reader.GetString(4),
+        reader.GetInt64(5) != 0,
+        reader.GetInt32(6));
 
     private Task<IReadOnlyList<T>> QueryAsync<T>(string sql, Func<SqliteDataReader, T> read, CancellationToken cancellationToken, params (string Name, object? Value)[] parameters) =>
         _database.ReadAsync<IReadOnlyList<T>>(

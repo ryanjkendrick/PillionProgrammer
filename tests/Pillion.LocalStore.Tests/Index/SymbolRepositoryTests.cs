@@ -56,7 +56,7 @@ public sealed class SymbolRepositoryTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
-    public async Task ReplacingAFilesSymbols_CascadesToReferencesFromAndToThem()
+    public async Task ReplacingAFilesSymbolsWithoutStableIds_CascadesToReferencesFromAndToThem()
     {
         var orders = await _storage.AddFileAsync("src/Orders.cs");
         var api = await _storage.AddFileAsync("src/Api.cs");
@@ -79,5 +79,83 @@ public sealed class SymbolRepositoryTests : IAsyncLifetime, IDisposable
         await _storage.ExecuteAsync($"DELETE FROM files WHERE id = {file}");
 
         Assert.Equal(0L, await _storage.Symbols.CountSymbolsAsync());
+    }
+
+    [Fact]
+    public async Task StableIds_AreUpsertedInPlace_SoReferencesFromOtherFilesSurviveAndVanishedSymbolsCascade()
+    {
+        const long Total = 4_611_686_018_427_387_904; // stable ids are 63-bit hashes
+        const long Ship = 1_234_567_890_123;
+        var orders = await _storage.AddFileAsync("src/Orders.cs");
+        var api = await _storage.AddFileAsync("src/Api.cs");
+        await _storage.Symbols.ReplaceFileSymbolsAsync(orders, [
+            new NewSymbol("GetOrderTotal", "method", "Orders", 10, 14, null) { Id = Total },
+            new NewSymbol("Ship", "method", "Orders", 20, 24, null) { Id = Ship },
+        ]);
+        var caller = (await _storage.Symbols.ReplaceFileSymbolsAsync(api, [new NewSymbol("Checkout", "method", null, 5, 20, null) { Id = 77 }]))[0];
+        await _storage.Symbols.ReplaceFileReferencesAsync(api, [
+            new SymbolReference(caller, Total, 0, 12, "call"),
+            new SymbolReference(caller, Ship, 0, 13, "call"),
+        ]);
+
+        // Orders.cs is edited: GetOrderTotal moves down (same id), Ship is removed, Pack is new.
+        var ids = await _storage.Symbols.ReplaceFileSymbolsAsync(orders, [
+            new NewSymbol("GetOrderTotal", "method", "Orders", 30, 34, "decimal GetOrderTotal()") { Id = Total },
+            new NewSymbol("Pack", "method", "Orders", 40, 44, null),
+        ]);
+
+        Assert.Equal(Total, ids[0]);
+        Assert.Equal(77, caller);
+        Assert.Equal(new SymbolRecord(Total, orders, "GetOrderTotal", "method", "Orders", 30, 34, "decimal GetOrderTotal()"), await _storage.Symbols.GetSymbolAsync(Total));
+        Assert.Null(await _storage.Symbols.GetSymbolAsync(Ship));
+        Assert.Equal(["GetOrderTotal", "Pack"], (await _storage.Symbols.GetSymbolsByFileAsync(orders)).Select(s => s.Name));
+        var survivors = await _storage.Symbols.GetAllReferencesAsync();
+        Assert.Equal(Total, Assert.Single(survivors).ToSymbolId);
+    }
+
+    [Fact]
+    public async Task References_KeepTheirAmbiguity_AndAFileLevelSource()
+    {
+        var file = await _storage.AddFileAsync("src/Orders.cs");
+        var ids = await _storage.Symbols.ReplaceFileSymbolsAsync(file, [
+            new NewSymbol("Save", "method", "A", 1, 2, null) { Id = 10 },
+            new NewSymbol("Save", "method", "B", 3, 4, null) { Id = 11 },
+        ]);
+
+        await _storage.Symbols.ReplaceFileReferencesAsync(file, [
+            new SymbolReference(null, ids[0], 0, 9, "call", Ambiguous: true, Candidates: 2),
+            new SymbolReference(null, ids[1], 0, 9, "call", Ambiguous: true, Candidates: 2),
+            new SymbolReference(ids[0], ids[1], 0, 2, "call"),
+        ]);
+
+        var refs = await _storage.Symbols.GetReferencesInFileAsync(file);
+        Assert.Equal(new SymbolReference(ids[0], ids[1], file, 2, "call", false, 1), refs[0]);
+        Assert.All(refs.Skip(1), r => Assert.Equal((null, true, 2), (r.FromSymbolId, r.Ambiguous, r.Candidates)));
+    }
+
+    [Fact]
+    public async Task AStableIdTwiceInOneFile_IsRejected()
+    {
+        var file = await _storage.AddFileAsync("src/Orders.cs");
+
+        await Assert.ThrowsAsync<ArgumentException>(() => _storage.Symbols.ReplaceFileSymbolsAsync(file, [
+            new NewSymbol("A", "method", null, 1, 2, null) { Id = 5 },
+            new NewSymbol("B", "method", null, 3, 4, null) { Id = 5 },
+        ]));
+        Assert.Equal(0L, await _storage.Symbols.CountSymbolsAsync());
+    }
+
+    [Fact]
+    public async Task TheSymbolsVersion_IsStoredSeparatelyFromTheChunkerVersion()
+    {
+        Assert.Null(await _storage.Symbols.GetSymbolsVersionAsync());
+
+        await _storage.Symbols.SetSymbolsVersionAsync("1");
+        await _storage.Symbols.SetSymbolsVersionAsync("2");
+
+        Assert.Equal("2", await _storage.Symbols.GetSymbolsVersionAsync());
+        Assert.Equal(1L, await _storage.CountAsync("SELECT count(*) FROM meta WHERE key = 'symbols_version'"));
+        Assert.Equal(0L, await _storage.CountAsync("SELECT count(*) FROM meta WHERE key = 'chunker_version'"));
+        await Assert.ThrowsAsync<ArgumentException>(() => _storage.Symbols.SetSymbolsVersionAsync(" "));
     }
 }

@@ -34,7 +34,7 @@ public sealed class IndexFoundationIntegrationTests : IDisposable
 
         await using var writer = await Host(100).OpenAsync(Request(100));
         Assert.Equal(IndexRole.Writer, writer.Role);
-        Assert.Equal(2, writer.Database.SchemaVersion);
+        Assert.Equal(3, writer.Database.SchemaVersion);
         await using var storage = IndexStorage.Create(writer.Database, ownsDatabase: false);
 
         // 2.3's files table is what 2.8's chunks reference: integer ids, language and partition.

@@ -58,7 +58,7 @@ internal static class SymbolFixture
                 return $"Definition {definition.Name} is not marked approximate.";
             }
 
-            if (definition.Id != SymbolIds.Compute(definition.FilePath, definition.Container, definition.Name, definition.Kind, definition.StartLine))
+            if (definition.Id != SymbolIds.Compute(definition.FilePath, definition.Container, definition.Name, definition.Kind, definition.Ordinal))
             {
                 return $"Definition {definition.Name} has an id that does not match the formula.";
             }

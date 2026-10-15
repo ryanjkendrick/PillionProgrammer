@@ -6,21 +6,27 @@ items. It is a .NET 10 class library with no Visual Studio dependency. Nothing r
 `tests/Pillion.ContextEngine.Tests`; the host wires it into the indexing pipeline in work item 2.9, where it ships
 behind the `features.indexing` flag. Until then it has no flag of its own, because nothing calls it.
 
-## Chunker version
+## Versions
 
-`ContextEngineVersions.ChunkerVersion` (a string, now `"1"`) is part of the index identity (design section 10: an
-index is keyed by repository root, embedding model and chunker version) and is written to the index `meta` table by
-repository discovery (work item 2.3); changing it rebuilds every index. Bump it to the next integer in the same pull
-request as any change that makes the same file produce different stored output:
+`ContextEngineVersions` holds two versions, each a string holding an integer (both now `"1"`). Bump one to the next integer in
+the same pull request as the change that needs it.
 
-- chunks: boundaries, kinds, breadcrumbs, text, splitting, the window settings or the default token counting;
-- the extension-to-language map (`LanguageCatalog`) or a grammar description (`TreeSitterGrammars`,
-  `TreeSitterSymbolGrammars`);
-- symbols: which definitions and references are extracted, their kinds, names, containers, lines, signatures, the
-  symbol id formula, or the resolution rules (they decide the stored `symbol_refs` edges).
+`ChunkerVersion` is part of the index identity (design section 10: an index is keyed by repository root, embedding
+model and chunker version) and is written to the index `meta` table as `chunker_version` by repository discovery (work
+item 2.3). Changing it builds a new index, embeddings included. Bump it when the same file would produce different
+chunks: boundaries, kinds, breadcrumbs, text, splitting, the window settings, the default token counting, the
+extension-to-language map (`LanguageCatalog`) or a chunking grammar description (`TreeSitterGrammars`).
 
-Do not bump it for changes that leave the output identical (refactoring, performance work, tests, documentation) or
-that only affect results computed from the stored data (ranking, the repo map renderer, the query helpers).
+`SymbolsVersion` is written by the host to the index `meta` table as `symbols_version` (index schema version 3,
+`IndexSymbolsSchema` in Pillion.LocalStore), separately from `chunker_version`. When the stored value is missing or
+differs, only the `symbols` and `symbol_refs` tables are rebuilt: no re-chunking, no re-embedding. Bump it when the
+stored symbols would differ: which definitions and references are extracted, their kinds, names, containers, lines or
+signatures, a symbol grammar description (`TreeSitterSymbolGrammars`), the symbol id formula, or the resolution rules
+(they decide the stored `symbol_refs` edges). Resolution changes bump the symbols version only; chunk changes bump the
+chunker version only.
+
+Bump neither for changes that leave the stored output identical (refactoring, performance work, tests, documentation)
+or that only affect results computed from it (ranking, the repo map renderer, the query helpers).
 
 ## Using it
 
@@ -133,8 +139,11 @@ var callers = graph.CallersOf(graph.FindDefinitions("OrderService.Place")[0].Id)
   breadcrumb's segments without the path, for example `Fixtures.Sample > Greeter<T>`), 1-based start and end line
   (the declaration itself, after doc comments and attributes), a one-line signature (at most 200 characters), the
   language, `IsApproximate` (always true here) and `Id`.
-- `Id` = the first 63 bits of SHA-256 over `path \0 container \0 name \0 kind \0 start line`: positive, never 0, stable
-  for every file that did not change. `SymbolIds.Compute` exposes the formula.
+- `Id` = the first 63 bits of SHA-256 over `path \0 container \0 name \0 kind \0 ordinal`, where the overload ordinal is the
+  0-based position among the file's definitions with the same container, name and kind, in source order. There is no line
+  in it, so edits that move a definition keep its id (and the edges from other files to it); only renaming, moving it to
+  another container, or inserting an overload before it changes it. Positive and never 0; `SymbolIds.Compute` exposes the
+  formula and `SymbolDefinition.Ordinal` the ordinal.
 - `SymbolReference`: file path, line, referenced name, `SymbolReferenceKind` (`Call`, `TypeUse`, `Inheritance`,
   `Import`, `Use`), the qualifier written before the name (`Point` in `Point::new()`, `order` in `order.Total`), the
   from-container breadcrumb of the code it is in, and `IsConstruction` for `new X()`.
@@ -165,7 +174,8 @@ extraction with `IsComplete = false` and a call to `SymbolExtractionOptions.OnFa
 `SymbolGraphBuilder` holds the latest extraction per file (`AddFile` replaces, `RemoveFile` removes) and resolves every
 reference by name, independent of the order files were added in:
 
-1. Candidates are definitions with exactly the name (constructors are never candidates; a construction resolves to
+1. Candidates are definitions with exactly the name, except that a Visual Basic reference (and its qualifier and
+   scope) matches any case, as the language does (constructors are never candidates; a construction resolves to
    its type). A dotted or `::` name with no match is retried as its last segment, qualified by the one before.
 2. Candidates whose kind cannot be meant are dropped (`SymbolKinds.IsCompatible`; constructions need a type).
 3. With a qualifier, candidates whose container ends with it (generic arguments ignored, last dotted part accepted) or
@@ -205,15 +215,15 @@ src/Orders/OrderService.cs
 
 Modules and enum members are left out by default; lines are cut at 160 characters. The output is deterministic.
 
-### Persistence notes for 2.8 and 2.9
+### Persistence (index schema version 3)
 
-- `symbols.kind` and `symbol_refs.kind` take `SymbolKinds.Name(...)` (or the stable numeric value).
-- `symbol_refs.from_symbol_id` must allow null (file-level code), and `IsAmbiguous`/`CandidateCount` has no column in
-  the section 10 schema yet.
-- Ids include the start line, so editing a file changes its own symbols' ids and leaves edges from other files to
-  its old ids dangling: after re-indexing a file, re-resolve the references that pointed into it (keep the builder in
-  memory, or re-extract the referring files).
-
+- `symbols.id` takes `SymbolDefinition.Id` (`NewSymbol.Id`), so re-indexing a file upserts its symbols in place and
+  references from other files to a symbol that is still there stay valid; `symbols.kind` and `symbol_refs.kind` take
+  `SymbolKinds.Name(...)`.
+- `symbol_refs.from_symbol_id` is null for file-level code; `symbol_refs.ambiguous` and `symbol_refs.candidates` take
+  `SymbolEdge.IsAmbiguous` and `SymbolEdge.CandidateCount`.
+- After rebuilding symbols, the host writes `ContextEngineVersions.SymbolsVersion` with
+  `ISymbolRepository.SetSymbolsVersionAsync`.
 ### Measured
 
 On the development machine (Release build, single thread): a 100,000-line synthetic C# file extracts in about 0.3-0.6 s

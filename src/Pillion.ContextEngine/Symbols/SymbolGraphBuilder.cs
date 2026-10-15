@@ -10,7 +10,8 @@ namespace Pillion.ContextEngine.Symbols;
 /// <remarks>
 /// <para>Resolution rules, for each reference:</para>
 /// <list type="number">
-/// <item>Candidates are the definitions with exactly the referenced name (ordinal comparison; constructors are not
+/// <item>Candidates are the definitions with exactly the referenced name (ordinal comparison, except that a reference
+/// in Visual Basic matches any case, as the language does, and so do its qualifier and scope; constructors are not
 /// candidates, a construction resolves to its type). A dotted or <c>::</c> name with no match is retried as its last
 /// segment, qualified by the segment before it.</item>
 /// <item>Candidates whose kind cannot be what the reference names are dropped (<see cref="SymbolKinds.IsCompatible"/>:
@@ -222,6 +223,8 @@ public sealed class SymbolGraphBuilder
     {
         private readonly List<int> _candidates = [];
         private readonly List<int> _preferred = [];
+        private bool _ignoreCase;
+        private string _name = string.Empty;
         private int _resolved;
         private int _ambiguous;
         private int _tooAmbiguous;
@@ -245,9 +248,13 @@ public sealed class SymbolGraphBuilder
                 return;
             }
 
+            // Visual Basic ignores case; every other language compares names exactly.
+            _ignoreCase = reference.Language == LanguageIds.VisualBasic;
+            _name = name;
+
             // 1. Narrow by the qualifier, or else by the scope the reference is in.
             var narrowed = qualifier is not null
-                ? Collect(reference, graph.CandidatesQualifiedBy(name, qualifier))
+                ? Collect(reference, graph.CandidatesQualifiedBy(name, qualifier), index => SymbolGraphBuilder.ContainerMatches(graph.Definitions[index], qualifier, _ignoreCase))
                 : CollectScope(reference, name);
 
             // 2. Prefer the same file, then the same partition; bare C#/VB uses stay in their file.
@@ -327,7 +334,8 @@ public sealed class SymbolGraphBuilder
             var scope = reference.FromContainer;
             while (scope.Length > 0)
             {
-                if (Collect(reference, graph.CandidatesIn(name, scope)))
+                var container = scope;
+                if (Collect(reference, graph.CandidatesIn(name, scope), index => string.Equals(graph.Definitions[index].Container, container, Comparison)))
                 {
                     return true;
                 }
@@ -341,12 +349,12 @@ public sealed class SymbolGraphBuilder
         }
 
         /// <summary>Replaces the candidates with the compatible ones in <paramref name="source"/>; returns whether there are any.</summary>
-        private bool Collect(SymbolReference reference, int[] source)
+        private bool Collect(SymbolReference reference, int[] source, Func<int, bool>? matches = null)
         {
             _candidates.Clear();
             foreach (var index in source)
             {
-                if (IsCompatible(reference, index))
+                if (IsCompatible(reference, index) && (matches is null || matches(index)))
                 {
                     _candidates.Add(index);
                 }
@@ -355,10 +363,15 @@ public sealed class SymbolGraphBuilder
             return _candidates.Count > 0;
         }
 
+        private StringComparison Comparison => _ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+        /// <summary>Whether a candidate (found by a case-insensitive index) is spelled as the name and fits the reference's kind.</summary>
         private bool IsCompatible(SymbolReference reference, int index)
         {
-            var kind = graph.Definitions[index].Kind;
-            return SymbolKinds.IsCompatible(reference.Kind, kind) && (!reference.IsConstruction || SymbolKinds.IsType(kind));
+            var definition = graph.Definitions[index];
+            var kind = definition.Kind;
+            return (_ignoreCase || string.Equals(definition.Name, _name, StringComparison.Ordinal))
+                && SymbolKinds.IsCompatible(reference.Kind, kind) && (!reference.IsConstruction || SymbolKinds.IsType(kind));
         }
 
         private bool SameFile(int index, SymbolReference reference) =>
@@ -447,8 +460,8 @@ public sealed class SymbolGraphBuilder
     /// Whether a definition's container ends with the qualifier (generic arguments ignored, and the last part of a dotted
     /// namespace accepted), or the definition's file is named after it.
     /// </summary>
-    internal static bool ContainerMatches(SymbolDefinition definition, string qualifier) =>
-        QualifierKeys(definition).Contains(qualifier, StringComparer.Ordinal);
+    internal static bool ContainerMatches(SymbolDefinition definition, string qualifier, bool ignoreCase = false) =>
+        QualifierKeys(definition).Contains(qualifier, ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
     private static string LastPart(string name)
     {

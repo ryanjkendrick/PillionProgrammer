@@ -20,8 +20,12 @@ public sealed record SymbolDefinition
     /// <param name="signature">The declaration header on one line.</param>
     /// <param name="language">The language identifier.</param>
     /// <param name="isApproximate">False only for definitions from a compiler-backed source.</param>
+    /// <param name="ordinal">
+    /// The overload ordinal: the 0-based position among the file's definitions with the same container, name and kind,
+    /// in source order. The extractors assign it; a caller building definitions by hand must too, or overloads share an id.
+    /// </param>
     public SymbolDefinition(string filePath, string name, SymbolKind kind, string container, int startLine, int endLine,
-        string signature = "", string language = LanguageIds.Text, bool isApproximate = true)
+        string signature = "", string language = LanguageIds.Text, bool isApproximate = true, int ordinal = 0)
     {
         FilePath = filePath ?? string.Empty;
         Name = name ?? string.Empty;
@@ -32,11 +36,15 @@ public sealed record SymbolDefinition
         Signature = signature ?? string.Empty;
         Language = language ?? LanguageIds.Text;
         IsApproximate = isApproximate;
-        Id = SymbolIds.Compute(FilePath, Container, Name, Kind, StartLine);
+        Ordinal = Math.Max(0, ordinal);
+        Id = SymbolIds.Compute(FilePath, Container, Name, Kind, Ordinal);
     }
 
-    /// <summary>The stable id: a hash of path, container, name, kind and start line (see <see cref="SymbolIds"/>).</summary>
+    /// <summary>The stable id: a hash of path, container, name, kind and overload ordinal (see <see cref="SymbolIds"/>).</summary>
     public long Id { get; }
+
+    /// <summary>The overload ordinal: the 0-based position among the file's definitions with the same container, name and kind.</summary>
+    public int Ordinal { get; }
 
     /// <summary>The file path, exactly as the caller passed it to the extractor.</summary>
     public string FilePath { get; }

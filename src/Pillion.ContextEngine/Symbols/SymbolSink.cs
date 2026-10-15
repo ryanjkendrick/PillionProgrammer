@@ -11,6 +11,7 @@ namespace Pillion.ContextEngine.Symbols;
 internal sealed class SymbolSink(SourceDocument document, string language)
 {
     private readonly Dictionary<string, string> _pool = new(StringComparer.Ordinal);
+    private readonly Dictionary<(string Container, string Name, SymbolKind Kind), int> _ordinals = [];
 
     public SourceDocument Document { get; } = document;
 
@@ -40,8 +41,13 @@ internal sealed class SymbolSink(SourceDocument document, string language)
         var lines = Math.Max(1, Document.LineCount);
         startLine = Math.Clamp(startLine, 1, lines);
         endLine = Math.Clamp(endLine, startLine, lines);
-        var definition = new SymbolDefinition(Document.Path, Share(name), kind, Share(container ?? string.Empty), startLine, endLine,
-            signature, Language);
+        // The overload ordinal: how many definitions with the same container, name and kind came before in this file.
+        container = Share(container ?? string.Empty);
+        name = Share(name);
+        var key = (container, name, kind);
+        var ordinal = _ordinals.GetValueOrDefault(key);
+        _ordinals[key] = ordinal + 1;
+        var definition = new SymbolDefinition(Document.Path, name, kind, container, startLine, endLine, signature, Language, ordinal: ordinal);
         Definitions.Add(definition);
         return definition;
     }

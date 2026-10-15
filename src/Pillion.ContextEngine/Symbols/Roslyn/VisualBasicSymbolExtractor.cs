@@ -12,8 +12,8 @@ namespace Pillion.ContextEngine.Symbols.Roslyn;
 /// <see cref="CSharpSymbolExtractor"/>: namespaces, classes, structures, interfaces, modules, enums and their members,
 /// methods, constructors, operators, properties, events, fields, constants, delegates and <c>Declare</c> statements as
 /// definitions; <c>Imports</c>, <c>Inherits</c> and <c>Implements</c>, invocations, <c>New</c>, type-only positions,
-/// attributes, member accesses and other identifier names as references. Names are compared as written, although
-/// Visual Basic itself ignores case.
+/// attributes, member accesses and other identifier names as references. Names are recorded as written;
+/// <see cref="SymbolGraphBuilder"/> resolves Visual Basic references without regard to case, as the language does.
 /// </summary>
 public sealed class VisualBasicSymbolExtractor : SyntaxSymbolExtractor
 {

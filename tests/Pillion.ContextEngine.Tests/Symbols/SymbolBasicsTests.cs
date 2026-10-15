@@ -6,10 +6,13 @@ namespace Pillion.ContextEngine.Tests.Symbols;
 public sealed class SymbolBasicsTests
 {
     [Fact]
-    public void The_chunker_version_is_a_positive_integer_string()
+    public void The_chunker_and_symbols_versions_are_positive_integer_strings()
     {
-        Assert.True(int.TryParse(ContextEngineVersions.ChunkerVersion, NumberStyles.None, CultureInfo.InvariantCulture, out var version));
-        Assert.True(version >= 1);
+        foreach (var value in new[] { ContextEngineVersions.ChunkerVersion, ContextEngineVersions.SymbolsVersion })
+        {
+            Assert.True(int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var version));
+            Assert.True(version >= 1);
+        }
     }
 
     [Fact]
@@ -52,15 +55,16 @@ public sealed class SymbolBasicsTests
     [Fact]
     public void Ids_follow_the_formula_and_differ_by_every_part()
     {
-        var id = SymbolIds.Compute("src/A.cs", "N > A", "M", SymbolKind.Method, 10);
+        var id = SymbolIds.Compute("src/A.cs", "N > A", "M", SymbolKind.Method, 1);
 
-        Assert.Equal(id, new SymbolDefinition("src/A.cs", "M", SymbolKind.Method, "N > A", 10, 12).Id);
+        Assert.Equal(id, new SymbolDefinition("src/A.cs", "M", SymbolKind.Method, "N > A", 10, 12, ordinal: 1).Id);
+        Assert.Equal(id, new SymbolDefinition("src/A.cs", "M", SymbolKind.Method, "N > A", 90, 99, ordinal: 1).Id); // lines are not part of it
         Assert.True(id > 0);
-        Assert.NotEqual(id, SymbolIds.Compute("src/B.cs", "N > A", "M", SymbolKind.Method, 10));
-        Assert.NotEqual(id, SymbolIds.Compute("src/A.cs", "N > B", "M", SymbolKind.Method, 10));
-        Assert.NotEqual(id, SymbolIds.Compute("src/A.cs", "N > A", "M2", SymbolKind.Method, 10));
-        Assert.NotEqual(id, SymbolIds.Compute("src/A.cs", "N > A", "M", SymbolKind.Property, 10));
-        Assert.NotEqual(id, SymbolIds.Compute("src/A.cs", "N > A", "M", SymbolKind.Method, 11));
+        Assert.NotEqual(id, SymbolIds.Compute("src/B.cs", "N > A", "M", SymbolKind.Method, 1));
+        Assert.NotEqual(id, SymbolIds.Compute("src/A.cs", "N > B", "M", SymbolKind.Method, 1));
+        Assert.NotEqual(id, SymbolIds.Compute("src/A.cs", "N > A", "M2", SymbolKind.Method, 1));
+        Assert.NotEqual(id, SymbolIds.Compute("src/A.cs", "N > A", "M", SymbolKind.Property, 1));
+        Assert.NotEqual(id, SymbolIds.Compute("src/A.cs", "N > A", "M", SymbolKind.Method, 0));
         Assert.True(SymbolIds.Compute(new string('x', 5000), "", "M", SymbolKind.Method, 1) > 0);
     }
 

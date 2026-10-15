@@ -29,12 +29,16 @@ internal static class IndexTestSupport
 
     public static StoreSchema SchemaV1 { get; } = new(IndexStorageSchema.Name, [Version1]);
 
-    public static StoreSchema SchemaV2 { get; } = IndexStorageSchema.After(Version1);
+    /// <summary>Index schema version 2 alone (before the symbol tables of version 3), for migration tests.</summary>
+    public static StoreSchema SchemaV2 { get; } = new(IndexStorageSchema.Name, [Version1, IndexStorageSchema.Migration]);
+
+    /// <summary>The current index schema (version 3).</summary>
+    public static StoreSchema Schema { get; } = IndexStorageSchema.After(Version1);
 
     public static EncryptedDatabaseOptions DatabaseOptions(TempDirectory temp) => new() { DatabasePath = temp.File("index.db") };
 
     public static Task<IndexStorage> OpenAsync(TempDirectory temp, IndexStorageOptions? options = null) =>
-        IndexStorage.OpenAsync(DatabaseOptions(temp), SchemaV2, options);
+        IndexStorage.OpenAsync(DatabaseOptions(temp), Schema, options);
 
 
     public static Task<long> AddFileAsync(this IndexStorage storage, string path, string? language = "csharp", string? partition = "src") =>

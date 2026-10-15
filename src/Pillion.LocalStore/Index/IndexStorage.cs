@@ -87,7 +87,7 @@ public sealed partial class IndexStorage : IAsyncDisposable
 
     /// <summary>Opens (or creates and migrates) an index database and its storage.</summary>
     /// <param name="databaseOptions">Where the database and its key live.</param>
-    /// <param name="schema">The index schema: version 1 (<c>files</c>) followed by <see cref="IndexStorageSchema.Migration"/>.</param>
+    /// <param name="schema">The index schema: version 1 (<c>files</c>) followed by <see cref="IndexStorageSchema.Migration"/> and <see cref="IndexSymbolsSchema.Migration"/> (<see cref="IndexStorageSchema.After"/>).</param>
     /// <param name="options">How to search, or <see langword="null"/> for the defaults.</param>
     /// <param name="logger">The logger.</param>
     /// <param name="cancellationToken">Cancels the open.</param>
@@ -114,12 +114,12 @@ public sealed partial class IndexStorage : IAsyncDisposable
     }
 
     /// <summary>Creates the storage over an index database that is already open.</summary>
-    /// <param name="database">The database, at index schema version 2 or later.</param>
+    /// <param name="database">The database, at index schema version 3 or later.</param>
     /// <param name="ownsDatabase">Whether disposing the storage disposes the database.</param>
     /// <param name="options">How to search, or <see langword="null"/> for the defaults.</param>
     /// <param name="logger">The logger.</param>
     /// <returns>The storage.</returns>
-    /// <exception cref="InvalidOperationException">The database is older than index schema version 2.</exception>
+    /// <exception cref="InvalidOperationException">The database is older than index schema version 3.</exception>
     public static IndexStorage Create(EncryptedDatabase database, bool ownsDatabase, IndexStorageOptions? options = null, ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(database);
@@ -154,9 +154,9 @@ public sealed partial class IndexStorage : IAsyncDisposable
     {
         options ??= new IndexStorageOptions();
         logger ??= NullLogger.Instance;
-        if (database.SchemaVersion < IndexStorageSchema.Version)
+        if (database.SchemaVersion < IndexSymbolsSchema.Version)
         {
-            throw new InvalidOperationException($"The index database is at schema version {database.SchemaVersion}; index storage needs version {IndexStorageSchema.Version} or later.");
+            throw new InvalidOperationException($"The index database is at schema version {database.SchemaVersion}; index storage needs version {IndexSymbolsSchema.Version} or later.");
         }
 
         var storage = new IndexStorage(database, ownsDatabase, options);

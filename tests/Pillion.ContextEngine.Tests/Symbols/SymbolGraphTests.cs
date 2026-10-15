@@ -131,22 +131,32 @@ public sealed class SymbolGraphTests
     }
 
     [Fact]
-    public void Ids_are_stable_across_rebuilds_and_edits_to_other_files()
+    public void Ids_survive_line_edits_and_overloads_get_ordinals()
     {
         const string A = "class A { void M() { new B().N(); } }";
-        const string B = "class B { public void N() { } }";
+        const string B = "class B {\n public void N() { }\n}";
         var before = Graph(("src/A.cs", A), ("src/B.cs", B));
-        var after = Graph(("src/A.cs", A), ("src/B.cs", "// a new first line\n" + B));
+
+        // Lines are not part of the id: editing B above and around N keeps every id, so A's edge to N stays valid.
+        var after = Graph(("src/A.cs", A), ("src/B.cs", "// a new first line\nusing System;\n\n" + B.Replace(" }\n}", " Console.WriteLine(); }\n public int Other;\n}", StringComparison.Ordinal)));
 
         var idsOfA = before.DefinitionsIn("src/A.cs").Select(d => d.Id).ToList();
         Assert.Equal(idsOfA, after.DefinitionsIn("src/A.cs").Select(d => d.Id));
-        Assert.NotEqual(before.DefinitionsIn("src/B.cs").Select(d => d.Id), after.DefinitionsIn("src/B.cs").Select(d => d.Id));
-        Assert.Equal(SymbolIds.Compute("src/A.cs", string.Empty, "A", SymbolKind.Class, 1), idsOfA[0]);
+        var n = Assert.Single(before.FindDefinitions("N"));
+        Assert.Equal(n.Id, Assert.Single(after.FindDefinitions("N")).Id);
+        Assert.NotEqual(n.StartLine, Assert.Single(after.FindDefinitions("N")).StartLine);
+        Assert.Equal(before.FindReferences(n.Id).Select(e => (e.FromSymbolId, e.ToSymbolId)), after.FindReferences(n.Id).Select(e => (e.FromSymbolId, e.ToSymbolId)));
+        Assert.Equal(SymbolIds.Compute("src/A.cs", string.Empty, "A", SymbolKind.Class, 0), idsOfA[0]);
         Assert.All(before.Definitions, d => Assert.True(d.Id > 0));
 
-        // The same name on two lines (overloads) gets two ids.
+        // Overloads get ordinals 0, 1, ... in source order, so two ids; inserting an overload shifts only the later ones.
         var overloads = Graph(("src/O.cs", "class O {\n void F(int a) { }\n void F(string s) { }\n}"));
+        Assert.Equal([0, 1], overloads.FindDefinitions("F").Select(d => d.Ordinal));
         Assert.Equal(2, overloads.FindDefinitions("F").Select(d => d.Id).Distinct().Count());
+        var inserted = Graph(("src/O.cs", "class O {\n void F(int a) { }\n void F(long l) { }\n void F(string s) { }\n}"));
+        Assert.Equal(overloads.FindDefinitions("F")[0].Id, inserted.FindDefinitions("F")[0].Id);
+        Assert.Equal(overloads.FindDefinitions("F")[1].Id, inserted.FindDefinitions("F")[1].Id);
+        Assert.Equal(3, inserted.FindDefinitions("F").Select(d => d.Id).Distinct().Count());
     }
 
     [Fact]
@@ -199,6 +209,28 @@ public sealed class SymbolGraphTests
         Assert.Equal("Greeter", graph.ParentOf(Assert.Single(graph.FindDefinitions("All")).Id)!.Name);
         Assert.Empty(graph.CallersOf(main.Id));
         Assert.Null(graph.GetDefinition(12345));
+    }
+
+    [Fact]
+    public void Visual_basic_names_resolve_without_regard_to_case_and_other_languages_with_it()
+    {
+        var graph = Graph(
+            ("src/Orders.vb", "Public Class OrderService\n    Public Sub PlaceOrder()\n    End Sub\n    Public Sub Run()\n        placeorder()\n        Dim s As orderservice = Nothing\n        ORDERSERVICE.PLACEORDER()\n    End Sub\nEnd Class\n"),
+            ("src/Caller.cs", "class Caller { void M() { placeorder(); OrderService.PlaceOrder(); } }"));
+
+        var place = Assert.Single(graph.FindDefinitions("PlaceOrder"));
+        var service = Assert.Single(graph.FindDefinitions("OrderService"));
+        var fromVb = graph.FindReferences(place.Id).Where(e => e.FilePath == "src/Orders.vb").ToList();
+        Assert.Equal([5, 7], fromVb.Select(e => e.Line));
+        Assert.All(fromVb, e => Assert.False(e.IsAmbiguous));
+        Assert.Contains(graph.FindReferences(service.Id), e => e is { FilePath: "src/Orders.vb", Line: 6, Kind: SymbolReferenceKind.TypeUse });
+
+        // C# is case-sensitive: placeorder() does not resolve, OrderService.PlaceOrder() does.
+        Assert.Equal([1], graph.FindReferences(place.Id).Where(e => e.FilePath == "src/Caller.cs").Select(e => e.Line));
+        Assert.Single(graph.FindReferences(place.Id), e => e.FilePath == "src/Caller.cs");
+
+        // Definitions keep their spelling, and FindDefinitions stays exact.
+        Assert.Empty(graph.FindDefinitions("placeorder"));
     }
 
     [Fact]

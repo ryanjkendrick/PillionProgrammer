@@ -35,8 +35,11 @@ public sealed class SymbolGraph
         Files = files;
         _partitionOf = partitionOf;
         _byId = definitions.Select((d, i) => (d.Id, i)).ToFrozenDictionary(pair => pair.Id, pair => pair.i);
-        _byName = Index(definitions, _ => true);
-        _candidatesByName = Index(definitions, d => d.Kind != SymbolKind.Constructor);
+        _byName = Index(definitions, _ => true, StringComparer.Ordinal);
+
+        // The resolution indexes ignore case (Visual Basic references match any case); the resolver checks the exact
+        // spelling for every other language.
+        _candidatesByName = Index(definitions, d => d.Kind != SymbolKind.Constructor, StringComparer.OrdinalIgnoreCase);
         _fileRanges = new Dictionary<string, (int, int)>(StringComparer.Ordinal);
         _parents = new int[definitions.Count];
         var stack = new List<int>();
@@ -65,10 +68,10 @@ public sealed class SymbolGraph
 
         // Resolution indexes over the candidates (constructors excluded), so a reference is resolved by lookups rather
         // than by scanning every definition that shares its name.
-        var inContainer = new Dictionary<(string, string), List<int>>();
-        var byKey = new Dictionary<(string, string), List<int>>();
-        var inFile = new Dictionary<(string, string), List<int>>();
-        var inPartition = new Dictionary<(string, string), List<int>>();
+        var inContainer = new Dictionary<(string, string), List<int>>(IgnoreCasePair.Instance);
+        var byKey = new Dictionary<(string, string), List<int>>(IgnoreCasePair.Instance);
+        var inFile = new Dictionary<(string, string), List<int>>(IgnoreCasePair.Instance);
+        var inPartition = new Dictionary<(string, string), List<int>>(IgnoreCasePair.Instance);
         for (var i = 0; i < definitions.Count; i++)
         {
             var definition = definitions[i];
@@ -109,7 +112,7 @@ public sealed class SymbolGraph
         }
 
         static Dictionary<(string, string), int[]> Freeze(Dictionary<(string, string), List<int>> map) =>
-            map.ToDictionary(pair => pair.Key, pair => pair.Value.ToArray());
+            map.ToDictionary(pair => pair.Key, pair => pair.Value.ToArray(), IgnoreCasePair.Instance);
     }
 
     /// <summary>Every definition, ordered by path, then source order with containers before their members.</summary>
@@ -384,9 +387,9 @@ public sealed class SymbolGraph
         }
     }
 
-    private static Dictionary<string, int[]> Index(List<SymbolDefinition> definitions, Func<SymbolDefinition, bool> include)
+    private static Dictionary<string, int[]> Index(List<SymbolDefinition> definitions, Func<SymbolDefinition, bool> include, StringComparer comparer)
     {
-        var map = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        var map = new Dictionary<string, List<int>>(comparer);
         for (var i = 0; i < definitions.Count; i++)
         {
             if (!include(definitions[i]))
@@ -403,6 +406,17 @@ public sealed class SymbolGraph
             list.Add(i);
         }
 
-        return map.ToDictionary(pair => pair.Key, pair => pair.Value.ToArray(), StringComparer.Ordinal);
+        return map.ToDictionary(pair => pair.Key, pair => pair.Value.ToArray(), comparer);
+    }
+    /// <summary>Compares (name, scope) keys without regard to case.</summary>
+    private sealed class IgnoreCasePair : IEqualityComparer<(string, string)>
+    {
+        public static IgnoreCasePair Instance { get; } = new();
+
+        public bool Equals((string, string) x, (string, string) y) =>
+            string.Equals(x.Item1, y.Item1, StringComparison.OrdinalIgnoreCase) && string.Equals(x.Item2, y.Item2, StringComparison.OrdinalIgnoreCase);
+
+        public int GetHashCode((string, string) obj) =>
+            HashCode.Combine(StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Item1), StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Item2));
     }
 }
