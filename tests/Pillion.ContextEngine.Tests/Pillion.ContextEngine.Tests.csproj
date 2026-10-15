@@ -10,6 +10,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Pillion.ContextEngine\Pillion.ContextEngine.csproj" />
+    <!-- The retrieval component test and benchmark build real index databases with the index schema of Pillion.Indexing. -->
+    <ProjectReference Include="..\..\src\Pillion.Indexing\Pillion.Indexing.csproj" />
   </ItemGroup>
 
   <ItemGroup>

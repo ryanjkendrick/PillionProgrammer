@@ -90,7 +90,7 @@ internal sealed partial class RetrievalService : IRetrievalService
         }
 
         var catalog = await _catalog.GetIndexesAsync(request.Roots ?? [], cancellationToken).ConfigureAwait(false);
-        var indexes = await Task.WhenAll(catalog.Select(i => StorageRetrievalIndex.CreateAsync(i, cancellationToken))).ConfigureAwait(false);
+        var indexes = await Task.WhenAll(catalog.Select(i => StorageRetrievalIndex.CreateAsync(i.IndexId, i.RootPath, i.Storage, i.Graph, cancellationToken))).ConfigureAwait(false);
         var response = await _retriever.SearchAsync(ToQuery(request), indexes, cancellationToken).ConfigureAwait(false);
 
         return new SearchResponse

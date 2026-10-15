@@ -1,34 +1,40 @@
 using System.Globalization;
 using System.Text;
 using Microsoft.Data.Sqlite;
-using Pillion.ContextEngine.Retrieval;
 using Pillion.ContextEngine.Symbols;
-using Pillion.Indexing.Storage;
 using Pillion.LocalStore.Index;
 
-namespace Pillion.Host.Context.Retrieval;
+namespace Pillion.ContextEngine.Retrieval;
 
 /// <summary>
-/// Adapts an open index (<see cref="CatalogIndex"/>) to what retrieval reads: the chunk, vector and symbol storage, the
-/// <c>files</c> table and the embedding model in <c>meta</c>. Made per search, so the model and vector size are current.
+/// Adapts an open index database (<see cref="IndexStorage"/>) to what retrieval reads: the chunk, vector and symbol
+/// storage, the <c>files</c> table of repository discovery (<c>id</c>, <c>path</c>, <c>language</c>, <c>partition</c>) and
+/// the embedding model and vector size in <c>meta</c>. Cheap to make: make one per search, so the model and vector size are
+/// current. It does not own the storage.
 /// </summary>
-internal sealed class StorageRetrievalIndex : IRetrievalIndex, IRetrievalFileNameLookup
+public sealed class StorageRetrievalIndex : IRetrievalIndex, IRetrievalFileNameLookup
 {
-    private const int MaxFilesPerName = 20;
-    private readonly CatalogIndex _index;
+    /// <summary>The <c>meta</c> key holding the embedding model id (the <c>EmbeddingModel</c> key of Pillion.Indexing's index meta keys, which writes it).</summary>
+    public const string EmbeddingModelMetaKey = "embedding_model";
 
-    private StorageRetrievalIndex(CatalogIndex index, string? model, int? dimensions)
+    private const int MaxFilesPerName = 20;
+    private readonly IndexStorage _storage;
+
+    private StorageRetrievalIndex(string indexId, string rootPath, IndexStorage storage, SymbolGraph? graph, string? model, int? dimensions)
     {
-        _index = index;
+        IndexId = indexId;
+        RootPath = rootPath;
+        _storage = storage;
+        Graph = graph;
         EmbeddingModelId = model;
         VectorDimensions = dimensions;
     }
 
     /// <inheritdoc/>
-    public string IndexId => _index.IndexId;
+    public string IndexId { get; }
 
     /// <inheritdoc/>
-    public string RootPath => _index.RootPath;
+    public string RootPath { get; }
 
     /// <inheritdoc/>
     public string? EmbeddingModelId { get; }
@@ -37,30 +43,35 @@ internal sealed class StorageRetrievalIndex : IRetrievalIndex, IRetrievalFileNam
     public int? VectorDimensions { get; }
 
     /// <inheritdoc/>
-    public IChunkRepository Chunks => _index.Storage.Chunks;
+    public IChunkRepository Chunks => _storage.Chunks;
 
     /// <inheritdoc/>
-    public IVectorIndex Vectors => _index.Storage.Vectors;
+    public IVectorIndex Vectors => _storage.Vectors;
 
     /// <inheritdoc/>
-    public ISymbolRepository Symbols => _index.Storage.Symbols;
+    public ISymbolRepository Symbols => _storage.Symbols;
 
     /// <inheritdoc/>
-    public SymbolGraph? Graph => _index.Graph;
+    public SymbolGraph? Graph { get; }
 
     /// <summary>Reads the index's embedding model and vector size and makes the adapter.</summary>
-    /// <param name="index">The open index.</param>
+    /// <param name="indexId">The index id.</param>
+    /// <param name="rootPath">The repository root the index covers.</param>
+    /// <param name="storage">The open storage.</param>
+    /// <param name="graph">The in-memory symbol graph, or <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the call.</param>
     /// <returns>The adapter.</returns>
-    public static async Task<StorageRetrievalIndex> CreateAsync(CatalogIndex index, CancellationToken cancellationToken)
+    public static async Task<StorageRetrievalIndex> CreateAsync(string indexId, string rootPath, IndexStorage storage, SymbolGraph? graph, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(index);
-        var meta = await index.Storage.Database.ReadAsync(
+        ArgumentException.ThrowIfNullOrEmpty(indexId);
+        ArgumentNullException.ThrowIfNull(rootPath);
+        ArgumentNullException.ThrowIfNull(storage);
+        var meta = await storage.Database.ReadAsync(
             (connection, token) =>
             {
                 using var command = connection.CreateCommand();
                 command.CommandText = "SELECT key, value FROM meta WHERE key IN ($model, $dims)";
-                command.Parameters.AddWithValue("$model", IndexMetaKeys.EmbeddingModel);
+                command.Parameters.AddWithValue("$model", EmbeddingModelMetaKey);
                 command.Parameters.AddWithValue("$dims", IndexStorageSchema.MetaKeys.VectorDimensions);
                 var values = new Dictionary<string, string>(StringComparer.Ordinal);
                 using var reader = command.ExecuteReader();
@@ -73,10 +84,10 @@ internal sealed class StorageRetrievalIndex : IRetrievalIndex, IRetrievalFileNam
             },
             cancellationToken).ConfigureAwait(false);
 
-        var model = meta.TryGetValue(IndexMetaKeys.EmbeddingModel, out var m) && m.Length > 0 ? m : null;
+        var model = meta.TryGetValue(EmbeddingModelMetaKey, out var m) && m.Length > 0 ? m : null;
         int? dimensions = meta.TryGetValue(IndexStorageSchema.MetaKeys.VectorDimensions, out var d)
             && int.TryParse(d, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0 ? parsed : null;
-        return new StorageRetrievalIndex(index, model, dimensions);
+        return new StorageRetrievalIndex(indexId, rootPath, storage, graph, model, dimensions);
     }
 
     /// <inheritdoc/>
@@ -141,7 +152,7 @@ internal sealed class StorageRetrievalIndex : IRetrievalIndex, IRetrievalFileNam
     }
 
     private Task<List<RetrievalFile>> QueryFilesAsync(string sql, (string Name, object Value)[] parameters, CancellationToken cancellationToken) =>
-        _index.Storage.Database.ReadAsync(
+        _storage.Database.ReadAsync(
             (connection, token) =>
             {
                 using var command = connection.CreateCommand();
