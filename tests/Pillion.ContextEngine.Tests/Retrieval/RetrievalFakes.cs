@@ -225,6 +225,12 @@ internal sealed class FakeEmbedder(int dimensions = 4) : IQueryEmbedder
 
     public Exception? Failure { get; set; }
 
+    /// <summary>Gets or sets a value indicating whether a call never answers: it waits until it is cancelled (no clock involved).</summary>
+    public bool NeverAnswers { get; set; }
+
+    /// <summary>Gets a task that completes when a call that <see cref="NeverAnswers"/> is cancelled.</summary>
+    public TaskCompletionSource Cancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     public List<(string Text, string? Model, int? Dimensions)> Requests { get; } = [];
 
     public async Task<QueryEmbedding> EmbedQueryAsync(string text, string? modelId, int? dims, CancellationToken cancellationToken)
@@ -233,6 +239,18 @@ internal sealed class FakeEmbedder(int dimensions = 4) : IQueryEmbedder
         lock (Requests)
         {
             Requests.Add((text, modelId, dims));
+        }
+
+        if (NeverAnswers)
+        {
+            try
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+            finally
+            {
+                Cancelled.TrySetResult();
+            }
         }
 
         if (Delay > TimeSpan.Zero)

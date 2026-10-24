@@ -161,6 +161,9 @@ public sealed class IndexingPipelineTests(ITestOutputHelper output) : IDisposabl
         await second.StartAsync(_workspace.Repository);
         await second.WaitForIdleAsync();
 
+        // The stored index already has a full sweep from the first session, so "idle and swept" can hold before the new
+        // session's first run has finished; wait for that run.
+        await second.WaitForAsync(s => s.Phase == IndexPhase.Idle && second.Service.LastRunStatistics is not null, what: "the new session's first run");
         var stats = second.Service.LastRunStatistics!;
         Assert.Equal(1, stats.FilesIndexed);
         Assert.Equal(7, stats.FilesSymbolsOnly); // read for the graph, not re-chunked or re-embedded

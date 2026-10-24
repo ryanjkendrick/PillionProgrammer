@@ -111,6 +111,34 @@ public sealed class IndexFormatTests : IDisposable
             IndexFormat.StatusBarText(new IndexStatus { Phase = IndexPhase.Failed, LastError = "boom" }));
     }
 
+    /// <summary>
+    /// The glyph and the words come apart: the plain status bar text shows the words only, because the glyphs are not in Segoe
+    /// UI, and text that needs a fallback font makes WPF parse the system's composite fonts on the UI thread (over 3 s on a CI
+    /// runner, after a host restart).
+    /// </summary>
+    [Fact]
+    public void TheStatusBarParts_AreTheGlyphAndTheWords_AndTheWordsHaveNoGlyph()
+    {
+        Assert.Equal((string.Empty, string.Empty), IndexFormat.StatusBarParts(null));
+        Assert.Equal((string.Empty, string.Empty), IndexFormat.StatusBarParts(IndexData.Idle(IndexData.Root(IndexData.RootA))));
+        Assert.Equal((IndexFormat.IndexingGlyph, "Indexing 75%"), IndexFormat.StatusBarParts(IndexData.Running(IndexPhase.Embedding, 30, 40, 160, 1)));
+        Assert.Equal((IndexFormat.PausedGlyph, "Index paused: build"), IndexFormat.StatusBarParts(new IndexStatus { Phase = IndexPhase.Paused, IsPaused = true, PauseReason = IndexPauseReason.Build }));
+        Assert.Equal((IndexFormat.FailedGlyph, "Index error"), IndexFormat.StatusBarParts(new IndexStatus { Phase = IndexPhase.Failed, LastError = "boom" }));
+
+        foreach (var status in new[]
+        {
+            IndexData.Running(IndexPhase.Storing, 999, 1000, 1, 0),
+            new IndexStatus { IsIndexing = true, Phase = IndexPhase.Discovering },
+            new IndexStatus { IsPaused = true, PauseReason = IndexPauseReason.User },
+            new IndexStatus { Phase = IndexPhase.Failed },
+        })
+        {
+            var (glyph, label) = IndexFormat.StatusBarParts(status);
+            Assert.Equal(glyph + " " + label, IndexFormat.StatusBarText(status));
+            Assert.All(label, c => Assert.True(c < 0x2000, $"'{c}' (U+{(int)c:X4}) in \"{label}\" may need a fallback font"));
+        }
+    }
+
     [Fact]
     public void TheFraction_IsClampedForOddNumbers_AndUnknownWithoutATotal()
     {
@@ -178,6 +206,7 @@ public sealed class IndexFormatTests : IDisposable
         await _connection.RaiseIndexStatusChangedAsync(IndexData.Running(IndexPhase.Embedding, 10, 40, 80, 3));
         await Wait.UntilAsync(() => indicator.Text.EndsWith("Indexing 25%", StringComparison.Ordinal), "the percentage");
         Assert.StartsWith(IndexFormat.IndexingGlyph, indicator.Text, StringComparison.Ordinal);
+        Assert.Equal((IndexFormat.IndexingGlyph, "Indexing 25%"), (indicator.Glyph, indicator.Label));
         Assert.Contains("Open the Pillion Index window", indicator.ToolTip, StringComparison.Ordinal);
         Assert.Contains("Embedding chunks", indicator.ToolTip, StringComparison.Ordinal);
 
@@ -187,6 +216,7 @@ public sealed class IndexFormatTests : IDisposable
         await _connection.RaiseIndexStatusChangedAsync(IndexData.Idle(IndexData.Root(IndexData.RootA)));
         await Wait.UntilAsync(() => indicator.Text.Length == 0, "an empty indicator");
         Assert.Equal(string.Empty, indicator.ToolTip);
+        Assert.Equal((string.Empty, string.Empty), (indicator.Glyph, indicator.Label));
         Assert.True(changes >= 3);
     }
 
