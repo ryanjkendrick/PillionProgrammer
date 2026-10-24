@@ -386,6 +386,9 @@ public static class GateScenarioChecks
         var broker = ((IComponentModel)Package.GetGlobalService(typeof(SComponentModel))).GetService<IAsyncCompletionBroker>();
         var dismissed = 0;
         var variant = Marshal.AllocCoTaskMem(32);
+        var keystrokes = new List<Keystroke>();
+        var uiThreadId = Environment.CurrentManagedThreadId;
+        var passStart = Stopwatch.GetTimestamp();
         try
         {
             var line = 0;
@@ -453,9 +456,12 @@ public static class GateScenarioChecks
 
                         Marshal.GetNativeVariantForObject((ushort)c, variant);
                         var version = view.TextBuffer.CurrentSnapshot.Version.VersionNumber;
+                        var displayedBefore = DisplayedKind(view);
                         var started = Stopwatch.GetTimestamp();
                         Exec(target, VSConstants.VSStd2KCmdID.TYPECHAR, variant);
-                        typeChar.Add(Ms(Stopwatch.GetTimestamp() - started));
+                        var ended = Stopwatch.GetTimestamp();
+                        typeChar.Add(Ms(ended - started));
+                        keystrokes.Add(new Keystroke(started, ended, c, line, displayedBefore));
                         if (view.TextBuffer.CurrentSnapshot.Version.VersionNumber == version)
                         {
                             notApplied++;
@@ -489,9 +495,11 @@ public static class GateScenarioChecks
         }
 
         total.Stop();
+        var passEnd = Stopwatch.GetTimestamp();
         var typed = view.TextBuffer.CurrentSnapshot.GetText();
         var expected = string.Join("\n", Snippet.Select(l => l.Trim()));
         var actual = string.Join("\n", typed.Replace("\r\n", "\n").Split('\n').Select(l => l.Trim()));
+        var attribution = AttributeKeystrokes(keystrokes, passStart, passEnd, uiThreadId);
         return new JObject
         {
             ["characterDelayMs"] = options.CharacterDelay.TotalMilliseconds,
@@ -515,7 +523,107 @@ public static class GateScenarioChecks
             ["fencedProposals"] = fenced,
             ["firstNonMatchingProposals"] = new JArray(mismatches),
             ["finalTextMatchesSnippetIgnoringIndentation"] = string.Equals(expected, actual, StringComparison.Ordinal),
+            ["typeCharByProposalDisplayedBefore"] = new JObject
+            {
+                ["pillion"] = Percentiles(keystrokes.Where(k => k.DisplayedBefore == "pillion").Select(k => Ms(k.End - k.Start)).ToList()),
+                ["other"] = Percentiles(keystrokes.Where(k => k.DisplayedBefore == "other").Select(k => Ms(k.End - k.Start)).ToList()),
+                ["none"] = Percentiles(keystrokes.Where(k => k.DisplayedBefore == "none").Select(k => Ms(k.End - k.Start)).ToList()),
+            },
+            ["pillionUiThread"] = attribution.Summary,
+            ["typeCharSlowest"] = attribution.Slowest,
         };
+    }
+
+    /// <summary>One measured TypeChar: when it ran, what it typed and whose proposal was displayed just before it.</summary>
+    private readonly record struct Keystroke(long Start, long End, char Char, int Line, string DisplayedBefore);
+
+    /// <summary>Whose inline proposal is displayed in the view: <c>pillion</c>, <c>other</c> or <c>none</c>.</summary>
+    private static string DisplayedKind(IWpfTextView view)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var id = AutocompleteChecks.DisplayedProposalId(view);
+        return id is null ? "none" : PillionProposalId.IsPillion(id) ? "pillion" : "other";
+    }
+
+    /// <summary>
+    /// Attributes the keystrokes' time to Pillion's own UI-thread work (issue #100): with <see cref="UiThreadTimings"/> on
+    /// (<c>PILLION_UI_THREAD_TIMINGS=1</c>, as the gate runs set), every timed stretch of Pillion code on the UI thread that
+    /// overlaps a TypeChar is charged to it, and the whole pass's stretches are summed by name. The ten slowest keystrokes
+    /// are listed with their stretches, so a slow keystroke can be told apart as Pillion's code, Visual Studio's work
+    /// while a proposal was displayed, or neither.
+    /// </summary>
+    private static (JObject Summary, JArray Slowest) AttributeKeystrokes(IReadOnlyList<Keystroke> keystrokes, long passStart, long passEnd, int uiThreadId)
+    {
+        var slowest = new JArray();
+        if (!UiThreadTimings.Enabled)
+        {
+            return (new JObject { ["recorded"] = false }, slowest);
+        }
+
+        var stretches = UiThreadTimings.Snapshot()
+            .Where(t => t.ThreadId == uiThreadId && t.EndTimestamp >= passStart && t.StartTimestamp <= passEnd)
+            .OrderBy(t => t.StartTimestamp)
+            .ToList();
+        var inTypeChar = new Dictionary<string, (int Count, double Ms)>(StringComparer.Ordinal);
+        var perKeystroke = new List<(Keystroke Key, double PillionMs, List<(string Name, double Ms)> Stretches)>();
+        var cursor = 0;
+        foreach (var key in keystrokes)
+        {
+            while (cursor < stretches.Count && stretches[cursor].EndTimestamp < key.Start)
+            {
+                cursor++;
+            }
+
+            var charged = new List<(string Name, double Ms)>();
+            var ms = 0.0;
+            for (var i = cursor; i < stretches.Count && stretches[i].StartTimestamp <= key.End; i++)
+            {
+                var t = stretches[i];
+                if (t.Name.IndexOf('/') >= 0)
+                {
+                    continue; // A part of the visit before it: counted in that visit.
+                }
+
+                var overlap = Ms(Math.Min(t.EndTimestamp, key.End) - Math.Max(t.StartTimestamp, key.Start));
+                if (overlap <= 0)
+                {
+                    continue;
+                }
+
+                ms += overlap;
+                charged.Add((t.Name, overlap));
+                inTypeChar[t.Name] = inTypeChar.TryGetValue(t.Name, out var sum) ? (sum.Count + 1, sum.Ms + overlap) : (1, overlap);
+            }
+
+            perKeystroke.Add((key, ms, charged));
+        }
+
+        var inPass = stretches.Where(t => t.Name.IndexOf('/') < 0).GroupBy(t => t.Name).ToDictionary(g => g.Key, g => (Count: g.Count(), Ms: g.Sum(t => t.Duration.TotalMilliseconds)), StringComparer.Ordinal);
+        foreach (var k in perKeystroke.OrderByDescending(k => k.Key.End - k.Key.Start).Take(10))
+        {
+            slowest.Add(new JObject
+            {
+                ["line"] = k.Key.Line + 1,
+                ["char"] = k.Key.Char.ToString(),
+                ["ms"] = Math.Round(Ms(k.Key.End - k.Key.Start), 3),
+                ["proposalDisplayedBefore"] = k.Key.DisplayedBefore,
+                ["pillionMs"] = Math.Round(k.PillionMs, 3),
+                ["stretches"] = new JArray(k.Stretches.GroupBy(x => x.Name).Select(g => new JObject { ["name"] = g.Key, ["count"] = g.Count(), ["ms"] = Math.Round(g.Sum(x => x.Ms), 3) })),
+            });
+        }
+
+        JObject ByName(Dictionary<string, (int Count, double Ms)> table) => new(table.OrderByDescending(e => e.Value.Ms).Select(e => new JProperty(e.Key, new JObject { ["count"] = e.Value.Count, ["ms"] = Math.Round(e.Value.Ms, 3) })));
+        var summary = new JObject
+        {
+            ["recorded"] = true,
+            ["msInTypeChar"] = Math.Round(perKeystroke.Sum(k => k.PillionMs), 3),
+            ["typeCharsWithPillionWork"] = perKeystroke.Count(k => k.PillionMs > 0),
+            ["pillionMsPerTypeChar"] = Percentiles(perKeystroke.Select(k => k.PillionMs).ToList()),
+            ["stretchesInTypeChar"] = ByName(inTypeChar),
+            ["msInPass"] = Math.Round(inPass.Values.Sum(v => v.Ms), 3),
+            ["stretchesInPass"] = ByName(inPass),
+        };
+        return (summary, slowest);
     }
 
     /// <summary>Waits for a Pillion proposal for up to <paramref name="pause"/>, polling every 10 ms.</summary>

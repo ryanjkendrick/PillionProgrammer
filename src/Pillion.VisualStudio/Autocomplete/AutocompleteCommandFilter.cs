@@ -7,6 +7,7 @@ using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
 using Microsoft.VisualStudio.Utilities;
+using Pillion.VisualStudio.Core;
 
 namespace Pillion.VisualStudio.Autocomplete;
 
@@ -95,16 +96,19 @@ internal sealed class AutocompleteCommandFilter : IOleCommandTarget
     public int Exec(ref Guid pguidCmdGroup, uint nCmdID, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
+        var timing = UiThreadTimings.Measure("autocomplete.filter.exec");
         if (AutocompleteHost.TryGet(_view, out var state))
         {
             if (IsWordAccept(pguidCmdGroup, nCmdID) && state.TryAcceptNextWord())
             {
+                timing.Dispose();
                 return VSConstants.S_OK;
             }
 
             if (pguidCmdGroup == PackageGuids.CommandSet && nCmdID == PackageIds.SuggestCommand)
             {
                 _ = state.SuggestNow();
+                timing.Dispose();
                 return VSConstants.S_OK;
             }
 
@@ -115,13 +119,17 @@ internal sealed class AutocompleteCommandFilter : IOleCommandTarget
                 {
                     var group = InlineSuggestionCommands;
                     var id = nCmdID == PackageIds.NextSuggestionCommand ? NextSuggestion : PreviousSuggestion;
+                    timing.Dispose();
                     _ = next.Exec(ref group, id, nCmdexecopt, pvaIn, pvaOut);
+                    return VSConstants.S_OK;
                 }
 
+                timing.Dispose();
                 return VSConstants.S_OK;
             }
         }
 
+        timing.Dispose();
         return Next?.Exec(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut) ?? (int)Constants.OLECMDERR_E_NOTSUPPORTED;
     }
 

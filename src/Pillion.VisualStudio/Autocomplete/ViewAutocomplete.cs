@@ -99,6 +99,7 @@ internal sealed class ViewAutocomplete
     /// <returns><see langword="true"/> when Pillion's source should be asked.</returns>
     public bool WantsProposals(VirtualSnapshotPoint caret)
     {
+        using var timing = UiThreadTimings.Measure("autocomplete.manager");
         var feature = _host.Feature;
         if (feature is null
             || _closed
@@ -314,6 +315,7 @@ internal sealed class ViewAutocomplete
             return;
         }
 
+        using var timing = UiThreadTimings.Measure("autocomplete.event.displayed");
         _displayed = true;
         OnUiThread(() => Timeline.PillionShown(attempt));
         CoexistenceTrace.Write("pillion.shown", "attempt=" + attempt);
@@ -337,6 +339,7 @@ internal sealed class ViewAutocomplete
     /// <param name="reason">Why.</param>
     public void OnRejected(ProposalBase original, ProposalBase? final, ReasonForUpdate reason)
     {
+        using var timing = UiThreadTimings.Measure("autocomplete.event.rejected");
         if (((int)reason & (int)ReasonForUpdate.Diverged) != 0)
         {
             _displayed = false;
@@ -362,6 +365,7 @@ internal sealed class ViewAutocomplete
     /// <param name="reason">How.</param>
     public void OnAccepted(ProposalBase original, ReasonForAccept reason)
     {
+        using var timing = UiThreadTimings.Measure("autocomplete.event.accepted");
         _displayed = false;
         if (PillionProposalId.TryParse(original.ProposalId, out var attempt, out _))
         {
@@ -386,6 +390,7 @@ internal sealed class ViewAutocomplete
     /// <param name="reason">Why.</param>
     public void OnDismissed(ProposalBase original, ReasonForDismiss reason)
     {
+        using var timing = UiThreadTimings.Measure("autocomplete.event.dismissed");
         _displayed = false;
         if (reason != ReasonForDismiss.DismissedForRefinement && PillionProposalId.TryParse(original.ProposalId, out var attempt, out _))
         {
@@ -1073,6 +1078,7 @@ internal sealed class ViewAutocomplete
             return;
         }
 
+        using var timing = UiThreadTimings.Measure("autocomplete.textchanged");
         session.CancelPendingUnless(e.After.Version.VersionNumber, caret: null);
         if (Timeline.CompetitorDisplayed && Interlocked.Exchange(ref _textChangePosted, 1) == 0)
         {
@@ -1094,6 +1100,7 @@ internal sealed class ViewAutocomplete
 
     private void OnCaretMoved(object sender, CaretPositionChangedEventArgs e)
     {
+        using var timing = UiThreadTimings.Measure("autocomplete.caretmoved");
         _session?.CancelPendingUnless(e.NewPosition.BufferPosition.Snapshot.Version.VersionNumber, e.NewPosition.BufferPosition.Position);
 
         // Pillion's ghost text belongs at the caret. On Visual Studio 18, when the caret moves away without an edit
