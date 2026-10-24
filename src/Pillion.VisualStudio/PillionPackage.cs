@@ -145,6 +145,7 @@ public sealed class PillionPackage : AsyncPackage
         var indexIndicator = new IndexStatusIndicator(supervisor, chatAvailability, log);
         _indexIndicator = indexIndicator;
         _indexStatusItem = new IndexStatusBarItem(JoinableTaskFactory, OpenIndexFromStatusBar, QueueStatusBarRefresh, log);
+        PrepareStatusBarUpdates(_indexStatusItem);
         var autocomplete = new AutocompleteFeature(supervisor, log);
         _autocomplete = autocomplete;
         var inlineChat = new InlineChatFeature(this, supervisor, log, output: null);
@@ -207,7 +208,7 @@ public sealed class PillionPackage : AsyncPackage
         supervisor.StateChanged += OnHostStateChanged;
         supervisor.ConnectivityChanged += OnConnectivityChanged;
         autocomplete.StatusChanged += (_, _) => QueueStatusBarRefresh();
-        indexIndicator.Changed += (_, _) => QueueStatusBarRefresh();
+        indexIndicator.Changed += (_, _) => OnIndexIndicatorChanged();
 
         // Returns at once: launching, connecting and the handshake run on the thread pool. Availability follows the
         // host's effective feature flags: it reads them whenever the host becomes ready.
@@ -476,10 +477,42 @@ public sealed class PillionPackage : AsyncPackage
     }
 
     /// <summary>
-    /// Shows the indexing indicator in the clickable status bar item. Costs nothing until there is something to show; then
-    /// the item is asked, once, to attach itself when the UI thread is idle (it searches the status bar there, within a few
-    /// milliseconds, or keeps to the status bar text). Until then, and if it never attaches, the status bar text shows the
-    /// indicator (<see cref="IndexStatusBarSuffix"/>).
+    /// Compiles the indexing indicator's part of the status bar refresh here, on the thread pool, so its first visits to the UI
+    /// thread do not (the first two visits cost 44 ms on the 17.14 runner, most of it compiling).
+    /// </summary>
+    private void PrepareStatusBarUpdates(IndexStatusBarItem item)
+    {
+        try
+        {
+            System.Runtime.CompilerServices.RuntimeHelpers.PrepareMethod(((Action)UpdateIndexStatusItem).Method.MethodHandle);
+            item.PrepareUpdate();
+        }
+#pragma warning disable CA1031 // An optimisation only: the methods are compiled on first use instead.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            _log?.Debug("package.statusbar.prepare.failed", "Could not compile the status bar refresh ahead of time.", ("error", ex.GetType().Name));
+        }
+    }
+
+    /// <summary>
+    /// Raised on a background thread when the indexing indicator changed. The first time it has something to show, the
+    /// clickable status bar item is asked, from here, to attach itself when the UI thread is idle (it compiles its code on this
+    /// thread, then searches the status bar on the UI thread within a few milliseconds, or keeps to the status bar text).
+    /// </summary>
+    private void OnIndexIndicatorChanged()
+    {
+        if (_indexIndicator is { Label.Length: > 0 } && _indexStatusItem is { } item)
+        {
+            item.RequestAttach();
+        }
+
+        QueueStatusBarRefresh();
+    }
+
+    /// <summary>
+    /// Shows the indexing indicator in the clickable status bar item, once it is attached; until then, and if it never
+    /// attaches, the status bar text shows the indicator (<see cref="IndexStatusBarSuffix"/>). Two texts at most.
     /// </summary>
     private void UpdateIndexStatusItem()
     {
@@ -490,13 +523,7 @@ public sealed class PillionPackage : AsyncPackage
         }
 
         using var timing = UiThreadTimings.Measure("package.statusbar.index");
-        var label = indicator.Label;
-        if (label.Length > 0 && !item.IsAttached && !item.HasFailed)
-        {
-            item.RequestAttach();
-        }
-
-        item.Update(indicator.Glyph, label, indicator.ToolTip);
+        item.Update(indicator.Glyph, indicator.Label, indicator.ToolTip);
     }
 
     private void SetStatusBarText(string text)

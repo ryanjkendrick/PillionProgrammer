@@ -1,4 +1,6 @@
 using System;
+using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -20,15 +22,20 @@ namespace Pillion.VisualStudio.Statusbar;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Nothing here runs until there is something to show. Then <see cref="RequestAttach"/> queues the attach once, at the UI
-/// thread's idle priority (Visual Studio's background-priority scheduler), so it runs after the start-up and the host's Ready,
-/// when the UI thread has nothing more urgent to do; until it has run, the status bar text shows the indicator. The search for the panel is bounded
-/// (<see cref="StatusBarPanelFinder"/>), and the item is a link in a text block, with no template to build. Its glyph is drawn
+/// Nothing here runs until there is something to show. Then <see cref="RequestAttach"/>, called on a background thread,
+/// compiles the attach and update code there and queues the attach once, at the UI thread's idle priority (Visual Studio's
+/// background-priority scheduler), so it runs after the start-up and the host's Ready, when the UI thread has nothing more
+/// urgent to do; until it has run, the status bar text shows the indicator. (Compiling on the UI thread was most of the cost:
+/// 12 ms of a 17 ms attach on a developer machine, and 44 ms of two visits on the 17.14 runner.) The search for the panel is
+/// bounded (<see cref="StatusBarPanelFinder"/>), and the item is a link in a text block, with no template to build. Its glyph is drawn
 /// in Segoe UI Symbol: the glyphs are not in Segoe UI, and text that needs a fallback font makes WPF parse the system's
 /// composite fonts on the UI thread the first time, which took over 3 s in the first layout pass after a host restart on a
 /// CI runner.
 /// </para>
-/// <para>All members must be called on the UI thread. The item never throws: a failure to attach is logged and reported.</para>
+/// <para>
+/// <see cref="RequestAttach"/> may be called on any thread; the other members must be called on the UI thread. The item never
+/// throws: a failure to attach is logged and reported.
+/// </para>
 /// </remarks>
 internal sealed class IndexStatusBarItem
 {
@@ -49,7 +56,7 @@ internal sealed class IndexStatusBarItem
     private Hyperlink? _link;
     private Run? _glyph;
     private Run? _label;
-    private bool _requested;
+    private int _requested;
     private bool _failed;
 
     /// <summary>Initializes a new instance of the <see cref="IndexStatusBarItem"/> class.</summary>
@@ -72,19 +79,42 @@ internal sealed class IndexStatusBarItem
     public bool HasFailed => _failed;
 
     /// <summary>
-    /// Asks for the item to be put into the status bar. The first call queues the attach at the UI thread's idle priority and
-    /// returns at once; later calls do nothing. Call only when there is something to show.
+    /// Asks for the item to be put into the status bar. The first call compiles the code the UI thread will run, on the
+    /// calling thread, and queues the attach at the UI thread's idle priority; later calls do nothing. Call only when there is
+    /// something to show, and preferably on a background thread.
     /// </summary>
     public void RequestAttach()
     {
-        ThreadHelper.ThrowIfNotOnUIThread();
-        if (_requested)
+        if (Interlocked.Exchange(ref _requested, 1) != 0)
         {
             return;
         }
 
-        _requested = true;
+        Prepare();
         _joinableTaskFactory.StartOnIdle(AttachWhenIdle).FileAndForget("pillion/statusbar/attach");
+    }
+
+    /// <summary>Compiles <see cref="Update"/> on the calling thread, so the UI thread does not have to; call it on a background thread.</summary>
+    public void PrepareUpdate() => RuntimeHelpers.PrepareMethod(((Action<string, string, string>)Update).Method.MethodHandle);
+
+    /// <summary>Compiles the methods the UI thread runs to attach and update the item, so it does not have to.</summary>
+    private void Prepare()
+    {
+        try
+        {
+            _ = GlyphFont;
+            RuntimeHelpers.PrepareMethod(((Action)AttachWhenIdle).Method.MethodHandle);
+            RuntimeHelpers.PrepareMethod(((Func<bool>)TryAttach).Method.MethodHandle);
+            RuntimeHelpers.PrepareMethod(((Action<DockPanel>)Attach).Method.MethodHandle);
+            RuntimeHelpers.PrepareMethod(((Action<string, string, string>)Update).Method.MethodHandle);
+            StatusBarPanelFinder.Prepare();
+        }
+#pragma warning disable CA1031 // An optimisation only: the methods are compiled on first use instead.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            _log?.Debug("index.statusbar.prepare.failed", "Could not compile the status bar item ahead of time.", ("error", ex.GetType().Name));
+        }
     }
 
     /// <summary>Shows the indicator's glyph, words and tooltip, or hides the item when there are no words. Does nothing when not attached.</summary>
@@ -149,11 +179,20 @@ internal sealed class IndexStatusBarItem
         {
             if (Application.Current?.MainWindow is { } window)
             {
-                var search = StatusBarPanelFinder.Find(window, PanelName, SearchBudget);
+                StatusBarPanelSearch search;
+                using (UiThreadTimings.Measure("package.statusbar.attach/search"))
+                {
+                    search = StatusBarPanelFinder.Find(window, PanelName, SearchBudget);
+                }
+
                 why = FormattableString.Invariant($"{search.How} after {search.Elapsed.TotalMilliseconds:0.0} ms and {search.Visited} elements");
                 if (search.Element is DockPanel panel)
                 {
-                    Attach(panel);
+                    using (UiThreadTimings.Measure("package.statusbar.attach/build"))
+                    {
+                        Attach(panel);
+                    }
+
                     _log?.Info("index.statusbar.attached", "The indexing indicator is in the status bar.", ("search", why));
                     return true;
                 }
@@ -180,7 +219,9 @@ internal sealed class IndexStatusBarItem
     {
         _glyph = new Run { FontFamily = GlyphFont };
         _label = new Run();
-        _link = new Hyperlink { TextDecorations = null, Focusable = true };
+        // No theme style: the link looks like the status bar text, and looking up and applying the default Hyperlink style is
+        // work the UI thread does not need to do.
+        _link = new Hyperlink { OverridesDefaultStyle = true, TextDecorations = null, Focusable = true, Cursor = System.Windows.Input.Cursors.Hand };
         _link.Inlines.Add(_glyph);
         _link.Inlines.Add(new Run(" "));
         _link.Inlines.Add(_label);
@@ -195,6 +236,9 @@ internal sealed class IndexStatusBarItem
         };
         _host.Inlines.Add(_link);
         DockPanel.SetDock(_host, Dock.Right);
-        panel.Children.Insert(Math.Min(1, panel.Children.Count), _host);
+        using (UiThreadTimings.Measure("package.statusbar.attach/insert"))
+        {
+            panel.Children.Insert(Math.Min(1, panel.Children.Count), _host);
+        }
     }
 }

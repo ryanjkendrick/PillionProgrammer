@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Media;
 
@@ -135,6 +136,14 @@ internal static class StatusBarPanelFinder
         return anywhere is not null
             ? new StatusBarPanelSearch(anywhere, "whole tree", visited, clock.Elapsed)
             : new StatusBarPanelSearch(null, clock.Elapsed > budget ? OverBudget : "not found", visited, clock.Elapsed);
+    }
+
+    /// <summary>Compiles the search ahead of time, on the calling thread, so the UI thread does not have to (2 to 3 ms there).</summary>
+    public static void Prepare()
+    {
+        RuntimeHelpers.PrepareMethod(((Func<FrameworkElement, string, TimeSpan, StatusBarPanelSearch>)Find).Method.MethodHandle);
+        RuntimeHelpers.PrepareMethod(typeof(StatusBarPanelFinder).GetMethod(nameof(Search), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.MethodHandle);
+        RuntimeHelpers.PrepareMethod(((Func<DependencyObject, string, bool>)IsNamed).Method.MethodHandle);
     }
 
     /// <summary>Breadth first below <paramref name="start"/>, until the element is found or the budget is spent.</summary>
