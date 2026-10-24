@@ -203,32 +203,46 @@ public static class IndexFormat
     /// <returns>For example "↻ Indexing 42%", "‖ Index paused: build" or "⚠ Index error"; empty when idle.</returns>
     public static string StatusBarText(IndexStatus? status)
     {
+        var (glyph, label) = StatusBarParts(status);
+        return label.Length == 0 ? string.Empty : glyph + " " + label;
+    }
+
+    /// <summary>
+    /// The two parts of <see cref="StatusBarText"/>: the glyph and the words. They are shown apart because the glyphs are not
+    /// in Segoe UI, Visual Studio's interface font: text that holds them makes WPF look for a fallback font, and the first such
+    /// lookup in a process parses the system's composite fonts on the UI thread (seconds on a CI runner). The clickable item
+    /// draws the glyph in a font that has it; the plain status bar text (the fallback) shows the words only.
+    /// </summary>
+    /// <param name="status">The status, or <see langword="null"/> when none has been reported.</param>
+    /// <returns>For example ("↻", "Indexing 42%"); two empty strings when idle.</returns>
+    public static (string Glyph, string Label) StatusBarParts(IndexStatus? status)
+    {
         if (status is null)
         {
-            return string.Empty;
+            return (string.Empty, string.Empty);
         }
 
         if (status.Phase == IndexPhase.Failed)
         {
-            return FailedGlyph + " " + IndexStrings.StatusBarFailed;
+            return (FailedGlyph, IndexStrings.StatusBarFailed);
         }
 
         if (IsPaused(status))
         {
             var reason = PauseReasonShort(status.PauseReason);
-            return PausedGlyph + " " + (reason.Length == 0
+            return (PausedGlyph, reason.Length == 0
                 ? IndexStrings.StatusBarPaused
                 : IndexStrings.Format(IndexStrings.StatusBarPausedFormat, reason));
         }
 
         if (IsActive(status))
         {
-            return Fraction(status) is { } fraction
-                ? IndexingGlyph + " " + IndexStrings.Format(IndexStrings.StatusBarIndexingFormat, (int)Math.Floor(fraction * 100))
-                : IndexingGlyph + " " + IndexStrings.StatusBarIndexing;
+            return (IndexingGlyph, Fraction(status) is { } fraction
+                ? IndexStrings.Format(IndexStrings.StatusBarIndexingFormat, (int)Math.Floor(fraction * 100))
+                : IndexStrings.StatusBarIndexing);
         }
 
-        return string.Empty;
+        return (string.Empty, string.Empty);
     }
 
     /// <summary>Describes the whole status in one sentence, for the status bar tooltip and for screen readers.</summary>

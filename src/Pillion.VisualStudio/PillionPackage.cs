@@ -71,6 +71,7 @@ public sealed class PillionPackage : AsyncPackage
     private IndexStatusBarItem? _indexStatusItem;
     private OutputPaneWriter? _output;
     private IVsStatusbar? _statusBar;
+    private int _statusBarRefreshQueued;
     private AutocompleteFeature? _autocomplete;
     private InlineChatFeature? _inlineChat;
     private IdeSignalsFeature? _signals;
@@ -143,7 +144,7 @@ public sealed class PillionPackage : AsyncPackage
         _chatAvailability = chatAvailability;
         var indexIndicator = new IndexStatusIndicator(supervisor, chatAvailability, log);
         _indexIndicator = indexIndicator;
-        _indexStatusItem = new IndexStatusBarItem(OpenIndexFromStatusBar, log);
+        _indexStatusItem = new IndexStatusBarItem(JoinableTaskFactory, OpenIndexFromStatusBar, QueueStatusBarRefresh, log);
         var autocomplete = new AutocompleteFeature(supervisor, log);
         _autocomplete = autocomplete;
         var inlineChat = new InlineChatFeature(this, supervisor, log, output: null);
@@ -205,8 +206,8 @@ public sealed class PillionPackage : AsyncPackage
         var start = UiThreadTimings.Measure("package.init.start.background");
         supervisor.StateChanged += OnHostStateChanged;
         supervisor.ConnectivityChanged += OnConnectivityChanged;
-        autocomplete.StatusChanged += (_, _) => _ = JoinableTaskFactory.RunAsync(RefreshStatusBarAsync);
-        indexIndicator.Changed += (_, _) => _ = JoinableTaskFactory.RunAsync(RefreshStatusBarAsync);
+        autocomplete.StatusChanged += (_, _) => QueueStatusBarRefresh();
+        indexIndicator.Changed += (_, _) => QueueStatusBarRefresh();
 
         // Returns at once: launching, connecting and the handshake run on the thread pool. Availability follows the
         // host's effective feature flags: it reads them whenever the host becomes ready.
@@ -420,12 +421,11 @@ public sealed class PillionPackage : AsyncPackage
                 + $"Use Tools > Pillion: Retry to start it again, or Tools > Pillion: Open Logs for details ({PillionLog.DefaultDirectory}).");
         }
 
-        _ = JoinableTaskFactory.RunAsync(RefreshStatusBarAsync);
+        QueueStatusBarRefresh();
     }
 
     /// <summary>Raised on a background thread when the host reports a new connectivity state.</summary>
-    private void OnConnectivityChanged(object? sender, HostConnectivityChangedEventArgs e) =>
-        _ = JoinableTaskFactory.RunAsync(RefreshStatusBarAsync);
+    private void OnConnectivityChanged(object? sender, HostConnectivityChangedEventArgs e) => QueueStatusBarRefresh();
 
     private string StatusBarText(HostSupervisor supervisor) =>
         HostStatusText.Format(supervisor.State, supervisor.RestartAttempt, supervisor.MaxRestartAttempts, supervisor.Connectivity)
@@ -435,10 +435,25 @@ public sealed class PillionPackage : AsyncPackage
 
     /// <summary>
     /// What the status bar text adds for the indexing indicator: nothing when it is idle or when the clickable item is in
-    /// the status bar (it shows the indicator itself); otherwise the indicator's text after a comma (the fallback).
+    /// the status bar (it shows the indicator itself); otherwise the indicator's words after a comma (the fallback, also
+    /// used until the item is attached). The words only: the glyphs are not in Visual Studio's interface font, and text that
+    /// needs a fallback font costs the UI thread a composite font lookup (see <see cref="IndexFormat.StatusBarParts"/>).
     /// </summary>
     private string? IndexStatusBarSuffix() =>
-        _indexIndicator is { Text.Length: > 0 } indicator && _indexStatusItem is not { IsAttached: true } ? ", " + indicator.Text : null;
+        _indexIndicator is { Label.Length: > 0 } indicator && _indexStatusItem is not { IsAttached: true } ? ", " + indicator.Label : null;
+
+    /// <summary>
+    /// Posts one status bar refresh to the UI thread, unless one is already waiting there: a host restart raises a state change,
+    /// a connectivity change and an indexing indicator change within moments, and they share one short visit. The refresh reads
+    /// the state on the UI thread, so the latest change always wins.
+    /// </summary>
+    private void QueueStatusBarRefresh()
+    {
+        if (Interlocked.Exchange(ref _statusBarRefreshQueued, 1) == 0)
+        {
+            _ = JoinableTaskFactory.RunAsync(RefreshStatusBarAsync);
+        }
+    }
 
     /// <summary>Shows the supervisor's current state and connectivity, read on the UI thread so the latest change always wins.</summary>
     private async Task RefreshStatusBarAsync()
@@ -446,6 +461,7 @@ public sealed class PillionPackage : AsyncPackage
         try
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync(DisposalToken);
+            Volatile.Write(ref _statusBarRefreshQueued, 0); // A change from now on posts again; this visit reads what came before.
             using var timing = UiThreadTimings.Measure("package.statusbar");
             UpdateIndexStatusItem();
             if (_supervisor is { } supervisor)
@@ -459,7 +475,12 @@ public sealed class PillionPackage : AsyncPackage
         }
     }
 
-    /// <summary>Shows the indexing indicator in the clickable status bar item. The status bar's visual tree is only searched when there is something to show.</summary>
+    /// <summary>
+    /// Shows the indexing indicator in the clickable status bar item. Costs nothing until there is something to show; then
+    /// the item is asked, once, to attach itself when the UI thread is idle (it searches the status bar there, within a few
+    /// milliseconds, or keeps to the status bar text). Until then, and if it never attaches, the status bar text shows the
+    /// indicator (<see cref="IndexStatusBarSuffix"/>).
+    /// </summary>
     private void UpdateIndexStatusItem()
     {
         ThreadHelper.ThrowIfNotOnUIThread();
@@ -469,13 +490,13 @@ public sealed class PillionPackage : AsyncPackage
         }
 
         using var timing = UiThreadTimings.Measure("package.statusbar.index");
-        var text = indicator.Text;
-        if (text.Length > 0)
+        var label = indicator.Label;
+        if (label.Length > 0 && !item.IsAttached && !item.HasFailed)
         {
-            item.TryAttach();
+            item.RequestAttach();
         }
 
-        item.Update(text, indicator.ToolTip);
+        item.Update(indicator.Glyph, label, indicator.ToolTip);
     }
 
     private void SetStatusBarText(string text)

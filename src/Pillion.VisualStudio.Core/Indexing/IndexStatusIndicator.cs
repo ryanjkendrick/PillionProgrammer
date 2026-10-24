@@ -25,6 +25,8 @@ public sealed class IndexStatusIndicator : IDisposable
     private readonly object _gate = new();
     private IndexStatus? _status;
     private string _text = string.Empty;
+    private string _glyph = string.Empty;
+    private string _label = string.Empty;
     private string _tooltip = string.Empty;
     private int _generation;
     private bool _started;
@@ -54,6 +56,33 @@ public sealed class IndexStatusIndicator : IDisposable
             lock (_gate)
             {
                 return _text;
+            }
+        }
+    }
+
+    /// <summary>Gets the glyph of <see cref="Text"/>, for example "↻"; empty when there is nothing to show. Safe to read on any thread.</summary>
+    public string Glyph
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _glyph;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets the words of <see cref="Text"/> without the glyph, for example "Indexing 42%"; empty when there is nothing to show.
+    /// The plain status bar text uses these: see <see cref="IndexFormat.StatusBarParts"/>. Safe to read on any thread.
+    /// </summary>
+    public string Label
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _label;
             }
         }
     }
@@ -214,7 +243,8 @@ public sealed class IndexStatusIndicator : IDisposable
         {
             var enabled = _availability?.IsIndexWindowEnabled ?? true;
             var hostUp = _connection.State is HostState.Ready or HostState.Degraded;
-            text = enabled && hostUp ? IndexFormat.StatusBarText(_status) : string.Empty;
+            var (glyph, label) = enabled && hostUp ? IndexFormat.StatusBarParts(_status) : (string.Empty, string.Empty);
+            text = label.Length == 0 ? string.Empty : glyph + " " + label;
             tooltip = text.Length == 0
                 ? string.Empty
                 : IndexStrings.StatusBarOpenName + ". " + IndexFormat.Summary(_status);
@@ -224,6 +254,8 @@ public sealed class IndexStatusIndicator : IDisposable
             }
 
             _text = text;
+            _glyph = text.Length == 0 ? string.Empty : glyph;
+            _label = text.Length == 0 ? string.Empty : label;
             _tooltip = tooltip;
         }
 
