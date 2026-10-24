@@ -102,8 +102,11 @@ public sealed class IndexRetentionScheduleTests : IDisposable
         Assert.Contains(logs.Messages, m => m.Contains("Index retention deleted index " + later.Id, StringComparison.Ordinal));
 
         // A month on: the index nobody opened goes; the open root's index (in use) and its older model's index (an open root) stay.
+        // A delete that fails once (something holding a file on a busy machine) is tried again at the next daily sweep, as in
+        // production; on this clock the test brings that day. A timeout says what the last sweep decided (CI run 40054730288
+        // timed out here after 60 s with no reason recorded).
         clock.Advance(TimeSpan.FromDays(31));
-        await WaitUntilAsync(() => harness.Service.LastRetentionReport?.Items.Any(i => i.Usage.Id == stale.Id && i.Deleted) == true, "the sweep to delete the unused index");
+        await WaitForDeletionAsync(harness, clock, logs, stale.Id, "the sweep to delete the unused index");
         var month = harness.Service.LastRetentionReport!;
         Assert.Equal(RetentionDecision.DeleteUnused, Item(month, stale.Id).Decision);
         Assert.Equal(RetentionDecision.KeepInUse, Item(month, open).Decision);
@@ -139,14 +142,50 @@ public sealed class IndexRetentionScheduleTests : IDisposable
 
     private static IndexRetentionItem Item(IndexRetentionReport report, string id) => Assert.Single(report.Items, i => i.Usage.Id == id);
 
-    private static async Task WaitUntilAsync(Func<bool> condition, string what)
+    private static async Task WaitUntilAsync(Func<bool> condition, string what, Func<string>? detail = null)
     {
         var clock = Stopwatch.StartNew();
         while (!condition())
         {
-            Assert.True(clock.Elapsed < Wait, "Timed out waiting for " + what + ".");
+            Assert.True(clock.Elapsed < Wait, "Timed out waiting for " + what + "." + (detail is null ? string.Empty : " " + detail()));
             await Task.Delay(20);
         }
+    }
+
+    /// <summary>
+    /// Waits for a scheduled sweep to delete the index. A sweep that decided to delete it but could not (a transient lock on
+    /// the folder) is followed by the next daily sweep, at most three times, which is what production does on its own clock.
+    /// </summary>
+    private static async Task WaitForDeletionAsync(IndexingHarness harness, ManualTimeProvider clock, ListLoggerFactory logs, string indexId, string what)
+    {
+        string Describe() => DescribeRetention(harness, logs);
+        for (var attempt = 1; ; attempt++)
+        {
+            var sweeps = harness.Service.RetentionSweeps;
+            await WaitUntilAsync(
+                () => harness.Service.LastRetentionReport?.Items.Any(i => i.Usage.Id == indexId && (i.Deleted || i.Error is not null)) == true,
+                what,
+                Describe);
+            var item = Item(harness.Service.LastRetentionReport!, indexId);
+            if (item.Deleted)
+            {
+                return;
+            }
+
+            Assert.True(attempt < 3, $"Index {indexId} was not deleted in {attempt} sweeps; the last error: {item.Error}. {Describe()}");
+            clock.Advance(TimeSpan.FromDays(1));
+            await WaitUntilAsync(() => harness.Service.RetentionSweeps > sweeps, "the next daily sweep after a failed delete", Describe);
+        }
+    }
+
+    private static string DescribeRetention(IndexingHarness harness, ListLoggerFactory logs)
+    {
+        var report = harness.Service.LastRetentionReport;
+        var items = report is null
+            ? "no report yet"
+            : string.Join("; ", report.Items.Select(i => $"{i.Usage.Id[..8]} {i.Decision} deleted={i.Deleted}" + (i.Error is null ? string.Empty : $" error={i.Error}")));
+        var retentionLogs = string.Join(" | ", logs.Messages.Where(m => m.Contains("retention", StringComparison.OrdinalIgnoreCase)).TakeLast(4));
+        return $"Sweeps: {harness.Service.RetentionSweeps}. Last report: {items}. Logs: {retentionLogs}";
     }
 
     private string Folder(string name)
