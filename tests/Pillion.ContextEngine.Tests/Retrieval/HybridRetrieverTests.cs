@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Pillion.ContextEngine.Retrieval;
 using Pillion.LocalStore.Index;
 
@@ -11,6 +10,10 @@ public sealed class HybridRetrieverTests
     // Tests that are not about the budget get a generous one, so a busy machine cannot cut a leg short. (10 s was not enough
     // on a CI runner: the candidate legs get a share of it, and the first search of a cold process missed about 5 s.)
     private static readonly RetrievalOptions Generous = RetrievalOptions.Default with { TimeBudget = TimeSpan.FromSeconds(60) };
+
+    // The budget of the tests where one leg never answers: those tests wait it out, so it is a few seconds, which is still
+    // ample for the legs that do answer on a busy CI runner.
+    private static readonly TimeSpan OverrunBudget = TimeSpan.FromSeconds(3);
 
     private readonly FakeIndex _index = new();
     private readonly FakeEmbedder _embedder = new();
@@ -168,47 +171,52 @@ public sealed class HybridRetrieverTests
         var a = Chunk("src/A.cs");
         var b = Chunk("src/B.cs");
         _index.LexicalReturns(a);
-        var vectorCancelled = new TaskCompletionSource();
+        var vectorCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _index.Vector = async (_, _, ct) =>
         {
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(10), ct);
+                await Task.Delay(Timeout.Infinite, ct); // never answers: only the budget ends the wait
             }
-            catch (OperationCanceledException)
+            finally
             {
                 vectorCancelled.TrySetResult();
-                throw;
             }
 
             return [new VectorHit(b, 0.1)];
         };
 
-        var watch = Stopwatch.StartNew();
-        var response = await SearchAsync("alpha", budget: TimeSpan.FromMilliseconds(250));
-        watch.Stop();
+        var response = await SearchAsync("alpha", budget: OverrunBudget);
 
         Assert.True(response.Degraded);
-        Assert.Contains("vector over budget", response.DegradedReasons);
+        Assert.Equal(["vector over budget"], response.DegradedReasons); // the lexical leg answered in time and is not named
         Assert.Equal([a], response.Hits.Select(h => h.ChunkId));
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"took {watch.Elapsed}");
-        Assert.InRange(response.VectorMs, 100, 5000);
+        Assert.True(response.VectorMs >= CandidateShareOf(OverrunBudget).TotalMilliseconds * 0.9, $"the vector leg was given up after {response.VectorMs:0} ms");
         Assert.True(response.TotalMs >= response.VectorMs - 1);
-        await vectorCancelled.Task.WaitAsync(TimeSpan.FromSeconds(5)); // the abandoned leg is told to stop
+        await vectorCancelled.Task.WaitAsync(TimeSpan.FromSeconds(30)); // the abandoned leg is told to stop
     }
 
+    /// <summary>
+    /// An embedder that never answers holds up only the vector leg: the lexical leg, which answered within the budget, still
+    /// gives its hits. The embedder waits until it is cancelled, and the budget is generous enough that a busy CI runner
+    /// still finishes the lexical leg within it (a 200 ms budget once did not), so nothing here depends on how fast the
+    /// machine is; the assertions are on the degradation reasons.
+    /// </summary>
     [Fact]
     public async Task ASlowEmbedder_DegradesTheSameWay()
     {
         var a = Chunk("src/A.cs");
         _index.LexicalReturns(a);
-        _embedder.Delay = TimeSpan.FromSeconds(10);
+        _embedder.NeverAnswers = true;
 
-        var response = await SearchAsync("alpha", budget: TimeSpan.FromMilliseconds(200));
+        var response = await SearchAsync("alpha", budget: OverrunBudget);
 
         Assert.True(response.Degraded);
+        Assert.Equal(["vector over budget"], response.DegradedReasons);
         Assert.Equal([a], response.Hits.Select(h => h.ChunkId));
+        Assert.Equal(1, _embedder.Calls);
         Assert.Equal(0, _index.VectorCalls);
+        await _embedder.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(30)); // the abandoned embedding is told to stop
     }
 
     [Fact]
@@ -382,6 +390,8 @@ public sealed class HybridRetrieverTests
         Assert.Equal(2.0, response.Hits[0].Score);
         Assert.Equal("none", NoOpReranker.Instance.Name);
     }
+
+    private static TimeSpan CandidateShareOf(TimeSpan budget) => budget * RetrievalOptions.Default.CandidateBudgetShare;
 
     private long Chunk(string path, string language = "csharp", string partition = "src")
     {

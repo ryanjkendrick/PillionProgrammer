@@ -174,6 +174,21 @@ public sealed partial class HybridRetriever
         return [];
     }
 
+    /// <summary>
+    /// Runs one search per index, concurrently when there are several. With one index (the usual case) the search runs on
+    /// the leg's own thread: another hop through the thread pool only adds queueing, and on a busy machine (a CI runner, a
+    /// parallel test run) queueing alone can push a lexical search that has its answer past the candidate budget.
+    /// </summary>
+    private static async Task<T[]> PerIndexAsync<TItem, T>(IReadOnlyList<TItem> items, Func<TItem, int, Task<T>> search, CancellationToken cancellationToken)
+    {
+        if (items.Count == 1)
+        {
+            return [await search(items[0], 0).ConfigureAwait(false)];
+        }
+
+        return await Task.WhenAll(items.Select((item, i) => Task.Run(() => search(item, i), cancellationToken))).ConfigureAwait(false);
+    }
+
     private Leg StartLeg(string name, Func<CancellationToken, Task<(List<Key> Keys, string? Note)>> run, CancellationToken cancellationToken)
     {
         var leg = new Leg(name, _time);
@@ -201,10 +216,11 @@ public sealed partial class HybridRetriever
         }
 
         var k = _options.LexicalCandidates;
-        var perIndex = await Task.WhenAll(indexes.Select((index, i) => Task.Run(
-            async () => (await index.Chunks.SearchLexicalAsync(analysis.LexicalQuery, k, LexicalSearchOptions.Question, filter, cancellationToken).ConfigureAwait(false))
+        var perIndex = await PerIndexAsync(
+            indexes,
+            async (index, i) => (await index.Chunks.SearchLexicalAsync(analysis.LexicalQuery, k, LexicalSearchOptions.Question, filter, cancellationToken).ConfigureAwait(false))
                 .Select(h => (Key: new Key(i, h.ChunkId), h.Score)),
-            cancellationToken))).ConfigureAwait(false);
+            cancellationToken).ConfigureAwait(false);
 
         // BM25 scores of different indexes are close enough to merge directly (same tokenizer and weights).
         return ([.. perIndex.SelectMany(h => h).OrderByDescending(h => h.Score).ThenBy(h => h.Key.Index).Take(k).Select(h => h.Key)], null);
@@ -235,10 +251,11 @@ public sealed partial class HybridRetriever
                 continue;
             }
 
-            var results = await Task.WhenAll(group.Select(x => Task.Run(
-                async () => (await x.Index.Vectors.SearchAsync(vector.Vector, k, filter, cancellationToken).ConfigureAwait(false))
+            var results = await PerIndexAsync(
+                [.. group],
+                async (x, _) => (await x.Index.Vectors.SearchAsync(vector.Vector, k, filter, cancellationToken).ConfigureAwait(false))
                     .Select(h => (Key: new Key(x.Position, h.ChunkId), h.Distance)),
-                cancellationToken))).ConfigureAwait(false);
+                cancellationToken).ConfigureAwait(false);
             hits.AddRange(results.SelectMany(r => r));
         }
 
@@ -265,9 +282,10 @@ public sealed partial class HybridRetriever
             return ([], null);
         }
 
-        var perIndex = await Task.WhenAll(indexes.Select((index, i) => Task.Run(
-            () => SymbolHitsAsync(index, i, analysis.SymbolCandidates, filter, cancellationToken),
-            cancellationToken))).ConfigureAwait(false);
+        var perIndex = await PerIndexAsync(
+            indexes,
+            (index, i) => SymbolHitsAsync(index, i, analysis.SymbolCandidates, filter, cancellationToken),
+            cancellationToken).ConfigureAwait(false);
 
         // Interleave the indexes by the order of the names in the query, then by kind.
         var keys = perIndex.SelectMany(h => h)
