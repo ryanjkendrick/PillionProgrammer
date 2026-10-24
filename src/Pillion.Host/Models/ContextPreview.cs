@@ -119,6 +119,7 @@ internal sealed class ContextPreview
                 Dropped = item.Dropped,
                 Note = item.Note,
                 PinIndex = pinIndex,
+                ContextKey = item.Key,
             };
 
             if (item.Kind == ContextItemKind.Summary)
@@ -130,7 +131,7 @@ internal sealed class ContextPreview
 
             if (redacts && !item.Dropped)
             {
-                dto.RedactionCount = CountSecrets(TextOf(item.Kind, pinIndex, request, target.SystemPrompt));
+                dto.RedactionCount = CountSecrets(TextOf(item, pinIndex, request, target.SystemPrompt, assembled));
             }
 
             items.Add(dto);
@@ -146,7 +147,7 @@ internal sealed class ContextPreview
             BudgetTokens = report.BudgetTokens,
             TotalTokens = items.Sum(i => i.Tokens),
             Items = [.. items],
-            IsAssembled = ContextAssembler.ShouldAssemble(request),
+            IsAssembled = await assembler.ShouldAssembleAsync(request, cancellationToken).ConfigureAwait(false),
             Redacts = redacts,
             RedactionCount = items.Sum(i => i.RedactionCount),
         };
@@ -187,12 +188,14 @@ internal sealed class ContextPreview
     }
 
     /// <summary>The text an item is made from, for the secret scan (the full text: a truncated item may count a little more than is sent).</summary>
-    private static string? TextOf(ContextItemKind kind, int pinIndex, ChatRequest request, string defaultSystemPrompt)
+    private static string? TextOf(ContextReportItem item, int pinIndex, ChatRequest request, string defaultSystemPrompt, AssembledContext assembled)
     {
         var messages = request.Messages ?? [];
         var conversation = messages.Where(m => m.Role != ChatRole.System).ToList();
-        return kind switch
+        return item.Kind switch
         {
+            ContextItemKind.RetrievedChunks => assembled.SentChunks.FirstOrDefault(c => c.Key == item.Key)?.Text,
+            ContextItemKind.RepoMap => assembled.Sections.FirstOrDefault(s => s.Kind == PromptSectionKind.RepoMap)?.Text,
             ContextItemKind.SystemPrompt => messages.Any(m => m.Role == ChatRole.System)
                 ? string.Join("\n\n", messages.Where(m => m.Role == ChatRole.System).Select(m => m.Content))
                 : defaultSystemPrompt,

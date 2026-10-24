@@ -82,6 +82,36 @@ public sealed partial class ContextAssembler
             || !string.IsNullOrWhiteSpace(request.ProjectRules);
     }
 
+    /// <summary>
+    /// Determines whether a chat request goes through assembly: it carries context (<see cref="ShouldAssemble(ChatRequest)"/>),
+    /// or retrieval is not switched off for it and a registered source would add something (an index is open, work item 2.12).
+    /// </summary>
+    /// <param name="request">The request.</param>
+    /// <param name="cancellationToken">A token that cancels the check.</param>
+    /// <returns><see langword="true"/> when the request is assembled.</returns>
+    public async ValueTask<bool> ShouldAssembleAsync(ChatRequest request, CancellationToken cancellationToken)
+    {
+        if (ShouldAssemble(request))
+        {
+            return true;
+        }
+
+        if (request.RetrievalMode == RetrievalMode.Off)
+        {
+            return false;
+        }
+
+        foreach (var source in _sources)
+        {
+            if (await source.RequestsAssemblyAsync(request, cancellationToken).ConfigureAwait(false))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>Assembles the prompt for one request and one model.</summary>
     /// <param name="request">The chat request; its last message is the query.</param>
     /// <param name="target">The model to assemble for.</param>
@@ -222,28 +252,55 @@ public sealed partial class ContextAssembler
             }
         }
 
-        // 4. Phase 2 hooks: the repository map and retrieved chunks.
+        // 4. Retrieved chunks by fused score, then the repository map (work item 2.12): retrieval sources are asked first
+        // whatever order they were registered in, so the map only gets the room the chunks leave.
         var mapText = string.Empty;
         var retrievedText = string.Empty;
-        foreach (var source in _sources)
+        var sent = new List<ContextChunk>();
+        var excluded = new HashSet<string>(request.ExcludedContextKeys ?? [], StringComparer.Ordinal);
+        var retrievedCap = Cap(budget, _options.RetrievedCapFraction);
+        var retrievedUsed = 0;
+        foreach (var source in _sources.Where(s => s.Slot == ContextSlot.RetrievedChunks).Concat(_sources.Where(s => s.Slot == ContextSlot.RepoMap)))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (source.Slot == ContextSlot.RetrievedChunks && request.RetrievalMode == RetrievalMode.Off)
+            {
+                continue;
+            }
+
             var contribution = await source.GetAsync(request, target, cancellationToken).ConfigureAwait(false);
-            if (contribution is null || string.IsNullOrWhiteSpace(contribution.Text))
+            if (contribution is null || (contribution.Key.Length > 0 && excluded.Contains(contribution.Key)))
+            {
+                continue;
+            }
+
+            if (contribution.Chunks.Count > 0)
+            {
+                var placedChunks = PlaceChunks(contribution, excluded, policy, budget, ref remaining, retrievedCap, ref retrievedUsed, counter, items, sent);
+                if (placedChunks.Length > 0)
+                {
+                    retrievedText = JoinBlocks(retrievedText, placedChunks);
+                }
+
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(contribution.Text))
             {
                 continue;
             }
 
             var isMap = source.Slot == ContextSlot.RepoMap;
+            var slotCap = isMap ? Cap(budget, _options.RepoMapCapFraction) : Math.Max(0, retrievedCap - retrievedUsed);
             var placed = Place(
                 contribution.Text.Trim(),
                 c => $"## {contribution.Name}\n{c}",
-                Cap(budget, isMap ? _options.RepoMapCapFraction : _options.RetrievedCapFraction),
+                slotCap,
                 remaining,
                 TruncationMode.Head,
                 counter,
                 "its cap");
-            AddItem(items, isMap ? ContextItemKind.RepoMap : ContextItemKind.RetrievedChunks, contribution.Name, placed);
+            AddItem(items, isMap ? ContextItemKind.RepoMap : ContextItemKind.RetrievedChunks, contribution.Name, placed, contribution.Key);
             if (placed.Dropped)
             {
                 continue;
@@ -256,6 +313,7 @@ public sealed partial class ContextAssembler
             }
             else
             {
+                retrievedUsed += placed.Tokens;
                 retrievedText = JoinBlocks(retrievedText, placed.Text);
             }
         }
@@ -313,8 +371,73 @@ public sealed partial class ContextAssembler
         var elapsed = _time.GetElapsedTime(started);
         var report = new ContextReport(OrderItems(items), target.ModelId, window, reserve, budget, elapsed);
         LogAssembled(_logger, request.RequestId, target.ModelId, report.ItemCount, report.TrimmedCount, report.TotalTokens, (long)elapsed.TotalMilliseconds);
-        return new AssembledContext(ordered, messages, report);
+        return new AssembledContext(ordered, messages, report, sent);
     }
+
+    /// <summary>
+    /// Places a source's retrieved chunks, best first: each one within the per-chunk cap, the slot's room left and the budget
+    /// left; a chunk that does not fit is cut to its first lines or, below the smallest worthwhile share, dropped (and the
+    /// next, smaller one may still fit). The section's introduction is only paid for once a chunk goes in.
+    /// </summary>
+    /// <returns>The section text (introduction and chunks), or empty when no chunk went in.</returns>
+    private string PlaceChunks(
+        ContextContribution contribution,
+        HashSet<string> excluded,
+        FileAccessPolicy policy,
+        int budget,
+        ref int remaining,
+        int slotCap,
+        ref int slotUsed,
+        IModelTokenCounter counter,
+        List<ContextReportItem> items,
+        List<ContextChunk> sent)
+    {
+        var intro = string.IsNullOrWhiteSpace(contribution.Text) ? "## " + contribution.Name : contribution.Text.Trim();
+        var introTokens = counter.Count(intro);
+        var chunkCap = Cap(budget, _options.RetrievedChunkCapFraction);
+        var blocks = new List<string>();
+        var introPaid = false;
+        foreach (var chunk in contribution.Chunks)
+        {
+            if (chunk is null || string.IsNullOrWhiteSpace(chunk.Text) || (chunk.Key.Length > 0 && excluded.Contains(chunk.Key)))
+            {
+                continue;
+            }
+
+            // The index leaves secret-bearing files out, but the effective exclusions may have changed since it was built.
+            var access = policy.Check(string.IsNullOrEmpty(chunk.FilePath) ? chunk.Path : chunk.FilePath, () => chunk.Text);
+            if (!access.IsAllowed)
+            {
+                items.Add(new ContextReportItem(ContextItemKind.RetrievedChunks, chunk.Label, 0, 0, false, true, "The file is excluded or looks secret. " + access.Reason, chunk.Key));
+                continue;
+            }
+
+            var overhead = introPaid ? 0 : introTokens;
+            var cap = Math.Min(chunkCap, Math.Max(0, slotCap - slotUsed - overhead));
+            var placed = Place(chunk.Text, c => RenderChunk(chunk, c), cap, Math.Max(0, remaining - overhead), TruncationMode.Head, counter, cap < chunkCap ? "the retrieved-code cap" : "the per-chunk cap");
+            AddItem(items, ContextItemKind.RetrievedChunks, chunk.Label, placed, chunk.Key);
+            if (placed.Dropped)
+            {
+                continue;
+            }
+
+            if (!introPaid)
+            {
+                introPaid = true;
+                remaining -= introTokens;
+                slotUsed += introTokens;
+            }
+
+            remaining -= placed.Tokens;
+            slotUsed += placed.Tokens;
+            blocks.Add(placed.Text);
+            sent.Add(chunk);
+        }
+
+        return blocks.Count == 0 ? string.Empty : intro + "\n\n" + string.Join("\n\n", blocks);
+    }
+
+    private static string RenderChunk(ContextChunk chunk, string content) => "### " + chunk.Label + "\n" + Fence(content);
 
     private static string JoinBlocks(string existing, string next) => existing.Length == 0 ? next : existing + "\n\n" + next;
 
@@ -375,8 +498,8 @@ public sealed partial class ContextAssembler
         return fence + "\n" + content.TrimEnd('\r', '\n') + "\n" + fence;
     }
 
-    private static void AddItem(List<ContextReportItem> items, ContextItemKind kind, string name, Placement placed) =>
-        items.Add(new ContextReportItem(kind, name, placed.Dropped ? 0 : placed.Tokens, placed.OriginalTokens, placed.Truncated, placed.Dropped, placed.Note));
+    private static void AddItem(List<ContextReportItem> items, ContextItemKind kind, string name, Placement placed, string key = "") =>
+        items.Add(new ContextReportItem(kind, name, placed.Dropped ? 0 : placed.Tokens, placed.OriginalTokens, placed.Truncated, placed.Dropped, placed.Note, key));
 
     /// <summary>Puts dropped items after the section they would have joined, which is where they already are; kept for a stable report order.</summary>
     private static List<ContextReportItem> OrderItems(List<ContextReportItem> items) =>

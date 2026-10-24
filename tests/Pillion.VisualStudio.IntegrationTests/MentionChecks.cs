@@ -7,7 +7,9 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
 using Pillion.Contracts;
 using Pillion.VisualStudio.Core;
 using Pillion.VisualStudio.Core.Mentions;
@@ -33,7 +35,7 @@ public static class MentionChecks
     /// <summary>The variable the package reads at each host launch (HostLauncherSelector.OverrideVariable).</summary>
     public const string HostOverrideVariable = "PILLION_TEST_HOST_PATH";
 
-    private static readonly string[] Variables = [HostOverrideVariable, "PILLION_FAKEHOST_MODE", "PILLION_FAKEHOST_RECORD", "PILLION_FAKEHOST_CHUNK_DELAY_MS"];
+    private static readonly string[] Variables = [HostOverrideVariable, "PILLION_FAKEHOST_MODE", "PILLION_FAKEHOST_RECORD", "PILLION_FAKEHOST_CHUNK_DELAY_MS", IndexWindowChecks.IndexVariable];
 
     /// <summary>Puts the fake host behind the package: sets the variables inside devenv.exe, retries the host and waits for it.</summary>
     /// <param name="fakeHostPath">The fake host executable.</param>
@@ -121,6 +123,65 @@ public static class MentionChecks
         log("Outbound log: " + string.Join(" | ", vm.OutboundLog.Records.Select(r => r.ToText(", "))));
 
         return new MentionRunReport(entries, pin.DisplayName + " " + pin.TokenBadge, inputAfterPick, vm.Turns[1].Header, vm.OutboundLog.Records.Count);
+    }
+
+    /// <summary>
+    /// In the chat window (work item 2.13): types a mention into the input, waits for the picker entry with the label, moves to
+    /// it with Down and picks it with Enter, and waits for the new pin.
+    /// </summary>
+    /// <param name="control">The chat window's content (ChatToolWindowControl).</param>
+    /// <param name="typed">What to type, for example <c>@output:</c> or <c>@build</c>.</param>
+    /// <param name="label">The label of the entry to pick, for example <c>@output:build</c>.</param>
+    /// <param name="log">Writes to the test output.</param>
+    /// <param name="cancellationToken">Cancels the waits.</param>
+    /// <returns>The pin's kind, name and content.</returns>
+    public static async Task<(string Kind, string Name, string Content)> PinFromPickerAsync(FrameworkElement control, string typed, string label, Action<string> log, CancellationToken cancellationToken)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        var vm = control.DataContext as ChatViewModel ?? throw new InvalidOperationException("The chat window's DataContext is not a ChatViewModel.");
+        var input = control.FindName("Input") as TextBox ?? throw new InvalidOperationException("The chat window has no Input text box.");
+        Assert.True(vm.IsMentionsEnabled, "The mentions feature is off.");
+        input.Focus();
+        var before = vm.Mentions.Pins.Count;
+
+        Type(input, typed);
+        await UntilAsync(
+            () => vm.Mentions.Picker.IsOpen && vm.Mentions.Picker.Items.Any(i => i.Label == label),
+            TimeSpan.FromSeconds(30),
+            "the picker to list " + label,
+            cancellationToken).ConfigureAwait(true);
+        log("After " + typed + ": " + string.Join("; ", vm.Mentions.Picker.Items.Select(i => i.AutomationName)));
+        for (var i = 0; i < 25 && vm.Mentions.Picker.SelectedItem?.Label != label; i++)
+        {
+            Press(input, Key.Down);
+        }
+
+        Assert.Equal(label, vm.Mentions.Picker.SelectedItem?.Label);
+        Press(input, Key.Enter);
+        await UntilAsync(() => vm.Mentions.Pins.Count == before + 1, TimeSpan.FromSeconds(30), label + " to be pinned (notice: " + vm.Mentions.Notice + ")", cancellationToken).ConfigureAwait(true);
+        var pin = vm.Mentions.Pins[vm.Mentions.Pins.Count - 1];
+        log($"Pinned {pin.Kind} {pin.DisplayName} ({pin.TokenBadge} tokens).");
+        return (pin.Kind, pin.DisplayName, pin.Resolution.Content ?? string.Empty);
+    }
+
+    /// <summary>Writes a line to the Output window's Build pane (creating the pane when no build has made it yet).</summary>
+    /// <param name="text">The line.</param>
+    /// <param name="cancellationToken">Cancels the switch to the UI thread.</param>
+    /// <returns>A task that completes when it is written.</returns>
+    public static async Task WriteToBuildPaneAsync(string text, CancellationToken cancellationToken)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        var window = await AsyncServiceProvider.GlobalProvider.GetServiceAsync(typeof(SVsOutputWindow)).ConfigureAwait(true) as IVsOutputWindow
+            ?? throw new InvalidOperationException("The Output window service is unavailable.");
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        var guid = VSConstants.OutputWindowPaneGuid.BuildOutputPane_guid;
+        if (ErrorHandler.Failed(window.GetPane(ref guid, out var pane)) || pane is null)
+        {
+            ErrorHandler.ThrowOnFailure(window.CreatePane(ref guid, "Build", 1, 0));
+            ErrorHandler.ThrowOnFailure(window.GetPane(ref guid, out pane));
+        }
+
+        ErrorHandler.ThrowOnFailure(pane.OutputStringThreadSafe(text + Environment.NewLine));
     }
 
     /// <summary>Removes every pin and turn the run left in the current conversation.</summary>

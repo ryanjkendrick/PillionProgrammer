@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CsCheck" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Pillion.ContextEngine\Pillion.ContextEngine.csproj" />
+    <!-- The retrieval component test and benchmark build real index databases with the index schema of Pillion.Indexing. -->
+    <ProjectReference Include="..\..\src\Pillion.Indexing\Pillion.Indexing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Chunker fixtures: source files in many languages, read from disk at run time, never compiled. -->
+    <Compile Remove="Fixtures\**" />
+    <None Remove="Fixtures\**" />
+    <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Inputs a chunker handled badly; outside Fixtures, which the retrieval evaluation's fixtures set indexes. -->
+    <None Remove="Regressions\**" />
+    <None Include="Regressions\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

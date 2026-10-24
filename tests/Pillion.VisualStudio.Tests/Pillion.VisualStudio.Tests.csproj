@@ -32,6 +32,8 @@
     <Compile Include="..\..\src\Pillion.VisualStudio\ToolWindows\Markdown\MarkdownRenderContext.cs" Link="Linked\MarkdownRenderContext.cs" />
     <Compile Include="..\..\src\Pillion.VisualStudio\ToolWindows\Markdown\MarkdownBlockRenderer.cs" Link="Linked\MarkdownBlockRenderer.cs" />
     <Compile Include="..\..\src\Pillion.VisualStudio\ToolWindows\Markdown\MarkdownMessageView.cs" Link="Linked\MarkdownMessageView.cs" />
+    <!-- The bounded search for the status bar's panel (the indexing indicator, work item 2.15): plain WPF too. -->
+    <Compile Include="..\..\src\Pillion.VisualStudio\Statusbar\StatusBarPanelFinder.cs" Link="Linked\StatusBarPanelFinder.cs" />
     <Reference Include="PresentationCore" />
     <Reference Include="PresentationFramework" />
     <Reference Include="WindowsBase" />

@@ -17,12 +17,14 @@ namespace Pillion.ModelGateway.Providers.Ollama;
 /// <param name="NeedTokens">The tokens the request needs: its prompt plus the output it reserves.</param>
 /// <param name="KeepAliveOverride">A <c>keep_alive</c> the caller asked for, or <see langword="null"/>.</param>
 /// <param name="RequestId">The gateway request id, for progress notices.</param>
-internal sealed record ResidencyRequest(string ModelId, bool IsFim, Profile? Profile, int? ExplicitContext, int NeedTokens, string? KeepAliveOverride, string? RequestId);
+/// <param name="IsEmbedding">Whether the request embeds text (<c>/api/embed</c>); the model is then never preloaded or unloaded through <c>/api/generate</c>, which embedding models do not serve.</param>
+internal sealed record ResidencyRequest(string ModelId, bool IsFim, Profile? Profile, int? ExplicitContext, int NeedTokens, string? KeepAliveOverride, string? RequestId, bool IsEmbedding = false);
 
 /// <summary>The <c>num_ctx</c> and <c>keep_alive</c> a request is sent with.</summary>
 /// <param name="NumCtx">The context size.</param>
 /// <param name="KeepAlive">The keep-alive.</param>
-internal sealed record ResidencyPlan(int NumCtx, string KeepAlive);
+/// <param name="CpuOnly">Whether the model is to run on the CPU (<c>num_gpu</c> 0) because the GPU has no room for it beside the resident models.</param>
+internal sealed record ResidencyPlan(int NumCtx, string KeepAlive, bool CpuOnly = false);
 
 /// <summary>
 /// Keeps one resident configuration per model (design section 6, Local model residency). Ollama keeps a separate runner for
@@ -161,6 +163,42 @@ internal sealed partial class OllamaResidency : ILocalResidencySource, IDisposab
         try
         {
             return await DecideAsync(request, key, wanted, keepAlive, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Works out how an embedding request is sent: the context size (small, because each text is read on its own and Ollama would
+    /// otherwise load the whole window), the keep-alive, and whether the model runs on the CPU. An embedding model is never allowed to
+    /// push a resident model out of the GPU: when the tier's memory is not enough for it beside what is loaded (or the catalog cannot
+    /// say how much it needs and something is loaded), it runs on the CPU instead. A model that is already resident keeps the
+    /// configuration it has when that serves the request, so there is one resident configuration per model.
+    /// </summary>
+    /// <param name="request">The request (<see cref="ResidencyRequest.IsEmbedding"/> set).</param>
+    /// <param name="cancellationToken">A token that cancels the wait.</param>
+    /// <returns>The plan to send the request with.</returns>
+    /// <exception cref="ProviderException">An unload did not finish in time (<see cref="PillionErrorCode.ProviderUnavailable"/>).</exception>
+    public async Task<ResidencyPlan> PrepareEmbeddingAsync(ResidencyRequest request, CancellationToken cancellationToken)
+    {
+        var key = KeyOf(request.ModelId);
+        var keepAlive = request.KeepAliveOverride ?? _provider.Options.EmbeddingKeepAlive;
+
+        SemaphoreSlim gate;
+        lock (_lock)
+        {
+            if (!_gates.TryGetValue(key, out gate!))
+            {
+                _gates[key] = gate = new SemaphoreSlim(1, 1);
+            }
+        }
+
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await DecideEmbeddingAsync(request, key, keepAlive, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -312,7 +350,15 @@ internal sealed partial class OllamaResidency : ILocalResidencySource, IDisposab
         }
     }
 
-    private void Remember(string key, string name, int context, string keepAlive)
+    private double ResidentMiBExcept(string key)
+    {
+        lock (_lock)
+        {
+            return _resident.Where(e => !string.Equals(e.Key, key, StringComparison.OrdinalIgnoreCase)).Sum(e => e.Value.Instances.Sum(i => i.VramBytes)) / (1024.0 * 1024.0);
+        }
+    }
+
+    private void Remember(string key, string name, int context, string keepAlive, bool onCpu = false)
     {
         // Until /api/ps is read again the instance takes what the catalog says a model of this kind takes at this context.
         var estimated = _provider.Catalog.GetResidency(name) is { } estimate ? estimate.EstimateMiB(context) * 1024L * 1024L : 0L;
@@ -325,7 +371,8 @@ internal sealed partial class OllamaResidency : ILocalResidencySource, IDisposab
             }
 
             var existing = entry.Instances.FindIndex(i => i.Context == context);
-            var instance = new Instance(context, existing >= 0 ? entry.Instances[existing].SizeBytes : estimated, existing >= 0 ? entry.Instances[existing].VramBytes : estimated, ExpiryOf(keepAlive, now), keepAlive);
+            var size = existing >= 0 ? entry.Instances[existing].SizeBytes : estimated;
+            var instance = new Instance(context, size, onCpu ? 0 : existing >= 0 ? entry.Instances[existing].VramBytes : estimated, ExpiryOf(keepAlive, now), keepAlive);
             if (existing >= 0)
             {
                 entry.Instances[existing] = instance;
@@ -451,6 +498,59 @@ internal sealed partial class OllamaResidency : ILocalResidencySource, IDisposab
 
             _observedAt = now;
         }
+    }
+
+    private async Task<ResidencyPlan> DecideEmbeddingAsync(ResidencyRequest request, string key, string keepAlive, CancellationToken cancellationToken)
+    {
+        var verifiable = await RefreshAsync(force: false, cancellationToken).ConfigureAwait(false);
+        var instances = InstancesOf(key);
+
+        // The smallest resident instance that is big enough serves the request, on whatever device it runs.
+        var fit = instances.Where(i => i.Context is { } c && c >= request.NeedTokens).OrderBy(i => i.Context).FirstOrDefault();
+        if (fit is { Context: { } resident })
+        {
+            return new ResidencyPlan(resident, keepAlive, CpuOnly: fit.SizeBytes > 0 && fit.VramBytes == 0);
+        }
+
+        var model = request.ModelId;
+        var tier = CurrentTier();
+        var estimate = _provider.Catalog.GetResidency(model);
+        var window = _provider.ContextWindowOf(model);
+        var wanted = request.ExplicitContext ?? estimate?.RecommendedContextFor(tier, _provider.Options.EmbeddingContextSize) ?? _provider.Options.EmbeddingContextSize;
+        var target = Math.Min(Math.Max(wanted, RoundUpContext(request.NeedTokens)), Math.Max(window, MinimumContext));
+        if (!verifiable || instances.Any(i => i.Context is null))
+        {
+            // Nothing can be verified without /api/ps (or the server did not say what the resident instance has): send the request.
+            Remember(key, model, target, keepAlive);
+            return new ResidencyPlan(target, keepAlive);
+        }
+
+        // A resident instance that is too small is unloaded first (through /api/embed: embedding models have no /api/generate).
+        if (instances.Count > 0)
+        {
+            await ReleaseAsync(request, key, instances.Max(i => i.Context ?? 0), target, cancellationToken).ConfigureAwait(false);
+        }
+
+        var others = ResidentMiBExcept(key);
+
+        var cpuOnly = false;
+        if (TierBudgetMiB(tier) is { } budget)
+        {
+            var needed = estimate?.EstimateMiB(target);
+            cpuOnly = needed is null ? others > 0 : needed.Value > budget - others;
+            if (cpuOnly)
+            {
+                LogOnCpu(_logger, ProviderId, model, others, budget);
+                Report(
+                    request,
+                    ModelProgressKind.WaitingForLocalModel,
+                    TimeSpan.Zero,
+                    string.Create(CultureInfo.InvariantCulture, $"{model} runs on the CPU: the resident models leave {Math.Max(0, budget - others):N0} MiB of GPU memory and it needs {(needed is { } n ? n.ToString("N0", CultureInfo.InvariantCulture) : "an unknown amount")} MiB."));
+            }
+        }
+
+        Remember(key, model, target, keepAlive, onCpu: cpuOnly);
+        return new ResidencyPlan(target, keepAlive, cpuOnly);
     }
 
     private async Task<ResidencyPlan> DecideAsync(ResidencyRequest request, string key, int wanted, string keepAlive, CancellationToken cancellationToken)
@@ -586,7 +686,10 @@ internal sealed partial class OllamaResidency : ILocalResidencySource, IDisposab
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
         try
         {
-            using (await _provider.Http.PostJsonAsync("api/generate", new JsonObject { ["model"] = model, ["prompt"] = string.Empty, ["stream"] = false, ["keep_alive"] = 0 }, model, linked.Token).ConfigureAwait(false))
+            var unload = request.IsEmbedding
+                ? new JsonObject { ["model"] = model, ["input"] = new JsonArray(), ["keep_alive"] = 0 }
+                : new JsonObject { ["model"] = model, ["prompt"] = string.Empty, ["stream"] = false, ["keep_alive"] = 0 };
+            using (await _provider.Http.PostJsonAsync(request.IsEmbedding ? "api/embed" : "api/generate", unload, model, linked.Token).ConfigureAwait(false))
             {
             }
 
@@ -705,6 +808,9 @@ internal sealed partial class OllamaResidency : ILocalResidencySource, IDisposab
 
     [LoggerMessage(EventId = 441, Level = LogLevel.Information, Message = "Ollama provider '{ProviderId}' unloads {Model} ({Current} tokens of context) to reload it at {Target}.")]
     private static partial void LogReleasing(ILogger logger, string providerId, string model, int current, int target);
+
+    [LoggerMessage(EventId = 443, Level = LogLevel.Information, Message = "Ollama provider '{ProviderId}' runs embedding model {Model} on the CPU: the other resident models take {ResidentMiB:N0} MiB of the {BudgetMiB:N0} MiB the GPU tier offers.")]
+    private static partial void LogOnCpu(ILogger logger, string providerId, string model, double residentMiB, int budgetMiB);
 
     [LoggerMessage(EventId = 442, Level = LogLevel.Information, Message = "Ollama provider '{ProviderId}' loads a second instance of {Model} at {Target} tokens beside the resident {Current}.")]
     private static partial void LogSecondInstance(ILogger logger, string providerId, string model, int target, int current);

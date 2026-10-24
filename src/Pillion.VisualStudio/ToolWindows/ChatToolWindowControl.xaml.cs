@@ -179,6 +179,76 @@ internal sealed partial class ChatToolWindowControl : UserControl, IDisposable
         }
     }
 
+    /// <summary>The conversation a context-menu click is about (the entry the menu was opened on).</summary>
+    private static ChatConversation? ConversationOf(object sender)
+    {
+        var item = sender as MenuItem;
+        var target = (item?.Parent as ContextMenu)?.PlacementTarget as FrameworkElement;
+        return target?.DataContext as ChatConversation ?? item?.DataContext as ChatConversation;
+    }
+
+    /// <summary>
+    /// Before an entry's context menu opens: wires its Rename and Delete items (by their Tag). They cannot carry Click
+    /// attributes in XAML, because the menu sits in a setter value of the item style, where the markup compiler gives the
+    /// handlers the wrong connection id and the window failed to build ("Set connectionId threw an exception").
+    /// </summary>
+    private void OnConversationItemContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        if (sender is not FrameworkElement { ContextMenu: { } menu })
+        {
+            return;
+        }
+
+        foreach (var entry in menu.Items)
+        {
+            if (entry is not MenuItem item)
+            {
+                continue;
+            }
+
+            switch (item.Tag as string)
+            {
+                case "rename":
+                    item.Click -= OnConversationRenameClick;
+                    item.Click += OnConversationRenameClick;
+                    break;
+                case "delete":
+                    item.Click -= OnConversationDeleteClick;
+                    item.Click += OnConversationDeleteClick;
+                    break;
+            }
+        }
+    }
+
+    /// <summary>Rename in an entry's context menu: opens that conversation and starts editing its name.</summary>
+    private void OnConversationRenameClick(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        ConversationPicker.IsDropDownOpen = false;
+        _viewModel.RenameConversation(ConversationOf(sender));
+    }
+
+    /// <summary>Delete in an entry's context menu (the view model asks for confirmation).</summary>
+    private void OnConversationDeleteClick(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        ConversationPicker.IsDropDownOpen = false;
+        if (ConversationOf(sender) is { } conversation && _viewModel.DeleteConversationCommand.CanExecute(conversation))
+        {
+            _viewModel.DeleteConversationCommand.Execute(conversation);
+        }
+    }
+
+    /// <summary>The conversation list reads its next page when it is scrolled to the end.</summary>
+    private void OnConversationListScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (e.OriginalSource is ScrollViewer && e.ExtentHeight > e.ViewportHeight && e.VerticalOffset + e.ViewportHeight >= e.ExtentHeight - 1
+            && _viewModel.LoadMoreConversationsCommand.CanExecute(null))
+        {
+            _viewModel.LoadMoreConversationsCommand.Execute(null);
+        }
+    }
+
     /// <summary>Enter saves the name, Esc cancels.</summary>
     private void OnRenameKeyDown(object sender, KeyEventArgs e)
     {

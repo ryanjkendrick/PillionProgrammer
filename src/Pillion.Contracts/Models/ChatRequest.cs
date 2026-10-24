@@ -49,4 +49,23 @@ public sealed class ChatRequest
     /// </summary>
     [DataMember(Order = 8)]
     public string? ProjectRules { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether the host retrieves code from the index for this request; <see cref="Contracts.RetrievalMode.Auto"/>
+    /// (the default) lets the host decide. Added in contract 1.3 (work item 2.12); a 1.2 host ignores it.
+    /// </summary>
+    [DataMember(Order = 9)]
+    public RetrievalMode RetrievalMode { get; set; }
+
+    /// <summary>Gets or sets the most retrieved chunks to put in the context; 0 means the host default. Added in contract 1.3 (work item 2.12).</summary>
+    [DataMember(Order = 10)]
+    public int MaxRetrievedChunks { get; set; }
+
+    /// <summary>
+    /// Gets or sets the context items the user removed in the Context Inspector before sending: the
+    /// <see cref="ContextReportItemDto.ContextKey"/> of each (a retrieved chunk's id, or <c>repoMap</c>). The host leaves them
+    /// out of this request. Added in contract 1.3 (work item 2.12); a host before it ignores it.
+    /// </summary>
+    [DataMember(Order = 11)]
+    public string[] ExcludedContextKeys { get; set; } = [];
 }

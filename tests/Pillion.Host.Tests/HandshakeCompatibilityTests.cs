@@ -10,6 +10,7 @@ public sealed class HandshakeCompatibilityTests
 
     [Theory]
     [InlineData(1, 0)]
+    [InlineData(1, 2)]
     [InlineData(1, ContractVersion.Minor)]
     [InlineData(1, 9)]
     public async Task AClientWithAnotherMinorVersion_IsAccepted(int major, int minor)
@@ -24,11 +25,11 @@ public sealed class HandshakeCompatibilityTests
         Assert.True(response.Accepted, response.Reason);
         Assert.Equal(ContractVersion.Major, response.ContractMajor);
         Assert.Equal(ContractVersion.Minor, response.ContractMinor);
-        Assert.Equal(2, response.ContractMinor);
+        Assert.Equal(3, response.ContractMinor);
     }
 
     [Fact]
-    public async Task AContractOnePointOneClient_IsAcceptedByAContractOnePointTwoHost_AndCanStillUseOnePointOneCalls()
+    public async Task AContractOnePointOneClient_IsAcceptedByANewerHost_AndCanStillUseOnePointOneCalls()
     {
         await using var host = await InProcessHost.StartAsync();
         await using var client = await host.ConnectAsync();
@@ -37,10 +38,10 @@ public sealed class HandshakeCompatibilityTests
             .HandshakeAsync(TestRpcClient.CreateHandshake(host.Token, major: 1, minor: 1), CancellationToken.None)
             .WaitAsync(Wait);
 
-        // The host reports 1.2; the 1.1 client reads that as a newer minor of its own major and carries on.
+        // The host reports 1.3; the 1.1 client reads that as a newer minor of its own major and carries on.
         Assert.True(response.Accepted, response.Reason);
         Assert.Equal(1, response.ContractMajor);
-        Assert.Equal(2, response.ContractMinor);
+        Assert.Equal(3, response.ContractMinor);
         Assert.True(ContractVersion.IsCompatible(response.ContractMajor, response.ContractMinor));
 
         // A 1.1 method still answers after the handshake.

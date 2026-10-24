@@ -19,6 +19,7 @@ namespace Pillion.ModelGateway.Editing;
 /// Whether the model is asked to reply with the whole code rewritten as plain code instead of edit blocks (ignored for
 /// <c>/test</c> and <c>/explain</c>).
 /// </param>
+/// <param name="Related">Retrieved code from elsewhere in the repository (work item 2.12), best first; none when <see langword="null"/>.</param>
 public sealed record InlineEditPromptInput(
     string LanguageId,
     string FileName,
@@ -31,7 +32,8 @@ public sealed record InlineEditPromptInput(
     string After,
     IReadOnlyList<InlineEditDiagnostic> Diagnostics,
     IReadOnlyList<string> History,
-    bool WholeScope = false);
+    bool WholeScope = false,
+    IReadOnlyList<ContextChunk>? Related = null);
 
 /// <summary>
 /// Builds the messages of an inline edit request from <see cref="InlineEditTemplates"/>: a system prompt for the
@@ -43,6 +45,9 @@ public sealed class InlineEditPromptBuilder
 {
     /// <summary>The default number of characters of context kept on each side of the scope.</summary>
     public const int DefaultContextCharacters = 6000;
+
+    /// <summary>The most retrieved chunks an inline edit prompt shows (work item 2.12).</summary>
+    public const int MaxRelatedChunks = 4;
 
     private readonly InlineEditTemplates _templates;
     private readonly int _contextCharacters;
@@ -72,6 +77,25 @@ public sealed class InlineEditPromptBuilder
         {
             _templates.Section("header", ("language", language), ("file", string.IsNullOrEmpty(input.FileName) ? "(unsaved)" : input.FileName)),
         };
+
+        // Retrieved code (work item 2.12): stable for the session's instruction, so it goes before the code around the scope.
+        if (input.Related is { Count: > 0 } related)
+        {
+            var items = related
+                .Where(c => c is not null && c.Text.Trim().Length > 0)
+                .Take(MaxRelatedChunks)
+                .Select(c =>
+                {
+                    var text = KeepStart(EditText.ToLf(c.Text), _contextCharacters / 2).TrimEnd('\n');
+                    var fence = EditText.Fence(text);
+                    return c.Label + "\n" + fence + FenceTag(input.LanguageId) + "\n" + text + "\n" + fence;
+                })
+                .ToList();
+            if (items.Count > 0)
+            {
+                sections.Add(_templates.RelatedSection(string.Join("\n\n", items)));
+            }
+        }
 
         var before = KeepEnd(input.Before, _contextCharacters);
         if (before.Trim().Length > 0)

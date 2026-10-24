@@ -268,6 +268,110 @@
     <value>The text on the clipboard</value>
     <comment>Description of @clipboard in the picker.</comment>
   </data>
+  <data name="MentionGroupKinds" xml:space="preserve">
+    <value>Kinds</value>
+    <comment>Heading of the mention kinds in the picker.</comment>
+  </data>
+  <data name="MentionGroupFiles" xml:space="preserve">
+    <value>Files</value>
+    <comment>Heading of the files in the mention picker.</comment>
+  </data>
+  <data name="MentionGroupFolders" xml:space="preserve">
+    <value>Folders</value>
+    <comment>Heading of the folders in the mention picker.</comment>
+  </data>
+  <data name="MentionGroupSymbols" xml:space="preserve">
+    <value>Symbols</value>
+    <comment>Heading of the symbols in the mention picker.</comment>
+  </data>
+  <data name="MentionGroupDocs" xml:space="preserve">
+    <value>Docs</value>
+    <comment>Heading of the documentation files in the mention picker.</comment>
+  </data>
+  <data name="MentionGroupGit" xml:space="preserve">
+    <value>Git</value>
+    <comment>Heading of the @git options in the mention picker.</comment>
+  </data>
+  <data name="MentionGroupOutput" xml:space="preserve">
+    <value>Output panes</value>
+    <comment>Heading of the @output options in the mention picker.</comment>
+  </data>
+  <data name="MentionKindSymbol" xml:space="preserve">
+    <value>A symbol's definition and its references</value>
+    <comment>Description of @symbol in the picker.</comment>
+  </data>
+  <data name="MentionKindDocs" xml:space="preserve">
+    <value>Markdown and text documentation</value>
+    <comment>Description of @docs in the picker.</comment>
+  </data>
+  <data name="MentionKindSolution" xml:space="preserve">
+    <value>The repo map of the solution</value>
+    <comment>Description of @solution in the picker.</comment>
+  </data>
+  <data name="MentionKindGit" xml:space="preserve">
+    <value>Working-tree changes, staged changes or recent commits</value>
+    <comment>Description of @git in the picker.</comment>
+  </data>
+  <data name="MentionKindOutput" xml:space="preserve">
+    <value>The Build, Debug or Tests pane of the Output window</value>
+    <comment>Description of @output in the picker.</comment>
+  </data>
+  <data name="MentionKindBuild" xml:space="preserve">
+    <value>The last build's output</value>
+    <comment>Description of @build in the picker.</comment>
+  </data>
+  <data name="MentionKindTests" xml:space="preserve">
+    <value>The last test results</value>
+    <comment>Description of @tests in the picker.</comment>
+  </data>
+  <data name="MentionPickerSymbolHint" xml:space="preserve">
+    <value>Type part of a symbol name</value>
+    <comment>Title of the mention picker after @symbol: is typed.</comment>
+  </data>
+  <data name="MentionPickerDocsHint" xml:space="preserve">
+    <value>Type part of a document name</value>
+    <comment>Title of the mention picker after @docs: is typed.</comment>
+  </data>
+  <data name="MentionPickerGitHint" xml:space="preserve">
+    <value>Pick what to read from git</value>
+    <comment>Title of the mention picker after @git: is typed.</comment>
+  </data>
+  <data name="MentionPickerOutputHint" xml:space="preserve">
+    <value>Pick an Output pane</value>
+    <comment>Title of the mention picker after @output: is typed.</comment>
+  </data>
+  <data name="MentionTypedValueFormat" xml:space="preserve">
+    <value>Find '{0}' in the index</value>
+    <comment>Detail of the picker entry that resolves the typed name as written; {0} is the name.</comment>
+  </data>
+  <data name="MentionSymbolCandidatesTitleFormat" xml:space="preserve">
+    <value>{0} matches more than one symbol. Which one?</value>
+    <comment>Title of the sub-picker for an ambiguous symbol; {0} is the mention.</comment>
+  </data>
+  <data name="MentionGitDiff" xml:space="preserve">
+    <value>Working-tree changes not yet staged</value>
+    <comment>Detail of @git in the picker's git options.</comment>
+  </data>
+  <data name="MentionGitStaged" xml:space="preserve">
+    <value>Changes staged for the next commit</value>
+    <comment>Detail of @git:staged in the picker.</comment>
+  </data>
+  <data name="MentionGitLogFormat" xml:space="preserve">
+    <value>The last {0} commits</value>
+    <comment>Detail of @git:log in the picker; {0} is the number of commits.</comment>
+  </data>
+  <data name="MentionOutputBuild" xml:space="preserve">
+    <value>The Build pane</value>
+    <comment>Detail of @output:build in the picker.</comment>
+  </data>
+  <data name="MentionOutputDebug" xml:space="preserve">
+    <value>The Debug pane</value>
+    <comment>Detail of @output:debug in the picker.</comment>
+  </data>
+  <data name="MentionOutputTests" xml:space="preserve">
+    <value>The Tests pane</value>
+    <comment>Detail of @output:tests in the picker.</comment>
+  </data>
   <data name="MentionFailed" xml:space="preserve">
     <value>The mention could not be resolved.</value>
     <comment>Shown under the input when resolving a mention failed without a reason.</comment>
@@ -535,5 +639,73 @@
   <data name="OutboundColumnOutcome" xml:space="preserve">
     <value>Outcome</value>
     <comment>Outbound log column.</comment>
+  </data>
+  <data name="PinStale" xml:space="preserve">
+    <value>Restored from a saved conversation and not read again: nothing is sent for it. Pin it again to refresh it.</value>
+    <comment>Pin tooltip line for a restored pin that could not be read again.</comment>
+  </data>
+  <data name="PinStaleShort" xml:space="preserve">
+    <value>stale</value>
+    <comment>Added to a stale pin's screen-reader name.</comment>
+  </data>
+  <data name="CitationNameFormat" xml:space="preserve">
+    <value>Open {0}</value>
+    <comment>Screen-reader name of a citation link; {0} is its text (file:line).</comment>
+  </data>
+  <data name="CitationsLabel" xml:space="preserve">
+    <value>Cited:</value>
+    <comment>Label before the spans a reply names itself (explicit citations).</comment>
+  </data>
+  <data name="SourcesFormat" xml:space="preserve">
+    <value>Sources ({0})</value>
+    <comment>The collapsed line under a reply listing the retrieved code it was given but did not name; {0} is the count.</comment>
+  </data>
+  <data name="SourcesCollapsedNameFormat" xml:space="preserve">
+    <value>Sources, {0} retrieved spans, collapsed. Press to show them.</value>
+    <comment>Screen-reader name of the collapsed Sources line; {0} is the count.</comment>
+  </data>
+  <data name="SourcesExpandedNameFormat" xml:space="preserve">
+    <value>Sources, {0} retrieved spans, expanded. Press to hide them.</value>
+    <comment>Screen-reader name of the expanded Sources line; {0} is the count.</comment>
+  </data>
+  <data name="RemoveContextItemNameFormat" xml:space="preserve">
+    <value>Remove {0} from the context</value>
+    <comment>Screen-reader name of the remove button of a retrieved chunk or the repository map in the Context Inspector; {0} is its name.</comment>
+  </data>
+  <data name="ConversationsNotSavedOff" xml:space="preserve">
+    <value>Saved conversations are turned off (feature localStore): conversations last until Visual Studio closes.</value>
+    <comment>Notice under the conversation list while the localStore feature is off.</comment>
+  </data>
+  <data name="ConversationsNotSavedFormat" xml:space="preserve">
+    <value>Conversations are not being saved ({0}): they last until Visual Studio closes.</value>
+    <comment>Notice under the conversation list while the host cannot save conversations; {0} is the reason.</comment>
+  </data>
+  <data name="ConversationLoadingText" xml:space="preserve">
+    <value>Loading conversation...</value>
+    <comment>Shown while a saved conversation is read from the host.</comment>
+  </data>
+  <data name="ConversationLoadFailedFormat" xml:space="preserve">
+    <value>Could not open this conversation: {0}</value>
+    <comment>Shown when a saved conversation could not be read; {0} is the reason.</comment>
+  </data>
+  <data name="ConversationRetryLoadButton" xml:space="preserve">
+    <value>Try again</value>
+    <comment>Button that reads a saved conversation again.</comment>
+  </data>
+  <data name="ConversationSaveFailedFormat" xml:space="preserve">
+    <value>The change was not saved: {0}</value>
+    <comment>Notice when a rename or delete of a saved conversation did not reach the host; {0} is the reason.</comment>
+  </data>
+  <data name="ConversationMenuRename" xml:space="preserve">
+    <value>Rename</value>
+    <comment>Conversation list context menu item.</comment>
+  </data>
+  <data name="ConversationMenuDelete" xml:space="preserve">
+    <value>Delete</value>
+    <comment>Conversation list context menu item.</comment>
+  </data>
+  <data name="SavedReplyHeader" xml:space="preserve">
+    <value>Assistant</value>
+    <comment>Header of a saved reply that does not name its model.</comment>
   </data>
 </root>

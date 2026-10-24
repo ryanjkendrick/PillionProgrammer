@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using System.Windows.Input;
 using Pillion.VisualStudio.Core.Markdown;
 
@@ -41,6 +43,8 @@ public sealed class ChatTurnViewModel : ObservableObject
     private string? _errorMessage;
     private string? _errorHint;
     private bool _canRetry;
+    private IReadOnlyList<CitationItem> _citations = [];
+    private bool _areSourcesExpanded;
 
     private string _header;
 
@@ -50,6 +54,7 @@ public sealed class ChatTurnViewModel : ObservableObject
         _header = header;
         ModelId = modelId;
         _state = state;
+        ToggleSourcesCommand = new DelegateCommand(() => AreSourcesExpanded = !AreSourcesExpanded, () => HasImplicitCitations);
     }
 
     /// <summary>Gets who wrote the turn.</summary>
@@ -176,6 +181,70 @@ public sealed class ChatTurnViewModel : ObservableObject
         ? "You said: " + Text
         : "Reply from " + Header + (HasStateText ? ". " + StateText : string.Empty);
 
+    /// <summary>Gets every span the reply cites, explicit and implicit (empty when it cites none).</summary>
+    public IReadOnlyList<CitationItem> Citations
+    {
+        get => _citations;
+        private set
+        {
+            if (SetProperty(ref _citations, value))
+            {
+                ExplicitCitations = [.. value.Where(c => !c.IsImplicit)];
+                ImplicitCitations = [.. value.Where(c => c.IsImplicit)];
+                OnPropertyChanged(nameof(HasCitations));
+                OnPropertyChanged(nameof(ExplicitCitations));
+                OnPropertyChanged(nameof(HasExplicitCitations));
+                OnPropertyChanged(nameof(ImplicitCitations));
+                OnPropertyChanged(nameof(HasImplicitCitations));
+                OnPropertyChanged(nameof(SourcesText));
+                OnPropertyChanged(nameof(SourcesAutomationName));
+                ToggleSourcesCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>Gets a value indicating whether the reply cites any span.</summary>
+    public bool HasCitations => _citations.Count > 0;
+
+    /// <summary>Gets the spans the reply named itself (<c>path:line</c> or <c>path:start-end</c> in its text), shown as links under it.</summary>
+    public IReadOnlyList<CitationItem> ExplicitCitations { get; private set; } = [];
+
+    /// <summary>Gets a value indicating whether the reply named any span.</summary>
+    public bool HasExplicitCitations => ExplicitCitations.Count > 0;
+
+    /// <summary>
+    /// Gets the code the reply was given but did not name (implicit citations): shown collapsed under a "Sources (n)" line
+    /// that <see cref="ToggleSourcesCommand"/> expands.
+    /// </summary>
+    public IReadOnlyList<CitationItem> ImplicitCitations { get; private set; } = [];
+
+    /// <summary>Gets a value indicating whether the reply has implicit sources.</summary>
+    public bool HasImplicitCitations => ImplicitCitations.Count > 0;
+
+    /// <summary>Gets the Sources line, for example "Sources (3)".</summary>
+    public string SourcesText => ChatStrings.Format(ChatStrings.SourcesFormat, ImplicitCitations.Count);
+
+    /// <summary>Gets the name a screen reader announces for the Sources line, with its state.</summary>
+    public string SourcesAutomationName => ChatStrings.Format(
+        AreSourcesExpanded ? ChatStrings.SourcesExpandedNameFormat : ChatStrings.SourcesCollapsedNameFormat,
+        ImplicitCitations.Count);
+
+    /// <summary>Gets or sets a value indicating whether the implicit sources are shown (collapsed by default).</summary>
+    public bool AreSourcesExpanded
+    {
+        get => _areSourcesExpanded;
+        set
+        {
+            if (SetProperty(ref _areSourcesExpanded, value))
+            {
+                OnPropertyChanged(nameof(SourcesAutomationName));
+            }
+        }
+    }
+
+    /// <summary>Gets the command that shows or hides the implicit sources.</summary>
+    public DelegateCommand ToggleSourcesCommand { get; }
+
     /// <summary>Gets or sets the request id of the reply, for assistant turns.</summary>
     internal string? RequestId { get; set; }
 
@@ -201,6 +270,32 @@ public sealed class ChatTurnViewModel : ObservableObject
 
         return new ChatTurnViewModel(ChatTurnRole.Assistant, model.ReplyHeader, model.Id, ChatTurnState.Streaming);
     }
+
+    /// <summary>Creates a user turn from a saved message.</summary>
+    /// <param name="text">The message.</param>
+    /// <returns>The turn.</returns>
+    internal static ChatTurnViewModel FromSavedUser(string text) => ForUser(text);
+
+    /// <summary>Creates a finished assistant turn from a saved reply.</summary>
+    /// <param name="header">The reply header naming the model and provider.</param>
+    /// <param name="modelId">The picker id of the model (for Retry), or <see langword="null"/>.</param>
+    /// <param name="text">The reply text.</param>
+    /// <param name="stopped">Whether the reply was stopped before it finished.</param>
+    /// <param name="citations">The spans the reply cites.</param>
+    /// <returns>The turn.</returns>
+    internal static ChatTurnViewModel FromSavedReply(string header, string? modelId, string text, bool stopped, IReadOnlyList<CitationItem> citations)
+    {
+        var turn = new ChatTurnViewModel(ChatTurnRole.Assistant, header, modelId, stopped ? ChatTurnState.Stopped : ChatTurnState.Complete)
+        {
+            Text = text ?? string.Empty,
+            Citations = citations ?? [],
+        };
+        return turn;
+    }
+
+    /// <summary>Sets the spans the reply cites (the final chunk of the stream carries them). Call on the UI thread.</summary>
+    /// <param name="citations">The spans.</param>
+    internal void SetCitations(IReadOnlyList<CitationItem> citations) => Citations = citations ?? [];
 
     /// <summary>Names the model that is answering. Call on the UI thread.</summary>
     /// <param name="header">The reply header, for example "gemma4:e2b via Ollama, local".</param>

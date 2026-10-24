@@ -70,6 +70,13 @@ public sealed partial class PillionPaths
     /// <summary>Gets the path of <c>conversations.db</c>.</summary>
     public string ConversationsDatabase => Path.Combine(Root, "conversations.db");
 
+    /// <summary>
+    /// Gets the path of <c>conversations.key.bin</c>, the DPAPI-protected key of <see cref="ConversationsDatabase"/>. It is
+    /// named after its database (an index folder holds one database and uses <c>key.bin</c>) so that each database in the
+    /// root keeps its own key.
+    /// </summary>
+    public string ConversationsKeyFile => Path.Combine(Root, "conversations.key.bin");
+
     /// <summary>Gets the <c>audit</c> directory.</summary>
     public string AuditDirectory => Path.Combine(Root, "audit");
 

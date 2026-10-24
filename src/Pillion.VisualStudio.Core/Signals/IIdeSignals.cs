@@ -78,6 +78,59 @@ public interface IIdeSignals
     /// <param name="cancellationToken">A token that cancels the query.</param>
     /// <returns>The text, or <see langword="null"/> when the pane does not exist (yet).</returns>
     Task<string?> GetOutputPaneTextAsync(string paneName, int maxChars, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Gets the last solution build that finished since Visual Studio started: its outcome, and the tail of the Build pane
+    /// captured when it finished (so <c>@build</c> still has it after a later debug session or a cleared pane), or
+    /// <see langword="null"/> when no build has finished. Added for <c>@build</c> (work item 2.13).
+    /// </summary>
+    LastBuildRecord? LastBuild { get; }
+}
+
+/// <summary>The last build that finished (work item 2.13).</summary>
+public sealed class LastBuildRecord
+{
+    /// <summary>Initializes a new instance of the <see cref="LastBuildRecord"/> class.</summary>
+    /// <param name="success">Whether it succeeded.</param>
+    /// <param name="projectCount">How many projects it built.</param>
+    /// <param name="duration">How long it took.</param>
+    /// <param name="finishedAt">When it finished (UTC).</param>
+    /// <param name="output">The Build pane's tail when it finished, or <see langword="null"/> while it is being read or when there is no reader.</param>
+    public LastBuildRecord(bool success, int projectCount, TimeSpan duration, DateTimeOffset finishedAt, string? output)
+    {
+        Success = success;
+        ProjectCount = projectCount;
+        Duration = duration;
+        FinishedAt = finishedAt;
+        Output = output;
+    }
+
+    /// <summary>Gets a value indicating whether the build succeeded.</summary>
+    public bool Success { get; }
+
+    /// <summary>Gets how many projects it built.</summary>
+    public int ProjectCount { get; }
+
+    /// <summary>Gets how long it took.</summary>
+    public TimeSpan Duration { get; }
+
+    /// <summary>Gets when it finished (UTC).</summary>
+    public DateTimeOffset FinishedAt { get; }
+
+    /// <summary>Gets the Build pane's tail captured when it finished, or <see langword="null"/>.</summary>
+    public string? Output { get; }
+
+    /// <summary>The summary line <c>@build</c> sends before the output, for example <c>Build failed: 3 projects in 12.4 s, finished 10:42:07</c>.</summary>
+    /// <returns>The line.</returns>
+    public string Summary() =>
+        string.Format(
+            System.Globalization.CultureInfo.InvariantCulture,
+            "Build {0}: {1} project{2} in {3:0.0} s, finished {4:HH:mm:ss}",
+            Success ? "succeeded" : "failed",
+            ProjectCount,
+            ProjectCount == 1 ? string.Empty : "s",
+            Duration.TotalSeconds,
+            FinishedAt.ToLocalTime());
 }
 
 /// <summary>Whether a build is running.</summary>

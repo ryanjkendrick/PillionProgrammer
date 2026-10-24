@@ -37,6 +37,15 @@ internal sealed class FakeHostConnection : IHostConnection
         return Task.Run(() => SettingsChanged?.Invoke(this, args));
     }
 
+    public event EventHandler<HostIndexStatusChangedEventArgs>? IndexStatusChanged;
+
+    /// <summary>Raises <see cref="IndexStatusChanged"/> on a thread-pool thread, as the supervisor does.</summary>
+    public Task RaiseIndexStatusChangedAsync(IndexStatus status)
+    {
+        var args = new HostIndexStatusChangedEventArgs(status);
+        return Task.Run(() => IndexStatusChanged?.Invoke(this, args));
+    }
+
     public ConnectivityState? Connectivity
     {
         get
@@ -112,6 +121,23 @@ internal sealed class FakeHostConnection : IHostConnection
         }
     }
 
+    /// <summary>Gets the notifications sent while the host was connected, in order.</summary>
+    public ConcurrentQueue<(string Method, object? Argument)> Notifications { get; } = new();
+
+    public Task<bool> NotifyAsync(string method, object? argument)
+    {
+        lock (_gate)
+        {
+            if (_state is not (HostState.Ready or HostState.Degraded))
+            {
+                return Task.FromResult(false);
+            }
+
+            Notifications.Enqueue((method, argument));
+            return Task.FromResult(true);
+        }
+    }
+
     public Task WhenReadyAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
@@ -133,6 +159,10 @@ internal sealed class ChatScript
     /// <summary>Sends a chunk that names the model that answered, as contract 1.1 hosts do.</summary>
     public void SendFrom(string providerId, string modelId, string text, bool isFinal = false, PillionError? error = null) =>
         Push(new ChatChunk { Text = text, IsFinal = isFinal, ProviderId = providerId, ModelId = modelId, Error = error });
+
+    /// <summary>Sends the final chunk of a reply that cites spans (contract 1.3).</summary>
+    public void SendFinalWithCitations(string text, params Citation[] citations) =>
+        Push(new ChatChunk { Text = text, IsFinal = true, Citations = citations });
 
     public void Fail(Exception exception) => Push(exception);
 

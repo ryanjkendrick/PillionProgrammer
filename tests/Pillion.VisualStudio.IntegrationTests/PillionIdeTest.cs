@@ -32,8 +32,20 @@ public abstract class PillionIdeTest : AbstractIdeIntegrationTest
     /// <summary>The Pillion Chat tool window GUID (PackageGuids.ChatToolWindowString).</summary>
     public static readonly Guid ChatToolWindowGuid = new("3a84b873-8bad-4568-b3af-36f887cf71e5");
 
+    /// <summary>The Pillion Index tool window GUID (PackageGuids.IndexToolWindowString).</summary>
+    public static readonly Guid IndexToolWindowGuid = new("b7c4e0a2-5d1f-4e3a-9a62-0c8f3d7e41b6");
+
     /// <summary>The oldest Visual Studio the extension supports.</summary>
     public static readonly Version MinimumVisualStudioVersion = new(17, 14);
+
+    /// <summary>
+    /// How long Visual Studio gets to open the scratch folder. The first open of a run comes right after a cold start, which on
+    /// a hosted runner is still busy with its own start-up (What's New, Copilot, maintenance tasks): folder open to Ready has
+    /// taken 12 to 89 s there, and once the folder itself took over 60 s to open before the Pillion package had loaded (the
+    /// Activity Log shows it loading 12 s after that timeout). This is the test's patience, not a product budget; with the
+    /// package load and Ready after it, it stays inside the framework's 4 minute hang timeout.
+    /// </summary>
+    protected static readonly TimeSpan FolderOpenTimeout = TimeSpan.FromSeconds(150);
 
     private readonly List<string> _scratchFolders = [];
 
@@ -109,7 +121,7 @@ public abstract class PillionIdeTest : AbstractIdeIntegrationTest
         await JoinableTaskFactory.SwitchToMainThreadAsync(HangMitigatingCancellationToken);
         var solution = await TestServices.Shell.GetRequiredGlobalServiceAsync<SVsSolution, IVsSolution7>(HangMitigatingCancellationToken);
         solution.OpenFolder(folder);
-        await WaitUntilAsync(() => TestServices.SolutionExplorer.IsSolutionOpenAsync(HangMitigatingCancellationToken), TimeSpan.FromSeconds(60), "the scratch folder to open").ConfigureAwait(true);
+        await WaitUntilAsync(() => TestServices.SolutionExplorer.IsSolutionOpenAsync(HangMitigatingCancellationToken), FolderOpenTimeout, "the scratch folder to open").ConfigureAwait(true);
         Output.WriteLine($"Opened folder {folder}");
         return folder;
     }

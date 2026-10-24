@@ -11,6 +11,7 @@
              AutomationProperties.Name="Pillion Programmer privacy">
 
     <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="VisibleWhenTrue" />
         <Style x:Key="Note" TargetType="TextBlock">
             <Setter Property="TextWrapping" Value="Wrap" />
             <Setter Property="Margin" Value="20,0,0,8" />
@@ -59,6 +60,22 @@
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
+
+                <TextBlock Text="Saved conversations" FontWeight="SemiBold" Margin="0,12,0,2" />
+                <TextBlock Text="{Binding DeleteAllText}" TextWrapping="Wrap" Margin="0,0,0,6" />
+                <StackPanel Orientation="Horizontal">
+                    <Button Content="_Delete all conversations..."
+                            Command="{Binding DeleteAllConversationsCommand}"
+                            MinWidth="75"
+                            AutomationProperties.Name="Delete all conversations"
+                            AutomationProperties.HelpText="{Binding DeleteAllText}" />
+                </StackPanel>
+                <TextBlock Text="{Binding DeleteAllStatus}"
+                           Style="{StaticResource Note}"
+                           Margin="0,6,0,0"
+                           Visibility="{Binding HasDeleteAllStatus, Converter={StaticResource VisibleWhenTrue}}"
+                           AutomationProperties.LiveSetting="Polite"
+                           AutomationProperties.Name="{Binding DeleteAllStatus}" />
             </StackPanel>
         </ScrollViewer>
     </DockPanel>

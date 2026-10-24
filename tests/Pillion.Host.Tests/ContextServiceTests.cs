@@ -478,9 +478,8 @@ public sealed class ContextServiceTests : IDisposable
     // ---- Other kinds and the rest of the service ----
 
     [Theory]
-    [InlineData("@symbol:OrderService")]
-    [InlineData("@git")]
-    [InlineData("@solution")]
+    [InlineData("@terminal")]
+    [InlineData("@terminal:last")]
     public async Task KindsOfLaterPhases_AreUnresolvedWithAReason(string mention)
     {
         var result = await ResolveAsync(Request(mention));

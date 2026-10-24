@@ -92,4 +92,10 @@ public sealed class NotImplementedWorkspaceQueryService : IWorkspaceQueryService
     /// <inheritdoc/>
     public Task<RunTestsResponse> RunTestsAsync(RunTestsRequest request, CancellationToken cancellationToken) =>
         Task.FromException<RunTestsResponse>(PhaseZero.NotImplemented());
+
+    // TODO(2.14): the live Roslyn workspace answers callers_of off the UI thread, within the budgets in the contract.
+
+    /// <inheritdoc/>
+    public Task<CallersOfResponse> CallersOfAsync(CallersOfRequest request, CancellationToken cancellationToken) =>
+        Task.FromException<CallersOfResponse>(PhaseZero.NotImplemented());
 }

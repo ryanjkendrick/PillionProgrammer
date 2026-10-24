@@ -33,6 +33,12 @@ internal sealed class HostRpcSession : IHostSession
     /// </summary>
     public const string SettingsChangedMethod = "settingsChanged";
 
+    /// <summary>
+    /// The JSON-RPC notification the host sends with the latest <see cref="IndexStatus"/> (one positional argument) whenever
+    /// the index state changes, at most twice a second (contract 1.3).
+    /// </summary>
+    public const string IndexStatusChangedMethod = "indexStatusChanged";
+
     private static readonly TimeSpan ExitCodeGrace = TimeSpan.FromMilliseconds(500);
 
     private readonly HostProcess _process;
@@ -72,6 +78,7 @@ internal sealed class HostRpcSession : IHostSession
         // Registered before the handshake: the host may send it before the handshake response arrives.
         _rpc.AddLocalRpcMethod(ConnectivityChangedMethod, new Action<ConnectivityState>(OnConnectivityChanged));
         _rpc.AddLocalRpcMethod(SettingsChangedMethod, new Action<string[]>(OnSettingsChanged));
+        _rpc.AddLocalRpcMethod(IndexStatusChangedMethod, new Action<IndexStatus>(OnIndexStatusChanged));
         _rpc.Disconnected += OnDisconnected;
 
         _ = _process.Exited.ContinueWith(
@@ -92,6 +99,9 @@ internal sealed class HostRpcSession : IHostSession
 
     /// <inheritdoc/>
     public event EventHandler<HostSettingsChangedEventArgs>? SettingsChanged;
+
+    /// <inheritdoc/>
+    public event EventHandler<HostIndexStatusChangedEventArgs>? IndexStatusChanged;
 
     /// <summary>Creates the wire framing and serializer shared with Pillion Host.</summary>
     /// <param name="pipe">The connected pipe.</param>
@@ -131,6 +141,32 @@ internal sealed class HostRpcSession : IHostSession
         }
 
         return (T)_proxies.GetOrAdd(typeof(T), _ => _rpc.Attach<T>());
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> NotifyAsync(string method, object? argument)
+    {
+        if (string.IsNullOrEmpty(method))
+        {
+            throw new ArgumentException("A notification name is required.", nameof(method));
+        }
+
+        if (Volatile.Read(ref _disposed) != 0 || _completion.Task.IsCompleted)
+        {
+            return false;
+        }
+
+        try
+        {
+            // An explicit array: exactly one positional argument, even when it is null or itself an array.
+            await _rpc.NotifyAsync(method, new[] { argument }).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex) when (ex is ConnectionLostException or ObjectDisposedException or System.IO.IOException)
+        {
+            _log.Debug("host.notify_failed", "A notification to the host was not sent; the connection is gone.", ("method", method), ("error", ex.GetType().Name));
+            return false;
+        }
     }
 
     /// <summary>Performs the handshake and reads the host's initial state.</summary>
@@ -321,6 +357,13 @@ internal sealed class HostRpcSession : IHostSession
         var changed = new HostSettingsChangedEventArgs(sections);
         _log.Debug("host.settings_changed", "The host reported changed settings.", ("pid", _process.Id), ("sections", string.Join(",", changed.Sections)));
         SettingsChanged?.Invoke(this, changed);
+    }
+
+    private void OnIndexStatusChanged(IndexStatus? status)
+    {
+        var changed = new HostIndexStatusChangedEventArgs(status);
+        _log.Debug("host.index_status", "The host reported the index status.", ("pid", _process.Id), ("phase", changed.Status.Phase));
+        IndexStatusChanged?.Invoke(this, changed);
     }
 
     private void OnDisconnected(object? sender, JsonRpcDisconnectedEventArgs e)

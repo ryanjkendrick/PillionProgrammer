@@ -75,6 +75,9 @@ internal static class DtoSamples
             CurrentFileRegion = "var x = Add(1, 2);",
             ConversationId = "conv-1",
             ProjectRules = "Use file-scoped namespaces.",
+            RetrievalMode = RetrievalMode.On,
+            MaxRetrievedChunks = 12,
+            ExcludedContextKeys = ["0123456789abcdef0123456789abcdef:7", "repoMap"],
         },
         new ChatChunk
         {
@@ -86,6 +89,7 @@ internal static class DtoSamples
             PromptTokens = 2048,
             CompletionTokens = 40,
             Error = new PillionError { Code = PillionErrorCode.Cancelled, Message = "Stopped." },
+            Citations = [Cite(-1), Cite(42)],
         },
         new InlineEditDiagnostic { Line = 14, Severity = DiagnosticSeverity.Error, Code = "CS0103", Message = "The name 'x' does not exist." },
         new InlineEditRequest
@@ -157,6 +161,9 @@ internal static class DtoSamples
             PromptTokensEstimated = 4200,
             PromptTokensMax = 1010,
             ResidentModels = [new ResidentModelInfo { ProviderId = "ollama", ModelId = "qwen2.5-coder:7b", ContextLength = 4096, VramBytes = 4748056984, KeepAlive = "-1", IsPinned = true }],
+            PromptPrefixChecks = 40,
+            PromptPrefixReuses = 31,
+            PromptPrefixReuseRate = 0.775,
         },
         new ResidentModelInfo { ProviderId = "ollama", ModelId = "gemma4:e2b", ContextLength = 4096, VramBytes = 1708392447, KeepAlive = "-1", IsPinned = true },
         new OutboundRecordDto
@@ -191,9 +198,22 @@ internal static class DtoSamples
             Redacts = true,
             RedactionCount = 1,
         },
-        new ContextReportItemDto { Kind = "history", Name = "Recent history (4 messages)", Tokens = 400, OriginalTokens = 800, Truncated = true, Dropped = true, Note = "Summarised.", PinIndex = 2, RedactionCount = 3 },
-        new SearchRequest { Query = "where is the pipe opened", MaxResults = 10 },
-        new SearchResult { FilePath = @"C:\src\Pipe.cs", StartLine = 10, EndLine = 20, Snippet = "new NamedPipeServerStream(", Score = 0.875 },
+        new ContextReportItemDto { Kind = "history", Name = "Recent history (4 messages)", Tokens = 400, OriginalTokens = 800, Truncated = true, Dropped = true, Note = "Summarised.", PinIndex = 2, RedactionCount = 3, ContextKey = "repoMap" },
+
+        new SearchRequest
+        {
+            Query = "where is the pipe opened",
+            MaxResults = 10,
+            Roots = [@"C:\src"],
+            Partitions = ["src/Pillion.Host"],
+            Languages = ["csharp"],
+            Mode = SearchMode.Lexical,
+            MaxPerFile = 2,
+            IncludeText = true,
+            FocusFiles = [@"C:\src\Pipe.cs"],
+        },
+        Hit(),
+        new SearchResponse { Results = [Hit()], LexicalMs = 4.5, VectorMs = 7.25, FusionMs = 0.5, TotalMs = 13.75, Degraded = true },
         new MentionRequest
         {
             Mention = "@file:Program.cs",
@@ -203,6 +223,8 @@ internal static class DtoSamples
             Payload = "selected text",
             MaxTokens = 2000,
             ApprovedSensitive = true,
+            Qualifier = MentionKinds.Git,
+            Arguments = ["log", "5"],
         },
         new MentionResolution
         {
@@ -218,6 +240,7 @@ internal static class DtoSamples
             Reason = "Two files match.",
             RequiresApproval = true,
             IsSensitive = true,
+            Citations = [Cite(-1)],
         },
         new IndexStatus
         {
@@ -226,7 +249,45 @@ internal static class DtoSamples
             IndexedFileCount = 120,
             TotalFileCount = 300,
             LastUpdatedUtc = new DateTime(2026, 10, 8, 12, 34, 56, 789, DateTimeKind.Utc),
+            Phase = IndexPhase.Paused,
+            PauseReason = IndexPauseReason.Battery,
+            Roots = [Root()],
+            ExcludedSecretFileCount = 3,
+            LastError = "The embedding model could not be loaded.",
+            Progress = Progress(),
         },
+        Root(),
+        Progress(),
+        new ExcludedFilesRequest { RootPath = @"C:\src", Offset = 200, Limit = 100, SecretOnly = true },
+        Excluded(),
+        new ExcludedFilesPage { Items = [Excluded()], TotalCount = 7, HasMore = true },
+        new IndexInfo
+        {
+            IndexId = "0123456789abcdef0123456789abcdef",
+            RootPath = @"C:\src",
+            EmbeddingModelId = "bge-small-en-v1.5",
+            ChunkerVersion = "2",
+            DiskBytes = 15_000_000,
+            LastUsedUtc = new DateTime(2026, 10, 1, 7, 0, 0, DateTimeKind.Utc),
+            RootExists = true,
+            IsInUse = true,
+            IsOpen = true,
+        },
+        new WorkspaceDescription
+        {
+            SolutionPath = @"C:\src\Shop\Shop.sln",
+            ProjectPaths = [@"C:\src\Shop\Api\Api.csproj", @"C:\src\Shop\Web\Web.csproj"],
+            FolderPath = @"C:\src\Shop",
+        },
+        Cite(17),
+        new ConversationListRequest { Offset = 50, Limit = 25 },
+        Summary(),
+        new ConversationPage { Items = [Summary()], HasMore = true },
+        Message(),
+        Pin(),
+        new ConversationDetail { Conversation = Summary(), Messages = [Message()], Pins = [Pin()] },
+        new ConversationCreateRequest { Id = "conv-9", Title = "Order service", ModelId = "ollama/qwen2.5-coder:14b" },
+        new DeleteAllConversationsResult { Conversations = 4, Messages = 40, Pins = 6, OutboundEntries = 120 },
         new AgentSessionRequest { Goal = "Add a unit test.", Profile = Profile.Frontier, ModelId = "cloud/frontier" },
         new ProviderTestResult { ProviderId = "openai", IsSuccess = true, Message = "Connected." },
         new FileEdit { Path = @"C:\src\Foo.cs", SearchText = "int x", ReplaceText = "long x" },
@@ -271,5 +332,99 @@ internal static class DtoSamples
         new RenameSymbolResponse { IsSuccess = true, ChangedFiles = [@"C:\src\Foo.cs", @"C:\src\Bar.cs"], Message = "Renamed." },
         new RunTestsRequest { Filter = "FullyQualifiedName~Pillion" },
         new RunTestsResponse { Passed = 10, Failed = 2, Skipped = 1, FailedTests = ["A.B", "C.D"] },
+        new CallersOfRequest { SymbolName = "PlaceOrderAsync", Container = "Shop.Orders.OrderService", FilePath = @"C:\src\OrderService.cs", Line = 41, MaxResults = 20 },
+        Caller(),
+        new CallersOfResponse { IsFound = true, Callers = [Caller()], Truncated = true },
     ];
+
+    private static Citation Cite(int replyOffset) => new()
+    {
+        FilePath = @"C:\src\Pipe.cs",
+        StartLine = 10,
+        EndLine = 20,
+        ChunkId = "0123456789abcdef0123456789abcdef:7",
+        Breadcrumb = "src/Pipe.cs > Pillion > Pipe > Open",
+        ReplyOffset = replyOffset,
+    };
+
+    private static SearchResult Hit() => new()
+    {
+        FilePath = @"C:\src\Pipe.cs",
+        StartLine = 10,
+        EndLine = 20,
+        Snippet = "new NamedPipeServerStream(",
+        Score = 0.875,
+        ChunkId = "0123456789abcdef0123456789abcdef:7",
+        Breadcrumb = "src/Pipe.cs > Pillion > Pipe > Open",
+        Kind = "method",
+        Partition = "src",
+        Language = "csharp",
+        LexicalRank = 1,
+        VectorRank = 3,
+        FusedScore = 0.0325,
+        Text = "public void Open() { }",
+    };
+
+    private static IndexRootStatus Root() => new()
+    {
+        RootPath = @"C:\src",
+        IndexId = "0123456789abcdef0123456789abcdef",
+        Role = IndexRole.Reader,
+        IndexedFileCount = 100,
+        TotalFileCount = 150,
+        ExcludedFileCount = 30,
+        SecretFileCount = 3,
+        ChunkCount = 9000,
+        DiskBytes = 13_500_000,
+        LastFullSweepUtc = new DateTime(2026, 10, 14, 18, 0, 0, DateTimeKind.Utc),
+        EmbeddingModelId = "bge-small-en-v1.5",
+        ChunkerVersion = "2",
+        SchemaVersion = 2,
+    };
+
+    private static IndexProgress Progress() => new() { FilesDone = 20, FilesTotal = 50, ChunksDone = 1800, EstimatedRemainingSeconds = 95 };
+
+    private static ExcludedFile Excluded() => new()
+    {
+        Path = ".env",
+        Reason = "SecretBearing",
+        Description = "Not indexed: the file may hold secrets (.env).",
+        IsSecretBearing = true,
+        IsDirectory = true,
+    };
+
+    private static ConversationSummary Summary() => new()
+    {
+        Id = "conv-1",
+        Title = "Why does the build fail?",
+        CreatedUtc = new DateTime(2026, 10, 14, 9, 0, 0, DateTimeKind.Utc),
+        UpdatedUtc = new DateTime(2026, 10, 14, 9, 5, 0, DateTimeKind.Utc),
+        LastModelId = "ollama/qwen2.5-coder:14b",
+        MessageCount = 6,
+    };
+
+    private static ConversationMessage Message() => new()
+    {
+        Id = 41,
+        Role = ChatRole.Assistant,
+        Content = "It calls a missing method.",
+        ModelId = "qwen2.5-coder:14b",
+        ProviderId = "ollama",
+        PromptTokens = 1900,
+        CompletionTokens = 60,
+        CreatedUtc = new DateTime(2026, 10, 14, 9, 5, 0, DateTimeKind.Utc),
+        Citations = [Cite(12)],
+        Cancelled = true,
+    };
+
+    private static ConversationPin Pin() => new() { Kind = MentionKinds.File, Target = @"C:\src\Program.cs", DisplayName = "Program.cs", TokenCount = 300 };
+
+    private static CallSite Caller() => new()
+    {
+        FilePath = @"C:\src\CheckoutController.cs",
+        Line = 77,
+        Snippet = "await _orders.PlaceOrderAsync(cart, ct);",
+        CallerName = "Shop.Web.CheckoutController.Checkout",
+        IsApproximate = true,
+    };
 }

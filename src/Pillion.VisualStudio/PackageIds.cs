@@ -17,6 +17,9 @@ internal static class PackageGuids
     /// <summary>The Pillion Chat tool window GUID as a string.</summary>
     public const string ChatToolWindowString = "3a84b873-8bad-4568-b3af-36f887cf71e5";
 
+    /// <summary>The Pillion Index tool window GUID as a string.</summary>
+    public const string IndexToolWindowString = "b7c4e0a2-5d1f-4e3a-9a62-0c8f3d7e41b6";
+
     /// <summary>The Providers and keys Options page GUID as a string.</summary>
     public const string ProvidersOptionPageString = "aa7d0fda-d0a0-44a3-b3ab-3695b123e30d";
 
@@ -28,6 +31,9 @@ internal static class PackageGuids
 
     /// <summary>The Autocomplete Options page GUID as a string.</summary>
     public const string AutocompleteOptionPageString = "5f0b7c1e-3d2a-4c86-9b41-7e2f60a8d913";
+
+    /// <summary>The Indexing Options page GUID as a string.</summary>
+    public const string IndexingOptionPageString = "3e9a1d57-8c24-4b0f-a6d5-91f7c2b84e30";
 
     /// <summary>The command set GUID.</summary>
     public static readonly Guid CommandSet = new(CommandSetString);
@@ -65,4 +71,10 @@ internal static class PackageIds
 
     /// <summary>"Pillion: Suggest" (Ctrl+Alt+Shift+P, S): asks for one ghost-text suggestion at the caret now.</summary>
     public const int SuggestCommand = 0x0310;
+
+    /// <summary>The "Pillion Index" command under View &gt; Other Windows (hidden while the <c>indexWindow</c> flag is off).</summary>
+    public const int ViewIndexCommand = 0x0107;
+
+    /// <summary>The "Pillion: Open Index" command on the Tools menu (hidden while the <c>indexWindow</c> flag is off).</summary>
+    public const int OpenIndexCommand = 0x0108;
 }

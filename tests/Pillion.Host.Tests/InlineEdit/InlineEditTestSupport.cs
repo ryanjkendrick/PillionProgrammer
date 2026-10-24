@@ -82,6 +82,8 @@ internal sealed class ScriptedGateway : IModelGateway
 
     public Task<ProviderTestResult> TestProviderAsync(string providerId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
+    public Task<EmbeddingResult> EmbedAsync(EmbeddingRequest request, CancellationToken cancellationToken) => throw new NotSupportedException();
+
     /// <summary>Splits text into pieces of about half a line, each line's newline ending a piece.</summary>
     public static List<string> Pieces(string text)
     {

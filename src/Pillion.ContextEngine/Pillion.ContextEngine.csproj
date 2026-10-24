@@ -1,0 +1,64 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Context Engine (design section 7): chunkers, symbols, the repo map and hybrid retrieval (work item 2.11).
+    No Visual Studio dependency. Referenced by its tests only until the host wires it in (work item 2.9), where it ships
+    under features.indexing. See README.md.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Pillion.ContextEngine</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Roslyn's parsers: C# and VB syntax trees only, never a compilation (see Directory.Packages.props). -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+    <PackageReference Include="Microsoft.CodeAnalysis.VisualBasic" />
+    <!-- The WordPiece token counter for the embedding model's own vocabulary. -->
+    <PackageReference Include="Microsoft.ML.Tokenizers" />
+    <!--
+      tree-sitter bindings and grammars. The package carries native grammars for 30 languages on nine runtimes (about
+      260 MB in all), so its native assets are excluded here and only the grammars the chunkers use, for win-x64 and
+      win-arm64, are copied below. GeneratePathProperty exposes the package folder as $(PkgTreeSitter_DotNet).
+    -->
+    <PackageReference Include="TreeSitter.DotNet" ExcludeAssets="native" GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <!--
+    The native libraries the chunkers load: the tree-sitter runtime and one library per grammar in LanguageCatalog.
+    Adding a grammar means adding its name here and an entry in the catalog. The binding looks for them under
+    runtimes\<rid>\native\ beside the application, so they keep that layout; CopyToOutputDirectory makes them flow to
+    every project that references this one (the tests now, the host later).
+  -->
+  <ItemGroup>
+    <PillionTreeSitterLibrary Include="tree-sitter;tree-sitter-c;tree-sitter-cpp;tree-sitter-css;tree-sitter-go;tree-sitter-html;tree-sitter-java;tree-sitter-javascript;tree-sitter-python;tree-sitter-rust;tree-sitter-typescript;tree-sitter-tsx" />
+    <PillionTreeSitterRid Include="win-x64;win-arm64" />
+  </ItemGroup>
+
+  <Target Name="PillionAddTreeSitterNatives" BeforeTargets="AssignTargetPaths" Condition="'$(PkgTreeSitter_DotNet)' != ''">
+    <ItemGroup>
+      <!-- One item per runtime and library (the batch over the libraries crosses them with the runtimes). -->
+      <_PillionTreeSitterNative Include="@(PillionTreeSitterRid)" Library="%(PillionTreeSitterLibrary.Identity)" />
+      <_PillionTreeSitterNative>
+        <Rid>%(Identity)</Rid>
+      </_PillionTreeSitterNative>
+      <_PillionTreeSitterFile Include="@(_PillionTreeSitterNative->'$(PkgTreeSitter_DotNet)\runtimes\%(Rid)\native\%(Library).dll')" />
+      <_PillionTreeSitterFile>
+        <Link>runtimes\%(Rid)\native\%(Library).dll</Link>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <Visible>false</Visible>
+      </_PillionTreeSitterFile>
+      <None Include="@(_PillionTreeSitterFile)" />
+    </ItemGroup>
+  </Target>
+
+  <ItemGroup>
+    <!-- Retrieval (work item 2.11) searches the index storage of Pillion.LocalStore (chunks, FTS5, vectors, symbols). -->
+    <ProjectReference Include="..\Pillion.LocalStore\Pillion.LocalStore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Pillion.ContextEngine.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
@@ -30,6 +31,12 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
 
     /// <summary>How long after Ready the test keeps counting Pillion's deferred UI-thread work.</summary>
     private static readonly TimeSpan DeferredWindow = TimeSpan.FromSeconds(3);
+
+    /// <summary>The budget for attaching the status bar's indexing item: a status bar search bounded to 5 ms and a link to build, once.</summary>
+    private static readonly TimeSpan MaxStatusBarAttach = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>The budget for all the status bar indexing item's updates over the load and the deferred window (each sets two texts at most).</summary>
+    private static readonly TimeSpan MaxStatusBarIndexUpdates = TimeSpan.FromMilliseconds(25);
 
     /// <summary>The budget for the part of <c>InitializeAsync</c> before its first switch to the UI thread (it blocks the shell on a synchronous load).</summary>
     private static readonly TimeSpan MaxPreAwait = TimeSpan.FromMilliseconds(10);
@@ -108,8 +115,26 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
             timed.PreAwait is { } preAwait && preAwait < MaxPreAwait,
             $"InitializeAsync spent {timed.PreAwait?.TotalMilliseconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) ?? "(not recorded)"} ms before its first switch to the UI thread (budget {MaxPreAwait.TotalMilliseconds:0} ms). {timed}");
 
+        // The status bar's indexing item (work item 2.15), over the load and the deferred window: it costs nothing until there
+        // is something to show, then attaches once when the UI thread is idle, after a status bar search bounded to a few
+        // milliseconds (or keeps to the status bar text). It once cost 158 ms of the load on the 17.14 runner and 344 ms, plus
+        // a 3.9 s font fallback in the layout, after a host restart on the 18.x runner.
+        var windows = new[] { timed, measured.PillionDeferred }.Where(t => t is not null).Select(t => t!).ToList();
+        var attach = Stretch(windows, "package.statusbar.attach");
+        var index = Stretch(windows, "package.statusbar.index");
+        Output.WriteLine($"Status bar indexing item: attach x{attach.Count} {attach.Total.TotalMilliseconds:0.0} ms (budget {MaxStatusBarAttach.TotalMilliseconds:0} ms); updates x{index.Count} {index.Total.TotalMilliseconds:0.0} ms (budget {MaxStatusBarIndexUpdates.TotalMilliseconds:0} ms).");
+        Assert.True(attach.Count <= 1, $"The status bar indexing item attached {attach.Count} times; it searches the status bar once at most.");
+        Assert.True(attach.Total < MaxStatusBarAttach, $"Attaching the status bar indexing item took {attach.Total.TotalMilliseconds:0.0} ms on the UI thread (budget {MaxStatusBarAttach.TotalMilliseconds:0} ms).");
+        Assert.True(index.Total < MaxStatusBarIndexUpdates, $"The status bar indexing item's updates took {index.Total.TotalMilliseconds:0.0} ms on the UI thread in {index.Count} visits (budget {MaxStatusBarIndexUpdates.TotalMilliseconds:0} ms).");
+
         // The UI thread's whole CPU time (printed above) is only an upper bound: it holds Visual Studio's own work on that
         // thread, which on a shared runner once reached 578 ms against the old 500 ms limit. It is not asserted.
+    }
+
+    private static (int Count, TimeSpan Total) Stretch(IEnumerable<PackageLoadTimings> windows, string name)
+    {
+        var stretches = windows.SelectMany(w => w.Stretches).Where(s => s.Name == name).ToList();
+        return (stretches.Sum(s => s.Count), TimeSpan.FromTicks(stretches.Sum(s => s.Total.Ticks)));
     }
 
     [IdeFact]

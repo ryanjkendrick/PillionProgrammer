@@ -1,17 +1,29 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Pillion.Common;
 using Pillion.Common.Connectivity;
 using Pillion.Common.Settings;
 using Pillion.Contracts;
 using Pillion.Host.Connectivity;
 using Pillion.Host.Context;
+using Pillion.Host.Context.Retrieval;
+using Pillion.Host.Conversations;
+using Pillion.Host.Indexing;
 using Pillion.Host.Lifecycle;
 using Pillion.Host.Logging;
 using Pillion.Host.Models;
 using Pillion.Host.Rpc;
 using Pillion.Host.Settings;
+using Pillion.Host.WorkspaceQueries;
+
+using Pillion.Indexing;
+using Pillion.Indexing.Ownership;
+using Pillion.Indexing.Retention;
+using Pillion.LocalStore;
 using Pillion.ModelGateway;
+using Pillion.ModelGateway.Providers.Bundled;
 
 namespace Pillion.Host;
 
@@ -87,7 +99,14 @@ internal static class PillionHostBuilderExtensions
 
         // Model Gateway (work items 0.7 and 0.8): providers, routing and the IModelService RPC target. It also
         // replaces the settings' NoProviderTester with one that probes the named provider (Test connection).
+        // The bundled embedding models (work item 2.7) are downloaded into the same data root as the settings, and their
+        // files are verified once in the background when the host starts.
+        builder.Services.TryAddSingleton(sp => new BundledModelOptions
+        {
+            UserModelsDirectory = sp.GetService<PillionPaths>()?.ModelsDirectory ?? BundledModelOptions.DefaultUserModelsDirectory(),
+        });
         builder.Services.AddPillionModelGateway();
+        builder.Services.AddHostedService<BundledModelWarmup>();
         builder.Services.AddSingleton<ModelRpcService>();
         builder.Services.AddRpcTarget<IModelService>(sp => sp.GetRequiredService<ModelRpcService>());
         builder.Services.AddPillionInlineEdit(); // Inline edits (work item 1.8): IInlineEditService over the gateway.
@@ -95,7 +114,85 @@ internal static class PillionHostBuilderExtensions
         builder.Services.TryAddSingleton<ContextPreview>(); // Work item 1.13: the Context Inspector's preview behind IDiagnosticsService.
 
         // Mentions and context (work item 1.10): IContextService resolves @-mentions; search and indexing arrive in phase 2.
+        // The indexStatusChanged notification (contract 1.3), throttled to twice a second; the pipeline (2.9) publishes to it.
+        // The indexing pipeline's open indexes (work item 2.9) serve retrieval and the workspace queries' fallback; registered
+        // before AddPillionRetrieval and the empty symbol graph provider, whose TryAdd defaults then stay out.
+        builder.Services.TryAddSingleton(sp => new LiveIndexCatalog(
+            sp.GetRequiredService<IndexingService>(),
+            sp.GetRequiredService<IFeatureFlags>(),
+            new ReadOnlyIndexCatalog(sp.GetRequiredService<PillionPaths>(), sp.GetRequiredService<IFeatureFlags>(), sp.GetService<ILoggerFactory>())));
+        builder.Services.TryAddSingleton<IIndexCatalog>(sp => sp.GetRequiredService<LiveIndexCatalog>());
+        builder.Services.TryAddSingleton<ISymbolGraphProvider>(sp => sp.GetRequiredService<LiveIndexCatalog>());
+        builder.Services.AddPillionRetrieval(); // Work item 2.11: hybrid retrieval behind SearchAsync and SearchDetailedAsync.
         builder.Services.AddRpcTarget<IContextService, ContextRpcService>();
+        builder.Services.TryAddSingleton<INotificationSender, VsixNotificationSender>();
+        builder.Services.TryAddSingleton<IndexStatusNotifier>();
+
+        // Workspace queries (work item 2.14): find_references and callers_of for @symbol and chat, from Visual Studio's Roslyn
+        // workspace with the index's approximate edges as the fallback. The index's graphs come from the pipeline (2.9) and
+        // the retrieval catalog (2.11), which replace the empty provider.
+        builder.Services.TryAddSingleton<ISymbolGraphProvider, EmptySymbolGraphProvider>();
+        builder.Services.TryAddSingleton<IWorkspaceQueries, HostWorkspaceQueries>();
+
+        // Local Store (work item 2.1): the encrypted conversations.db, opened lazily behind the localStore flag. Work item
+        // 2.2 persists conversations and the Outbound log through it, behind IConversationService (contract 1.3, a stub
+        // until then).
+        builder.Services.AddPillionLocalStore();
+        builder.Services.AddRpcTarget<IConversationService, ConversationRpcService>();
+
+        // Persistence (work item 2.2): chat requests that name a conversation are saved as they run, and the Outbound log's
+        // records are written to the store as they are produced (the gateway's in-memory log feeds the sink), so the
+        // conversation list and the Outbound log view survive a restart. The sink is also a hosted service, so it drains
+        // its queue when the host stops.
+        builder.Services.TryAddSingleton<ConversationRecorder>();
+        builder.Services.TryAddSingleton<StoreOutboundSink>();
+        builder.Services.AddSingleton<IOutboundSink>(sp => sp.GetRequiredService<StoreOutboundSink>());
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<StoreOutboundSink>());
+        builder.Services.AddHostedService<ConversationRetentionService>();
+
+        // The indexing pipeline (work item 2.9), behind features.indexing: the index stores and retention of Pillion.Indexing,
+        // the gateway's embeddings, IDE activity from the ideActivityChanged notification, and the status through
+        // IndexStatusNotifier. It starts indexing when the extension calls IContextService.SetWorkspaceAsync.
+        builder.Services.TryAddSingleton(sp => new IndexRetentionPolicy(
+            sp.GetRequiredService<IGatewaySettingsSource>().GetCurrent().Settings.Indexing.RetentionDays));
+        builder.Services.AddPillionIndexing();
+        builder.Services.TryAddSingleton<IdeActivityMonitor>();
+        builder.Services.TryAddSingleton<IPowerStatus, Win32PowerStatus>();
+        builder.Services.TryAddSingleton<IMemorySampler, ProcessMemorySampler>();
+        builder.Services.TryAddSingleton(new IndexingOptions());
+        builder.Services.TryAddSingleton<IIndexEmbedder>(sp => new GatewayIndexEmbedder(
+            sp.GetRequiredService<IModelRouter>(),
+            sp.GetRequiredService<IModelGateway>(),
+            sp.GetRequiredService<ModelCatalog>(),
+            sp.GetService<BundledModelRuntime>()));
+        builder.Services.TryAddSingleton(sp => new IndexingService(
+            sp.GetRequiredService<IndexStoreFactory>(),
+            sp.GetRequiredService<IndexRetention>(),
+            sp.GetRequiredService<IIndexEmbedder>(),
+            sp.GetRequiredService<IGatewaySettingsSource>(),
+            sp.GetRequiredService<IFeatureFlags>(),
+            sp.GetRequiredService<IndexStatusNotifier>(),
+            sp.GetRequiredService<IdeActivityMonitor>(),
+            sp.GetRequiredService<IPowerStatus>(),
+            sp.GetRequiredService<IMemorySampler>(),
+            sp.GetRequiredService<IndexingOptions>(),
+            sp.GetRequiredService<PillionHostOptions>().PipeName,
+            sp.GetService<TimeProvider>(),
+            sp.GetService<ILoggerFactory>(),
+            sp.GetService<IVsixConnection>()));
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<IndexingService>());
+        builder.Services.AddRpcNotification(
+            IdeActivityMonitor.NotificationName,
+            sp => new Action<IdeActivity>(sp.GetRequiredService<IdeActivityMonitor>().Set));
+
+        // Work item 2.10: a document saved in Visual Studio goes to its root's incremental indexer at once (the watcher of each
+        // root this host owns catches every other change, with its debounce), and the open documents are indexed first by a run.
+        builder.Services.AddRpcNotification(
+            IndexingService.DocumentSavedNotification,
+            sp => new Action<string>(sp.GetRequiredService<IndexingService>().NotifySaved));
+        builder.Services.AddRpcNotification(
+            IndexingService.OpenDocumentsChangedNotification,
+            sp => new Action<string[]>(sp.GetRequiredService<IndexingService>().SetOpenDocuments));
 
         // RPC targets for the agent service are registered here by a later work item.
         return builder;

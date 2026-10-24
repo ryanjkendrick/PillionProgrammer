@@ -97,12 +97,16 @@ public sealed class AutocompleteCache
     /// <param name="prefix">The full prefix.</param>
     /// <param name="suffix">The full suffix.</param>
     /// <param name="multiLine">Whether the request allows a multi-line completion (single- and multi-line completions are kept apart).</param>
+    /// <param name="contextKey">
+    /// The fingerprint of the retrieved snippets the prompt carried (work item 2.12), or empty: a completion is only reused
+    /// under the same retrieved context, which the snippet source keeps unchanged while the caret stays in one member.
+    /// </param>
     /// <returns>The key.</returns>
-    public static CacheKey CreateKey(string providerId, string modelId, string prefix, string suffix, bool multiLine)
+    public static CacheKey CreateKey(string providerId, string modelId, string prefix, string suffix, bool multiLine, string contextKey = "")
     {
         ArgumentNullException.ThrowIfNull(prefix);
         ArgumentNullException.ThrowIfNull(suffix);
-        return new CacheKey(ModelKey(providerId, modelId, multiLine), PrefixHash(prefix.AsSpan()), SuffixHash(suffix));
+        return new CacheKey(ModelKey(providerId, modelId, multiLine, contextKey), PrefixHash(prefix.AsSpan()), SuffixHash(suffix));
     }
 
     /// <summary>Gets the hit and miss counts.</summary>
@@ -136,13 +140,14 @@ public sealed class AutocompleteCache
     /// <param name="prefix">The full prefix.</param>
     /// <param name="suffix">The full suffix.</param>
     /// <param name="completion">The completion to show (for type-through, the part after what was typed).</param>
+    /// <param name="contextKey">The fingerprint of the retrieved snippets, or empty (see <see cref="CreateKey(string, string, string, string, bool, string)"/>).</param>
     /// <returns>How the lookup was served.</returns>
-    public CacheHitKind Lookup(string providerId, string modelId, bool multiLine, string prefix, string suffix, out string completion)
+    public CacheHitKind Lookup(string providerId, string modelId, bool multiLine, string prefix, string suffix, out string completion, string contextKey = "")
     {
         ArgumentNullException.ThrowIfNull(prefix);
         ArgumentNullException.ThrowIfNull(suffix);
 
-        var model = ModelKey(providerId, modelId, multiLine);
+        var model = ModelKey(providerId, modelId, multiLine, contextKey);
         var suffixHash = SuffixHash(suffix);
         if (TryGetCore(new CacheKey(model, PrefixHash(prefix.AsSpan()), suffixHash), out completion))
         {
@@ -227,8 +232,8 @@ public sealed class AutocompleteCache
         return false;
     }
 
-    private static string ModelKey(string providerId, string modelId, bool multiLine) =>
-        providerId + "/" + modelId + (multiLine ? "|multi-line" : "|single-line");
+    private static string ModelKey(string providerId, string modelId, bool multiLine, string contextKey = "") =>
+        providerId + "/" + modelId + (multiLine ? "|multi-line" : "|single-line") + (string.IsNullOrEmpty(contextKey) ? string.Empty : "|" + contextKey);
 
     private static UInt128 PrefixHash(ReadOnlySpan<char> prefix) =>
         Hash(prefix.Length > PrefixTailLength ? prefix[^PrefixTailLength..] : prefix);

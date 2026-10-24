@@ -46,6 +46,28 @@ public sealed record ModelResidencyEstimate(int WeightsMiB, double KvMiBPer1kTok
 }
 
 /// <summary>
+/// What the catalog knows about an embedding model (design section 7, Embedding models). The figures are data: where they
+/// were measured or taken from is in the catalog entry's note.
+/// </summary>
+/// <param name="Dimensions">The vector size; 0 when it depends on the variant and is read from the first response.</param>
+/// <param name="MaxInputTokens">The most tokens the model reads from one text.</param>
+/// <param name="TokenizerFamily">The tokenizer family the chunk cap is expressed in (<c>qwen3-bpe</c>, <c>bert-wordpiece</c>, <c>openai-cl100k</c>, ...).</param>
+/// <param name="License">The licence of the weights, or the terms of the hosted service.</param>
+/// <param name="SupportsDimensions">Whether the model can be asked for shorter vectors.</param>
+/// <param name="DocumentPrefix">Text the model expects before a passage (empty when none).</param>
+/// <param name="QueryPrefix">Text the model expects before a search query (empty when none).</param>
+/// <param name="Note">Where the figures come from.</param>
+public sealed record EmbeddingModelEntry(
+    int Dimensions,
+    int MaxInputTokens,
+    string TokenizerFamily,
+    string License,
+    bool SupportsDimensions,
+    string DocumentPrefix,
+    string QueryPrefix,
+    string? Note);
+
+/// <summary>
 /// The model catalog (design section 6): the default model id for each profile per provider kind, and capability
 /// descriptors for known model families. Loaded from the embedded <c>catalog.json</c>; the catalog is data, not code.
 /// <c>routing.profiles</c> in settings overrides the defaults.
@@ -63,19 +85,67 @@ public sealed class ModelCatalog
     };
 
     private readonly Dictionary<ProviderKind, Dictionary<Profile, string>> _profiles;
-    private readonly List<(Regex Pattern, string Match, ModelCapabilityDescriptor Descriptor, ModelResidencyEstimate? Residency)> _families;
+    private readonly Dictionary<ProviderKind, IReadOnlyList<string>> _embeddingDefaults;
+    private readonly IReadOnlyList<ProviderKind> _embeddingProviderOrder;
+    private readonly List<Family> _families;
 
-    private ModelCatalog(Dictionary<ProviderKind, Dictionary<Profile, string>> profiles, List<(Regex, string, ModelCapabilityDescriptor, ModelResidencyEstimate?)> families)
+    private ModelCatalog(Dictionary<ProviderKind, Dictionary<Profile, string>> profiles, Dictionary<ProviderKind, IReadOnlyList<string>> embeddingDefaults, IReadOnlyList<ProviderKind> embeddingProviderOrder, List<Family> families)
     {
         _profiles = profiles;
+        _embeddingDefaults = embeddingDefaults;
+        _embeddingProviderOrder = embeddingProviderOrder;
         _families = families;
     }
+
+    private sealed record Family(Regex Pattern, string Match, ModelCapabilityDescriptor Descriptor, ModelResidencyEstimate? Residency, EmbeddingModelEntry? Embedding);
 
     /// <summary>Gets the catalog shipped in this assembly.</summary>
     public static ModelCatalog Default { get; } = LoadEmbedded();
 
     /// <summary>Gets the family patterns in match order (for diagnostics and tests).</summary>
     public IReadOnlyList<string> FamilyPatterns => _families.Select(f => f.Match).ToList();
+
+    /// <summary>
+    /// Gets the embedding models the Embedding task class prefers for a provider kind, in order. Which of them is used depends on
+    /// what the provider has installed or allows; <c>routing.profiles</c> and an explicit model id override them.
+    /// </summary>
+    /// <param name="kind">The provider kind.</param>
+    /// <returns>The model ids; empty when the catalog names none.</returns>
+    public IReadOnlyList<string> GetDefaultEmbeddingModels(ProviderKind kind) =>
+        _embeddingDefaults.TryGetValue(kind, out var models) ? models : [];
+
+    /// <summary>Gets the provider kinds the Embedding task class tries first, in order, before the other providers in settings order.</summary>
+    public IReadOnlyList<ProviderKind> EmbeddingProviderOrder => _embeddingProviderOrder;
+
+    /// <summary>
+    /// Gets where a provider kind stands in <see cref="EmbeddingProviderOrder"/>: its position, or <see cref="int.MaxValue"/> for a
+    /// kind the list does not name (those keep their settings order). A model named by <c>routing.profiles</c> or an explicit
+    /// model id still comes first.
+    /// </summary>
+    /// <param name="kind">The provider kind.</param>
+    /// <returns>The priority; lower is tried first.</returns>
+    public int GetEmbeddingProviderPriority(ProviderKind kind)
+    {
+        for (var i = 0; i < _embeddingProviderOrder.Count; i++)
+        {
+            if (_embeddingProviderOrder[i] == kind)
+            {
+                return i;
+            }
+        }
+
+        return int.MaxValue;
+    }
+
+    /// <summary>Gets what the catalog knows about an embedding model: dimensions, input limit, tokenizer family, licence and prefixes.</summary>
+    /// <param name="modelId">The provider's model id; an Ollama namespace such as <c>library/</c> or a registry host is ignored.</param>
+    /// <returns>The entry, or <see langword="null"/> when the matching family has none (it is not an embedding model, or the catalog does not describe it).</returns>
+    public EmbeddingModelEntry? GetEmbeddingInfo(string modelId)
+    {
+        ArgumentNullException.ThrowIfNull(modelId);
+        var name = StripNamespace(modelId);
+        return _families.FirstOrDefault(f => f.Pattern.IsMatch(name))?.Embedding;
+    }
 
     /// <summary>Parses a catalog document.</summary>
     /// <param name="json">The catalog JSON.</param>
@@ -121,7 +191,32 @@ public sealed class ModelCatalog
             profiles[kind] = byProfile;
         }
 
-        var families = new List<(Regex, string, ModelCapabilityDescriptor, ModelResidencyEstimate?)>();
+        var embeddingDefaults = new Dictionary<ProviderKind, IReadOnlyList<string>>();
+        foreach (var (kindName, models) in document.EmbeddingDefaults ?? [])
+        {
+            if (!ProviderKinds.TryParse(kindName, out var kind))
+            {
+                throw new FormatException($"The model catalog names an unknown provider kind '{kindName}' in embeddingDefaults.");
+            }
+
+            embeddingDefaults[kind] = [.. (models ?? []).Where(m => !string.IsNullOrWhiteSpace(m))];
+        }
+
+        var embeddingProviderOrder = new List<ProviderKind>();
+        foreach (var kindName in document.EmbeddingProviderOrder ?? [])
+        {
+            if (!ProviderKinds.TryParse(kindName, out var kind))
+            {
+                throw new FormatException($"The model catalog names an unknown provider kind '{kindName}' in embeddingProviderOrder.");
+            }
+
+            if (!embeddingProviderOrder.Contains(kind))
+            {
+                embeddingProviderOrder.Add(kind);
+            }
+        }
+
+        var families = new List<Family>();
         foreach (var family in document.Families ?? [])
         {
             if (string.IsNullOrWhiteSpace(family.Match))
@@ -129,15 +224,15 @@ public sealed class ModelCatalog
                 throw new FormatException("Every model family in the catalog needs a 'match' pattern.");
             }
 
-            families.Add((ToRegex(family.Match), family.Match, family.ToDescriptor(), family.Residency?.ToEstimate(family.Match)));
+            families.Add(new Family(ToRegex(family.Match), family.Match, family.ToDescriptor(), family.Residency?.ToEstimate(family.Match), family.Embedding?.ToEntry(family.Match)));
         }
 
-        if (families.Count == 0 || families[^1].Item2 != "*")
+        if (families.Count == 0 || families[^1].Match != "*")
         {
             throw new FormatException("The last model family in the catalog must be the '*' default.");
         }
 
-        return new ModelCatalog(profiles, families);
+        return new ModelCatalog(profiles, embeddingDefaults, embeddingProviderOrder, families);
     }
 
     /// <summary>Gets the catalog's default model for a profile and provider kind.</summary>
@@ -155,24 +250,24 @@ public sealed class ModelCatalog
     {
         ArgumentNullException.ThrowIfNull(modelId);
 
-        var name = modelId;
-        var slash = name.LastIndexOf('/');
-        if (slash >= 0)
+        var name = StripNamespace(modelId);
+        foreach (var family in _families)
         {
-            name = name[(slash + 1)..];
-        }
-
-        foreach (var (pattern, _, descriptor, _) in _families)
-        {
-            if (pattern.IsMatch(name))
+            if (family.Pattern.IsMatch(name))
             {
                 return isLocal
-                    ? descriptor with { IsLocal = true, InputCostPerMillionTokens = 0, OutputCostPerMillionTokens = 0 }
-                    : descriptor with { IsLocal = false };
+                    ? family.Descriptor with { IsLocal = true, InputCostPerMillionTokens = 0, OutputCostPerMillionTokens = 0 }
+                    : family.Descriptor with { IsLocal = false };
             }
         }
 
         return ModelCapabilityDescriptor.Unknown with { IsLocal = isLocal };
+    }
+
+    private static string StripNamespace(string modelId)
+    {
+        var slash = modelId.LastIndexOf('/');
+        return slash >= 0 ? modelId[(slash + 1)..] : modelId;
     }
 
     /// <summary>Gets the memory estimate of the first family whose pattern matches the model id.</summary>
@@ -182,22 +277,8 @@ public sealed class ModelCatalog
     {
         ArgumentNullException.ThrowIfNull(modelId);
 
-        var name = modelId;
-        var slash = name.LastIndexOf('/');
-        if (slash >= 0)
-        {
-            name = name[(slash + 1)..];
-        }
-
-        foreach (var (pattern, _, _, residency) in _families)
-        {
-            if (pattern.IsMatch(name))
-            {
-                return residency;
-            }
-        }
-
-        return null;
+        var name = StripNamespace(modelId);
+        return _families.FirstOrDefault(f => f.Pattern.IsMatch(name))?.Residency;
     }
 
     private static ModelCatalog LoadEmbedded()
@@ -217,7 +298,48 @@ public sealed class ModelCatalog
 
         public Dictionary<string, Dictionary<string, string>?>? Profiles { get; set; }
 
+        public Dictionary<string, List<string>?>? EmbeddingDefaults { get; set; }
+
+        public List<string>? EmbeddingProviderOrder { get; set; }
+
         public List<FamilyEntry>? Families { get; set; }
+    }
+
+    private sealed class EmbeddingEntry
+    {
+        public int Dimensions { get; set; }
+
+        public int MaxInputTokens { get; set; }
+
+        public string? TokenizerFamily { get; set; }
+
+        public string? License { get; set; }
+
+        public bool SupportsDimensions { get; set; }
+
+        public string? DocumentPrefix { get; set; }
+
+        public string? QueryPrefix { get; set; }
+
+        public string? Note { get; set; }
+
+        public EmbeddingModelEntry ToEntry(string family)
+        {
+            if (Dimensions < 0 || MaxInputTokens <= 0)
+            {
+                throw new FormatException($"The embedding entry of model family '{family}' needs a maxInputTokens above 0 and a dimensions of 0 or more.");
+            }
+
+            return new EmbeddingModelEntry(
+                Dimensions,
+                MaxInputTokens,
+                string.IsNullOrWhiteSpace(TokenizerFamily) ? EmbeddingModelInfo.UnknownTokenizer : TokenizerFamily,
+                License ?? string.Empty,
+                SupportsDimensions,
+                DocumentPrefix ?? string.Empty,
+                QueryPrefix ?? string.Empty,
+                Note);
+        }
     }
 
     private sealed class ResidencyEntry
@@ -291,6 +413,8 @@ public sealed class ModelCatalog
         public ToolCallingSupport ToolCalling { get; set; }
 
         public ResidencyEntry? Residency { get; set; }
+
+        public EmbeddingEntry? Embedding { get; set; }
 
         public decimal InputCostPerMillionTokens { get; set; }
 

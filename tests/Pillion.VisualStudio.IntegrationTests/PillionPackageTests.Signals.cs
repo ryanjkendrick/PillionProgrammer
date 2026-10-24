@@ -223,6 +223,14 @@ public sealed partial class PillionPackageTests
             + "    private static void Main()" + nl + "    {" + nl
             + (withCompileError ? "        int number = \"not a number\";" : "        int number = 1;") + nl
             + "        Console.WriteLine(number);" + nl + "    }" + nl + "}" + nl);
+        WriteScratchProject(folder, ["Program.cs"]);
+        return folder;
+    }
+
+    /// <summary>Writes <c>Scratch.csproj</c> (classic, .NET Framework 4.8, no restore needed) compiling the files, and <c>Scratch.sln</c>.</summary>
+    private static void WriteScratchProject(string folder, string[] compileItems)
+    {
+        var nl = Environment.NewLine;
         File.WriteAllText(
             Path.Combine(folder, "Scratch.csproj"),
             "<Project ToolsVersion=\"15.0\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">" + nl
@@ -247,7 +255,7 @@ public sealed partial class PillionPackageTests
             + "    <Reference Include=\"System\" />" + nl
             + "  </ItemGroup>" + nl
             + "  <ItemGroup>" + nl
-            + "    <Compile Include=\"Program.cs\" />" + nl
+            + string.Concat(compileItems.Select(item => "    <Compile Include=\"" + item + "\" />" + nl))
             + "  </ItemGroup>" + nl
             + "  <Import Project=\"$(MSBuildToolsPath)\\Microsoft.CSharp.targets\" />" + nl
             + "</Project>" + nl);
@@ -266,6 +274,5 @@ public sealed partial class PillionPackageTests
             + "\t\t" + ScratchProjectGuid + ".Debug|Any CPU.Build.0 = Debug|Any CPU" + nl
             + "\tEndGlobalSection" + nl
             + "EndGlobal" + nl);
-        return folder;
     }
 }

@@ -12,10 +12,12 @@ internal sealed class InProcessHost : IAsyncDisposable
 {
     private readonly Task _run;
     private readonly TempDirectory _logs;
+    private readonly TempDirectory _data;
 
-    private InProcessHost(IHost host, Task run, string pipeName, string token, TempDirectory logs)
+    private InProcessHost(IHost host, Task run, string pipeName, string token, TempDirectory logs, TempDirectory data)
     {
         _run = run;
+        _data = data;
         PipeName = pipeName;
         Token = token;
         _logs = logs;
@@ -48,11 +50,18 @@ internal sealed class InProcessHost : IAsyncDisposable
         var token = LaunchToken.CreateValue();
         var logs = new TempDirectory();
 
+        // The data root (settings.json, conversations.db, the index folders) is a temporary folder unless a test chooses its own:
+        // a host composed on the real %LOCALAPPDATA%\PillionProgrammer read the developer's settings (and with them real
+        // providers to list and probe) and shared the real conversation store with every other test process and with the
+        // Visual Studio runs on the machine, which made the handshake and connectivity tests slow or flaky under load.
+        var data = new TempDirectory();
+
         var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
         {
             Args = [],
             ContentRootPath = AppContext.BaseDirectory,
         });
+        builder.Services.AddSingleton(new Pillion.Common.PillionPaths(data.Path));
         builder.AddPillionHost(
             new PillionHostOptions(pipeName, Environment.ProcessId, logs.Path),
             new FixedLaunchTokenSource(token));
@@ -61,7 +70,7 @@ internal sealed class InProcessHost : IAsyncDisposable
 
         var host = builder.Build();
         var run = host.RunAsync();
-        var result = new InProcessHost(host, run, pipeName, token, logs);
+        var result = new InProcessHost(host, run, pipeName, token, logs, data);
 
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
         while (result.State.Current != HostState.Ready)
@@ -103,6 +112,7 @@ internal sealed class InProcessHost : IAsyncDisposable
         finally
         {
             _logs.Dispose();
+            _data.Dispose();
         }
     }
 }

@@ -38,6 +38,18 @@ internal sealed class FakeMentionService : IContextService
     public Task<IndexStatus> GetIndexStatusAsync(CancellationToken cancellationToken) => Task.FromResult(new IndexStatus());
 
     public Task PauseIndexingAsync(bool pause, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task<SearchResponse> SearchDetailedAsync(SearchRequest request, CancellationToken cancellationToken) => Task.FromResult(new SearchResponse());
+
+    public Task<ExcludedFilesPage> ListExcludedFilesAsync(ExcludedFilesRequest request, CancellationToken cancellationToken) => Task.FromResult(new ExcludedFilesPage());
+
+    public Task RebuildIndexAsync(string rootPath, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task<bool> DeleteIndexAsync(string indexId, CancellationToken cancellationToken) => Task.FromResult(false);
+
+    public Task<IndexInfo[]> ListIndexesAsync(CancellationToken cancellationToken) => Task.FromResult<IndexInfo[]>([]);
+
+    public Task SetWorkspaceAsync(WorkspaceDescription workspace, CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
 /// <summary>An <see cref="IDiagnosticsService"/> whose preview and Outbound records are set by the test.</summary>
@@ -119,6 +131,28 @@ internal sealed class FakeEditorContext : IChatEditorContext
     public Task<string?> GetClipboardTextAsync(CancellationToken cancellationToken) => Task.FromResult(Clipboard);
 
     public Task<string> GetErrorsPayloadAsync(CancellationToken cancellationToken) => Task.FromResult(Errors);
+
+    public Dictionary<string, string> Panes { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public List<string> PanesAsked { get; } = [];
+
+    public string? LastBuild { get; set; }
+
+    public string? TestResults { get; set; }
+
+    public Task<string?> GetOutputPaneTextAsync(string pane, CancellationToken cancellationToken)
+    {
+        lock (PanesAsked)
+        {
+            PanesAsked.Add(pane);
+        }
+
+        return Task.FromResult(Panes.TryGetValue(pane, out var text) ? text : null);
+    }
+
+    public Task<string?> GetLastBuildAsync(CancellationToken cancellationToken) => Task.FromResult(LastBuild);
+
+    public Task<string?> GetTestResultsAsync(CancellationToken cancellationToken) => Task.FromResult(TestResults);
 
     public Task<CurrentFileContext?> GetCurrentFileAsync(CancellationToken cancellationToken)
     {

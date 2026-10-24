@@ -444,7 +444,7 @@ function New-DefaultPillionSettings {
             tasks    = [ordered]@{ autocomplete = 'auto'; inlineEdit = 'auto'; chat = 'auto'; agent = 'auto'; embedding = 'auto'; vision = 'auto' }
             profiles = [ordered]@{ fast = ''; balanced = ''; frontier = ''; localFast = ''; localStrong = ''; auto = '' }
         }
-        cloudSwitches = [ordered]@{ chat = $true; inlineEdit = $true; autocomplete = $false; agent = $false; selfHealing = $false; vision = $true }
+        cloudSwitches = [ordered]@{ chat = $true; inlineEdit = $true; autocomplete = $false; agent = $false; selfHealing = $false; vision = $true; embedding = $false }
         privacy       = [ordered]@{ localOnly = $false; telemetryOptIn = $false; redactForLocalProviders = $false }
         approvals     = [ordered]@{ mode = 'ask' }
         costCaps      = [ordered]@{}

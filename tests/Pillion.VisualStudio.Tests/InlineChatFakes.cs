@@ -19,6 +19,12 @@ internal sealed class InlineEditScript
 
     public TaskCompletionSource<InlineEditRequest> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    /// <summary>
+    /// Gets a task that completes when the session stopped reading the stream before its end: its token was cancelled, or it
+    /// disposed the stream early. The session closes on Esc by forgetting the request first (so it stops reading), then asks
+    /// the host to cancel and only then cancels its token; which of the two the stream sees first depends on timing (the test
+    /// that waited for the token alone failed whenever it ran first in its process).
+    /// </summary>
     public TaskCompletionSource<bool> Cancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public void Send(string text, bool reset = false) =>
@@ -46,6 +52,7 @@ internal sealed class InlineEditScript
     public async IAsyncEnumerable<InlineEditChunk> RunAsync(InlineEditRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         Started.TrySetResult(request);
+        var ended = false;
         try
         {
             while (true)
@@ -54,11 +61,13 @@ internal sealed class InlineEditScript
                 _items.TryDequeue(out var item);
                 if (ReferenceEquals(item, End))
                 {
+                    ended = true;
                     yield break;
                 }
 
                 if (item is Exception exception)
                 {
+                    ended = true;
                     throw exception;
                 }
 
@@ -68,12 +77,13 @@ internal sealed class InlineEditScript
                     chunk.RequestId = request.RequestId;
                 }
 
+                ended = chunk.IsFinal;
                 yield return chunk;
             }
         }
         finally
         {
-            if (cancellationToken.IsCancellationRequested)
+            if (cancellationToken.IsCancellationRequested || !ended)
             {
                 Cancelled.TrySetResult(true);
             }
