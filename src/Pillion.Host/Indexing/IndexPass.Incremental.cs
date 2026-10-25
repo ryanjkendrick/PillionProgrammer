@@ -392,7 +392,7 @@ internal sealed partial class IndexPass
         var texts = new List<string>(take);
         for (var i = start; i < start + take; i++)
         {
-            texts.Add(file.Chunks[indexes[i]].EmbeddingText);
+            texts.Add(file.InputOf(indexes[i]));
         }
 
         Progress.MarkEmbeddingStarted(Stopwatch.GetTimestamp());

@@ -50,11 +50,11 @@ internal static class RetrievalReport
         }
 
         b.AppendLine();
-        b.AppendLine("| Set | Model | Pinned by | Corpus files | Indexed files | Chunks | Index time s |");
-        b.AppendLine("| --- | --- | --- | ---: | ---: | ---: | ---: |");
+        b.AppendLine("| Set | Model | Pinned by | Embedding cap | Corpus files | Indexed files | Chunks | Cut to the cap | Index time s | Embedding s | Chunks/s | Index MB | Bytes a chunk |");
+        b.AppendLine("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
         foreach (var r in results)
         {
-            Line(b, $"| {r.Set} | {r.Model} | {(r.Identity is null ? "?" : r.Identity.HashKind + " `" + r.Identity.Hash + "`")} | {r.Index.CorpusFiles} | {r.Index.IndexedFiles} | {r.Index.Chunks} | {r.Index.Seconds:0.0} |");
+            Line(b, $"| {r.Set} | {r.Model} | {(r.Identity is null ? "?" : r.Identity.HashKind + " `" + r.Identity.Hash + "`")} | {(r.EmbeddingTokenCap > 0 ? r.EmbeddingTokenCap.ToString(CultureInfo.InvariantCulture) : "off")} | {r.Index.CorpusFiles} | {r.Index.IndexedFiles} | {r.Index.Chunks} | {r.Index.TruncatedChunks} | {r.Index.Seconds:0.0} | {r.Index.EmbeddingSeconds:0.0} | {r.Index.ChunksPerSecond:0.0} | {r.Index.DatabaseBytes / (1024.0 * 1024):0.0} | {r.Index.BytesPerChunk:0} |");
         }
 
         return b.ToString();
