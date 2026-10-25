@@ -58,10 +58,10 @@ public sealed class PillionPackage : AsyncPackage
     /// <summary>How long the host gets to exit cleanly when Visual Studio closes.</summary>
     private static readonly TimeSpan HostShutdownTimeout = TimeSpan.FromSeconds(2);
 
-    /// <summary>The longest the Output pane and the Error List wait for the host before the package's start-up counts as over.</summary>
+    /// <summary>The longest the Output pane and the workspace-query warm-up wait for the host before the package's start-up counts as over.</summary>
     private static readonly TimeSpan StartupSettleTimeout = TimeSpan.FromSeconds(10);
 
-    /// <summary>How long after the host settles the Output pane and the Error List are created.</summary>
+    /// <summary>How long after the host settles start-up counts as over (the Output pane may be created, the warm-up may run).</summary>
     private static readonly TimeSpan StartupSettleGrace = TimeSpan.FromMilliseconds(250);
 
     private PillionLog? _log;
@@ -158,14 +158,14 @@ public sealed class PillionPackage : AsyncPackage
         _indexing = indexing;
         Instance = this;
 
-        // The Output pane is created on its first write (on the UI thread, by the writer), not here. Until then lines wait
-        // in the writer's queue, so the sink can be connected now.
+        // The Output pane is created by the first line worth showing (a warning or above, or a notice the user asked for), on
+        // the UI thread, by the writer; routine lines wait in its buffer until then (issue #49). The sink can be connected now.
         Func<Task> startupOver = () => StartupSettle.WhenSettledAsync(supervisor, StartupSettleTimeout, StartupSettleGrace, DisposalToken);
         var output = new OutputPaneWriter(CreateOutputPane, startupOver, JoinableTaskFactory, DisposalToken);
         _output = output;
-        log.Sink = line => output.WriteLine(line);
+        log.Sink = (level, line) => output.WriteLine(line, showPane: level >= PillionLogLevel.Warning);
         inlineChat.Output = line => output.WriteLine(line);
-        output.WriteLine($"{ProductName} {ExtensionVersion} loaded (contract {ContractVersion.Text}).");
+        output.WriteLine($"{ProductName} {ExtensionVersion} loaded (contract {ContractVersion.Text}).", showPane: false);
         background.Dispose();
 
         // The COM status bar and command service must be used on the UI thread: one visit.
@@ -216,7 +216,7 @@ public sealed class PillionPackage : AsyncPackage
         indexIndicator.Start();
         autocomplete.Start();
         inlineChat.Start();
-        _ = JoinableTaskFactory.RunAsync(() => signals.StartAsync(this, DisposalToken, startupOver));
+        _ = JoinableTaskFactory.RunAsync(() => signals.StartAsync(this, DisposalToken));
         _ = JoinableTaskFactory.RunAsync(() => indexing.StartAsync(this, DisposalToken, startupOver));
         workspaceQueriesFlag.Start();
         _ = JoinableTaskFactory.RunAsync(() => WarmUpWorkspaceQueriesAsync(startupOver));
@@ -774,7 +774,7 @@ public sealed class PillionPackage : AsyncPackage
             }
             else if (previous is IntelliCodeStatus.Missing or IntelliCodeStatus.CompletionsOff)
             {
-                _output?.WriteLine("IntelliCode's automatic code completions are on: inline suggestions are available.");
+                _output?.WriteLine("IntelliCode's automatic code completions are on: inline suggestions are available.", showPane: false);
             }
 
             // The status bar text carries the IntelliCode part only while it is missing or its completions are off: when neither

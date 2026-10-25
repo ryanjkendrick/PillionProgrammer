@@ -43,6 +43,8 @@ public interface IIdeSignals
     /// <summary>
     /// Raised, at most once per 500 ms of quiet, when the Error List's contents changed (builds, live IntelliSense
     /// diagnostics and Roslyn updates all reach the Error List). Call <see cref="GetDiagnosticsAsync"/> for the new list.
+    /// The Error List is connected lazily (issue #49): this event starts firing only once something has asked for
+    /// diagnostics (<see cref="GetDiagnosticsAsync"/> or <see cref="EnsureDiagnosticsConnectedAsync"/>).
     /// </summary>
     event EventHandler? DiagnosticsChanged;
 
@@ -61,7 +63,18 @@ public interface IIdeSignals
     /// <summary>Gets the last 200 signal events with their times, oldest first (for diagnostics).</summary>
     IReadOnlyList<IdeSignalEvent> RecentEvents { get; }
 
-    /// <summary>Gets the diagnostics for a scope.</summary>
+    /// <summary>
+    /// Connects the Error List now, if it is not connected yet (issue #49: it is connected on the first diagnostics query,
+    /// not at package load, because Visual Studio creates the Error List's table control on first use, which cost 50 to
+    /// 120 ms of UI-thread time). Call it before subscribing to <see cref="DiagnosticsChanged"/>, or when a later read
+    /// must not pay for the connection (the self-healing pipeline reads the Error List when a build finishes). Idempotent;
+    /// a failed connection is logged and leaves the diagnostics to Roslyn, and the next call tries again.
+    /// </summary>
+    /// <param name="cancellationToken">A token that cancels the connection.</param>
+    /// <returns>A task that completes when the Error List is connected (or could not be).</returns>
+    Task EnsureDiagnosticsConnectedAsync(CancellationToken cancellationToken);
+
+    /// <summary>Gets the diagnostics for a scope. Connects the Error List first when it is not connected yet.</summary>
     /// <param name="scope">The active document, or the whole solution.</param>
     /// <param name="cancellationToken">A token that cancels the query.</param>
     /// <returns>
@@ -72,7 +85,10 @@ public interface IIdeSignals
     /// </returns>
     Task<IReadOnlyList<DiagnosticInfo>> GetDiagnosticsAsync(DiagnosticScope scope, CancellationToken cancellationToken);
 
-    /// <summary>Gets the text of an Output window pane, tail-truncated.</summary>
+    /// <summary>
+    /// Gets the text of an Output window pane, tail-truncated. The Output window is connected on the first call (issue
+    /// #49), not at package load.
+    /// </summary>
     /// <param name="paneName">The pane's name: <c>Build</c>, <c>Debug</c> or <c>Tests</c> (case-insensitive).</param>
     /// <param name="maxChars">The most characters to return (the end of the pane is kept); at least 1.</param>
     /// <param name="cancellationToken">A token that cancels the query.</param>

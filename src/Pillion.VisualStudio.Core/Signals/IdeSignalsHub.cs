@@ -33,6 +33,9 @@ public sealed class IdeSignalsHub : IIdeSignals, IDisposable
     private readonly ConcurrentQueue<Action> _queue = new();
     private readonly object _stateGate = new();
     private int _draining;
+    private readonly object _connectGate = new();
+    private Task? _errorListConnecting;
+    private Task? _outputConnecting;
     private BuildActivity _activity = new(false, null);
     private int _projectsBuilt;
     private string? _activeDocument;
@@ -72,8 +75,22 @@ public sealed class IdeSignalsHub : IIdeSignals, IDisposable
     /// <inheritdoc/>
     public event EventHandler? DiagnosticsChanged;
 
-    /// <summary>Gets or sets the Error List reader; <see langword="null"/> until the adapter has found the Error List.</summary>
+    /// <summary>Gets or sets the Error List reader; <see langword="null"/> until the adapter has connected the Error List.</summary>
     public IErrorListSource? ErrorList { get; set; }
+
+    /// <summary>
+    /// Gets or sets the adapter's Error List connection, run once by <see cref="EnsureDiagnosticsConnectedAsync"/> (and so
+    /// by the first <see cref="GetDiagnosticsAsync"/>); it sets <see cref="ErrorList"/>. <see langword="null"/> when the
+    /// adapter connects eagerly or has nothing to connect. Issue #49: Visual Studio creates the Error List's table control
+    /// on first use, so the connection is made when diagnostics are first asked for, not at package load.
+    /// </summary>
+    public Func<CancellationToken, Task>? ErrorListConnector { get; set; }
+
+    /// <summary>
+    /// Gets or sets the adapter's Output window connection, run once by the first <see cref="GetOutputPaneTextAsync"/>; it
+    /// sets <see cref="Output"/>. <see langword="null"/> when the adapter connects eagerly.
+    /// </summary>
+    public Func<CancellationToken, Task>? OutputConnector { get; set; }
 
     /// <summary>Gets or sets the Roslyn diagnostics reader; <see langword="null"/> when there is none.</summary>
     public IRoslynDiagnosticsSource? Roslyn { get; set; }
@@ -111,7 +128,10 @@ public sealed class IdeSignalsHub : IIdeSignals, IDisposable
         get
         {
             var builder = new StringBuilder();
-            builder.Append(ErrorList is null ? "The Error List is not available yet." : FilterNote);
+            builder.Append(
+                ErrorList is not null ? FilterNote
+                : ErrorListConnector is not null ? "The Error List is not connected yet; it connects on the first diagnostics query."
+                : "The Error List is not available yet.");
             var roslyn = Roslyn;
             builder.Append(' ');
             builder.Append(
@@ -284,8 +304,19 @@ public sealed class IdeSignalsHub : IIdeSignals, IDisposable
     }
 
     /// <inheritdoc/>
+    public Task EnsureDiagnosticsConnectedAsync(CancellationToken cancellationToken) =>
+        EnsureConnectedAsync(ErrorListConnector, () => ErrorList is not null, ref _errorListConnecting, cancellationToken);
+
+    /// <summary>Connects the Output window now, if it is not connected yet (the first pane query does this).</summary>
+    /// <param name="cancellationToken">A token that cancels the connection.</param>
+    /// <returns>A task that completes when the Output window is connected (or could not be).</returns>
+    public Task EnsureOutputConnectedAsync(CancellationToken cancellationToken) =>
+        EnsureConnectedAsync(OutputConnector, () => Output is not null, ref _outputConnecting, cancellationToken);
+
+    /// <inheritdoc/>
     public async Task<IReadOnlyList<DiagnosticInfo>> GetDiagnosticsAsync(DiagnosticScope scope, CancellationToken cancellationToken)
     {
+        await EnsureDiagnosticsConnectedAsync(cancellationToken).ConfigureAwait(false);
         var errorList = ErrorList;
         var all = errorList is null
             ? new List<DiagnosticInfo>()
@@ -343,6 +374,7 @@ public sealed class IdeSignalsHub : IIdeSignals, IDisposable
             throw new ArgumentOutOfRangeException(nameof(maxChars), maxChars, "The limit must be at least 1.");
         }
 
+        await EnsureOutputConnectedAsync(cancellationToken).ConfigureAwait(false);
         if (Output is not { } output)
         {
             return null;
@@ -402,6 +434,76 @@ public sealed class IdeSignalsHub : IIdeSignals, IDisposable
 
         Record(kind, path);
         Enqueue(() => Raise(handler(), new DocumentEventArgs(path), kind));
+    }
+
+    /// <summary>
+    /// Runs a connector once: concurrent callers share the one run; a run that ended without connecting (it failed, or
+    /// was cancelled) is forgotten, so the next caller tries again. Without a connector there is nothing to do.
+    /// </summary>
+    private Task EnsureConnectedAsync(Func<CancellationToken, Task>? connector, Func<bool> connected, ref Task? running, CancellationToken cancellationToken)
+    {
+        if (connector is null || connected())
+        {
+            return Task.CompletedTask;
+        }
+
+        Task run;
+        lock (_connectGate)
+        {
+            if (connected())
+            {
+                return Task.CompletedTask;
+            }
+
+            running ??= Task.Run(() => connector(cancellationToken), CancellationToken.None);
+            run = running;
+        }
+
+        return WaitForConnectionAsync(run, connected, cancellationToken);
+    }
+
+    private async Task WaitForConnectionAsync(Task run, Func<bool> connected, CancellationToken cancellationToken)
+    {
+        try
+        {
+            // The connector honours the first caller's token; a later caller that is cancelled stops waiting without
+            // cancelling the shared run.
+            if (await Task.WhenAny(run, Task.Delay(Timeout.Infinite, cancellationToken)).ConfigureAwait(false) != run)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            await run.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+#pragma warning disable CA1031 // The adapter logs its own failures; the hub answers without that source and tries again next time.
+        // (A run cancelled by the first caller's token lands here for the other waiters; they just retry next time.)
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            _log?.Warning("signals.connect.failed", "A lazy connection of the IDE signals failed.", ("error", ex.GetType().Name), ("detail", ex.Message));
+        }
+        finally
+        {
+            if (run.IsCompleted && !connected())
+            {
+                lock (_connectGate)
+                {
+                    if (ReferenceEquals(_errorListConnecting, run))
+                    {
+                        _errorListConnecting = null;
+                    }
+
+                    if (ReferenceEquals(_outputConnecting, run))
+                    {
+                        _outputConnecting = null;
+                    }
+                }
+            }
+        }
     }
 
     private void OnDiagnosticsQuiet()

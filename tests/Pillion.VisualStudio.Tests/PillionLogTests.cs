@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Pillion.VisualStudio.Core;
 
 namespace Pillion.VisualStudio.Tests;
@@ -101,22 +102,22 @@ public sealed class PillionLogTests : IDisposable
     [Fact]
     public void Sink_ReceivesInfoAndAbove()
     {
-        var sunk = new List<string>();
-        var log = new PillionLog(directory: null, () => Now) { Sink = sunk.Add };
+        var sunk = new List<(PillionLogLevel Level, string Line)>();
+        var log = new PillionLog(directory: null, () => Now) { Sink = (level, line) => sunk.Add((level, line)) };
 
         log.Debug("d", "hidden");
         log.Info("i", "shown");
         log.Warning("w", "shown");
         log.Error("e", "shown");
 
-        Assert.Equal(3, sunk.Count);
+        Assert.Equal([PillionLogLevel.Info, PillionLogLevel.Warning, PillionLogLevel.Error], sunk.Select(s => s.Level));
     }
 
     [Fact]
     public void Secrets_AreRedactedEverywhere()
     {
         var sunk = new List<string>();
-        var log = new PillionLog(_directory, () => Now) { Sink = sunk.Add };
+        var log = new PillionLog(_directory, () => Now) { Sink = (_, line) => sunk.Add(line) };
         var token = LaunchProtocol.GenerateToken();
         log.AddSecret(token);
 
@@ -135,7 +136,7 @@ public sealed class PillionLogTests : IDisposable
     [Fact]
     public void Write_NeverThrows()
     {
-        var log = new PillionLog(_directory, () => Now) { Sink = _ => throw new InvalidOperationException() };
+        var log = new PillionLog(_directory, () => Now) { Sink = (_, _) => throw new InvalidOperationException() };
 
         log.Info("x", "y");
     }

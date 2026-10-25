@@ -15,9 +15,15 @@ namespace Pillion.VisualStudio.Signals;
 
 /// <summary>
 /// The package-owned IDE signals: creates the <see cref="IdeSignalsHub"/> that is registered as the
-/// <see cref="IIdeSignals"/> service and connects it to Visual Studio (build events, Running Document Table, Error List,
-/// Roslyn workspace, Output window). <see cref="StartAsync"/> never blocks package load: it runs after initialization,
-/// finds the services on a background thread and visits the UI thread in short batches only for the COM calls that need it.
+/// <see cref="IIdeSignals"/> service and connects it to Visual Studio. <see cref="StartAsync"/> never blocks package load:
+/// it runs after initialization, finds the services on a background thread and visits the UI thread in short batches only
+/// for the COM calls that need it. It connects the build events, the Running Document Table and Roslyn at once; the Error
+/// List and the Output window are connected lazily, on their first use (issue #49, decided 2026-10-24): asking Visual
+/// Studio for <c>SVsErrorList</c> makes it create the Error List's table control (51 to 79 ms of UI-thread time on 17.14,
+/// 117 ms before Ready on a CI runner) and <c>SVsOutputWindow</c> initialises the Output window (22 to 26 ms), so the hub
+/// runs the connectors when diagnostics or a pane are first asked for (or through
+/// <see cref="IIdeSignals.EnsureDiagnosticsConnectedAsync"/>). Until then <see cref="IIdeSignals.DiagnosticsChanged"/>
+/// does not fire and Roslyn answers the active document's diagnostics.
 /// </summary>
 internal sealed class IdeSignalsFeature : IDisposable
 {
@@ -41,32 +47,29 @@ internal sealed class IdeSignalsFeature : IDisposable
     /// <summary>Gets the hub: the object registered as the <see cref="IIdeSignals"/> service.</summary>
     public IdeSignalsHub Hub { get; }
 
-    /// <summary>Connects the hub to Visual Studio; each part that fails is logged and left out, the others keep working.</summary>
+    /// <summary>
+    /// Connects the hub to Visual Studio; each part that fails is logged and left out, the others keep working. The
+    /// Error List and the Output window are not connected here: the hub gets their connectors and runs each once, on the
+    /// first diagnostics or pane query (or <see cref="IIdeSignals.EnsureDiagnosticsConnectedAsync"/>).
+    /// </summary>
     /// <param name="services">The package's async service provider.</param>
     /// <param name="cancellationToken">Cancelled when Visual Studio shuts down.</param>
-    /// <param name="startupOver">
-    /// Returns a task that completes when the package's start-up is over. The Error List is connected only after it: asking for the
-    /// <c>SVsErrorList</c> service makes Visual Studio create the Error List, which took 100 to 160 ms of UI-thread time on 17.x.
-    /// Until then <see cref="IdeSignalsHub.DiagnosticsNote"/> says the Error List is not available yet (Roslyn diagnostics
-    /// answer meanwhile). <see langword="null"/> connects it at once.
-    /// </param>
-    /// <returns>A task that completes when the connections are made.</returns>
-    public async Task StartAsync(IAsyncServiceProvider services, CancellationToken cancellationToken, Func<Task>? startupOver = null)
+    /// <returns>A task that completes when the eager connections are made.</returns>
+    public async Task StartAsync(IAsyncServiceProvider services, CancellationToken cancellationToken)
     {
         await TaskScheduler.Default;
 
         await RunStepAsync("build events", () => ConnectBuildEventsAsync(services, cancellationToken)).ConfigureAwait(false);
         await RunStepAsync("document events", () => ConnectDocumentEventsAsync(services, cancellationToken)).ConfigureAwait(false);
-        await RunStepAsync("output panes", () => ConnectOutputPanesAsync(services, cancellationToken)).ConfigureAwait(false);
         Hub.Roslyn = new RoslynDiagnosticsSource(_log);
-        if (startupOver is not null)
-        {
-            await startupOver().ConfigureAwait(false);
-        }
-
-        await RunStepAsync("Error List", () => ConnectErrorListAsync(services, cancellationToken)).ConfigureAwait(false);
+        Hub.OutputConnector = token => RunStepAsync("output panes", () => ConnectOutputPanesAsync(services, Linked(token, cancellationToken)));
+        Hub.ErrorListConnector = token => RunStepAsync("Error List", () => ConnectErrorListAsync(services, Linked(token, cancellationToken)));
         _log.Info("signals.started", "IDE signals started.", ("diagnostics", Hub.DiagnosticsNote));
     }
+
+    /// <summary>The caller's token, or the shutdown token when the caller's cannot be cancelled (the connection still stops at shutdown).</summary>
+    private static CancellationToken Linked(CancellationToken caller, CancellationToken shutdown) =>
+        caller.CanBeCanceled ? caller : shutdown;
 
     /// <inheritdoc/>
     public void Dispose()
@@ -178,6 +181,7 @@ internal sealed class IdeSignalsFeature : IDisposable
     {
         await _joinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
         using var timing = UiThreadTimings.Measure("signals.connect.errorlist");
+        _log.Info("signals.errorlist.connecting", "Connecting the Error List on its first use.");
         var errorList = await services.GetServiceAsync(typeof(SVsErrorList)).ConfigureAwait(true) as IErrorList;
         if (errorList is null)
         {

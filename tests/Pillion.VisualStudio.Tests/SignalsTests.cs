@@ -494,6 +494,101 @@ public class SignalsTests
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => hub.GetOutputPaneTextAsync("Build", 0, CancellationToken.None));
     }
 
+    /// <summary>Issue #49: the Error List is connected by the first diagnostics query, once, and not before.</summary>
+    [Fact]
+    public async Task ErrorList_IsConnectedByTheFirstDiagnosticsQuery_Once()
+    {
+        var connections = 0;
+        using var hub = new IdeSignalsHub(new SignalsClock(), null);
+        hub.ErrorListConnector = _ =>
+        {
+            connections++;
+            hub.ErrorList = new FakeErrorList(Diagnostic(@"C:\a.cs", 3, "CS1002"));
+            return Task.CompletedTask;
+        };
+        Assert.StartsWith("The Error List is not connected yet", hub.DiagnosticsNote, StringComparison.Ordinal);
+        hub.NotifyBuildFinished(success: false);
+        await hub.WhenIdleAsync();
+        Assert.Equal(0, connections); // A build does not connect it; a query does.
+
+        var first = await hub.GetDiagnosticsAsync(DiagnosticScope.Solution, CancellationToken.None);
+        var second = await hub.GetDiagnosticsAsync(DiagnosticScope.Solution, CancellationToken.None);
+
+        Assert.Equal(["CS1002"], first.Select(d => d.Code));
+        Assert.Equal(["CS1002"], second.Select(d => d.Code));
+        Assert.Equal(1, connections);
+        Assert.Contains("filters", hub.DiagnosticsNote);
+    }
+
+    /// <summary>Issue #49: the explicit path phase 3's self-healing uses before it subscribes to DiagnosticsChanged.</summary>
+    [Fact]
+    public async Task EnsureDiagnosticsConnected_ConnectsWithoutAQuery_SharesOneRun_AndRetriesAfterAFailure()
+    {
+        var attempts = 0;
+        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var hub = new IdeSignalsHub(new SignalsClock(), null);
+        hub.ErrorListConnector = async _ =>
+        {
+            attempts++;
+            await release.Task;
+            if (attempts == 1)
+            {
+                throw new InvalidOperationException("the Error List service was not available");
+            }
+
+            hub.ErrorList = new FakeErrorList();
+        };
+
+        var a = hub.EnsureDiagnosticsConnectedAsync(CancellationToken.None);
+        var b = hub.EnsureDiagnosticsConnectedAsync(CancellationToken.None);
+        release.SetResult(true);
+        await Task.WhenAll(a, b); // A failed connection is logged, not thrown; both waiters shared the one run.
+        Assert.Equal(1, attempts);
+        Assert.Null(hub.ErrorList);
+
+        await hub.EnsureDiagnosticsConnectedAsync(CancellationToken.None); // The next call tries again.
+        Assert.Equal(2, attempts);
+        Assert.NotNull(hub.ErrorList);
+        await hub.EnsureDiagnosticsConnectedAsync(CancellationToken.None);
+        Assert.Equal(2, attempts);
+    }
+
+    [Fact]
+    public async Task EnsureDiagnosticsConnected_WithoutAConnector_DoesNothing()
+    {
+        using var hub = new IdeSignalsHub(new SignalsClock(), null);
+
+        await hub.EnsureDiagnosticsConnectedAsync(CancellationToken.None);
+
+        Assert.Null(hub.ErrorList);
+        Assert.StartsWith("The Error List is not available yet.", hub.DiagnosticsNote, StringComparison.Ordinal);
+    }
+
+    /// <summary>Issue #49: the Output window is connected by the first pane query; a finished build does not connect it.</summary>
+    [Fact]
+    public async Task OutputPanes_AreConnectedByTheFirstPaneQuery_NotByABuild()
+    {
+        var connections = 0;
+        using var hub = new IdeSignalsHub(new SignalsClock(), null);
+        hub.OutputConnector = _ =>
+        {
+            connections++;
+            hub.Output = new FakeOutput("1>Build failed.");
+            return Task.CompletedTask;
+        };
+
+        hub.NotifyBuildStarted();
+        hub.NotifyBuildFinished(success: false);
+        await hub.WhenIdleAsync();
+        await Task.Delay(50);
+        Assert.Equal(0, connections);
+        Assert.Null(hub.LastBuild!.Output); // The tail is captured only once the Output window is connected.
+
+        Assert.Equal("1>Build failed.", await hub.GetOutputPaneTextAsync("Build", 100, CancellationToken.None));
+        Assert.Equal("1>Build failed.", await hub.GetOutputPaneTextAsync("Build", 100, CancellationToken.None));
+        Assert.Equal(1, connections);
+    }
+
     [Fact]
     public void DisconnectSteps_RunNewestFirst_OnlyOnce_AndAFailingStepDoesNotStopTheOthers()
     {
