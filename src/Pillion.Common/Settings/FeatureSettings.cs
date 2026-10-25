@@ -68,6 +68,9 @@ public static class FeatureNames
     /// <summary>The cross-encoder reranker of hybrid retrieval (work item 2.11). Off by default until the licence review in design section 18; no reranker ships yet.</summary>
     public const string Reranker = "reranker";
 
+    /// <summary>The Command Runner: shell commands under a pseudo-console for agent sessions, background processes and the Developer PowerShell environment (work item 3.11). No RPC surface yet; the agent tools (3.12) and the Terminal window (3.15) build on it.</summary>
+    public const string CommandRunner = "commandRunner";
+
     /// <summary>Gets every feature flag name, in the order they are written to <c>settings.json</c>.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
@@ -93,6 +96,7 @@ public static class FeatureNames
         IndexWindow,
         Retrieval,
         Reranker,
+        CommandRunner,
     ];
 }
 
@@ -167,6 +171,7 @@ public sealed class FeatureSettings : SettingsNode
             "indexwindow" => IndexWindow,
             "retrieval" => Retrieval,
             "reranker" => Reranker,
+            "commandrunner" => CommandRunner,
             _ => true,
         };
     }
@@ -245,6 +250,9 @@ public sealed class FeatureSettings : SettingsNode
             case "reranker":
                 Reranker = false;
                 break;
+            case "commandrunner":
+                CommandRunner = false;
+                break;
         }
     }
 
@@ -293,4 +301,11 @@ public sealed class FeatureSettings : SettingsNode
     /// reranker that keeps the fused order, so turning it on changes nothing yet.
     /// </summary>
     public bool Reranker { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether Pillion Host may run commands for agent sessions through the Command Runner
+    /// (<c>ICommandRunner.CreateSessionAsync</c>, work item 3.11). When off, creating a session fails with a policy error and
+    /// nothing is started.
+    /// </summary>
+    public bool CommandRunner { get; set; } = true;
 }
