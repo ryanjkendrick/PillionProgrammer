@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Pillion.Common.Redaction;
 
@@ -106,9 +107,17 @@ public sealed class RedactingChatClient : DelegatingChatClient
         var response = await base.GetResponseAsync(Redact(messages), options, cancellationToken).ConfigureAwait(false);
         foreach (var message in response.Messages)
         {
-            foreach (var text in message.Contents.OfType<TextContent>())
+            for (var i = 0; i < message.Contents.Count; i++)
             {
-                text.Text = _session.Restore(text.Text ?? string.Empty);
+                switch (message.Contents[i])
+                {
+                    case TextContent text:
+                        text.Text = _session.Restore(text.Text ?? string.Empty);
+                        break;
+                    case FunctionCallContent call:
+                        message.Contents[i] = RestoreCall(call);
+                        break;
+                }
             }
         }
 
@@ -126,9 +135,19 @@ public sealed class RedactingChatClient : DelegatingChatClient
         await foreach (var update in base.GetStreamingResponseAsync(Redact(messages), options, cancellationToken).ConfigureAwait(false))
         {
             last = update;
-            foreach (var text in update.Contents.OfType<TextContent>())
+            for (var i = 0; i < update.Contents.Count; i++)
             {
-                text.Text = restorer.Push(text.Text ?? string.Empty);
+                switch (update.Contents[i])
+                {
+                    case TextContent text:
+                        text.Text = restorer.Push(text.Text ?? string.Empty);
+                        break;
+                    case FunctionCallContent call:
+                        // A tool call arrives whole, so its arguments are restored at once: a placeholder the model echoed into a
+                        // path or a snippet maps back to the original, exactly as it would in text.
+                        update.Contents[i] = RestoreCall(call);
+                        break;
+                }
             }
 
             yield return update;
@@ -158,8 +177,70 @@ public sealed class RedactingChatClient : DelegatingChatClient
         return result;
     }
 
-    private AIContent RedactContent(AIContent content) =>
-        content is TextContent text ? new TextContent(_session.Redact(text.Text ?? string.Empty)) : content;
+    /// <summary>
+    /// Redacts what carries text: the text itself, the arguments of an earlier tool call (sent back as history) and a tool
+    /// result. Tool arguments and results bound for a cloud model pass through the same redaction as text (work item 3.23).
+    /// </summary>
+    private AIContent RedactContent(AIContent content) => content switch
+    {
+        TextContent text => new TextContent(_session.Redact(text.Text ?? string.Empty)),
+        FunctionCallContent call => new FunctionCallContent(call.CallId, call.Name, RedactArguments(call.Arguments)) { RawRepresentation = call.RawRepresentation },
+        FunctionResultContent result => new FunctionResultContent(result.CallId, _session.Redact(ToolResults.Text(result.Result))),
+        _ => content,
+    };
+
+    private IDictionary<string, object?>? RedactArguments(IDictionary<string, object?>? arguments)
+    {
+        if (arguments is null || arguments.Count == 0)
+        {
+            return arguments;
+        }
+
+        var json = _session.Redact(JsonSerializer.Serialize(arguments));
+        return ParseArguments(json) ?? arguments;
+    }
+
+    private FunctionCallContent RestoreCall(FunctionCallContent call)
+    {
+        if (call.Arguments is null || call.Arguments.Count == 0)
+        {
+            return call;
+        }
+
+        var json = JsonSerializer.Serialize(call.Arguments);
+        var restored = _session.Restore(json);
+        if (string.Equals(json, restored, StringComparison.Ordinal))
+        {
+            return call;
+        }
+
+        return new FunctionCallContent(call.CallId, call.Name, ParseArguments(restored) ?? call.Arguments) { RawRepresentation = restored };
+    }
+
+    private static Dictionary<string, object?>? ParseArguments(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            var result = new Dictionary<string, object?>(StringComparer.Ordinal);
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                result[property.Name] = property.Value.Clone();
+            }
+
+            return result;
+        }
+        catch (JsonException)
+        {
+            // A placeholder landed where it broke the JSON (inside a key, say); the arguments are left as they were.
+            return null;
+        }
+    }
 }
 
 /// <summary>FIM middleware that redacts the prefix and suffix and restores placeholders in the streamed completion.</summary>

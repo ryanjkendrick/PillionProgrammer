@@ -1,0 +1,10 @@
+data: {"id":"cmpl-t1","object":"chat.completion.chunk","created":1767225600,"model":"mistral-small-latest","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"cmpl-t1","object":"chat.completion.chunk","created":1767225600,"model":"mistral-small-latest","choices":[{"index":0,"delta":{"content":"","tool_calls":[{"id":"AbC123xyZ","type":"function","function":{"name":"get_weather","arguments":"{\"city\": \"Pa"}}]},"finish_reason":null}]}
+
+data: {"id":"cmpl-t1","object":"chat.completion.chunk","created":1767225600,"model":"mistral-small-latest","choices":[{"index":0,"delta":{"content":"","tool_calls":[{"function":{"arguments":"ris\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"cmpl-t1","object":"chat.completion.chunk","created":1767225600,"model":"mistral-small-latest","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":88,"total_tokens":110,"completion_tokens":22}}
+
+data: [DONE]
+

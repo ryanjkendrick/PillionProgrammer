@@ -1,0 +1,4 @@
+data: {"candidates":[{"content":{"parts":[{"text":"I'll look that up."}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":80,"candidatesTokenCount":5,"totalTokenCount":85},"modelVersion":"gemini-3.8-flash","responseId":"resp-t1"}
+
+data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","args":{"city":"Paris","unit":"celsius"}}}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":80,"candidatesTokenCount":17,"totalTokenCount":97},"modelVersion":"gemini-3.8-flash","responseId":"resp-t1"}
+

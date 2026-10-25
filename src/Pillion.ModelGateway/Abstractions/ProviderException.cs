@@ -39,18 +39,26 @@ public class ProviderException : Exception
     /// Whether the failure is evidence that the provider is unhealthy (connection failures, timeouts, 429 and 5xx).
     /// Defaults to <see langword="true"/> for <see cref="PillionErrorCode.ProviderUnavailable"/> without a 4xx status.
     /// </param>
+    /// <param name="isRetryable">
+    /// Whether the same request may be sent again; defaults to the status rule (429 and 5xx). Set it for a failure without a
+    /// status that is transient all the same, such as tool-call arguments that were not valid JSON.
+    /// </param>
     public ProviderException(
         PillionErrorCode code,
         string message,
         HttpStatusCode? statusCode = null,
         Exception? innerException = null,
-        bool? isProviderFault = null)
+        bool? isProviderFault = null,
+        bool? isRetryable = null)
         : base(message, innerException)
     {
         Code = code;
         StatusCode = statusCode;
         IsProviderFault = isProviderFault ?? (code == PillionErrorCode.ProviderUnavailable && !IsClientError(statusCode));
+        _isRetryable = isRetryable;
     }
+
+    private readonly bool? _isRetryable;
 
     /// <summary>Gets the error code reported to the client.</summary>
     public PillionErrorCode Code { get; }
@@ -61,8 +69,8 @@ public class ProviderException : Exception
     /// <summary>Gets a value indicating whether the failure counts against the provider's circuit breaker.</summary>
     public bool IsProviderFault { get; }
 
-    /// <summary>Gets a value indicating whether the request may be retried: HTTP 429 and 5xx.</summary>
-    public bool IsRetryable => StatusCode is { } status && ((int)status == 429 || (int)status >= 500);
+    /// <summary>Gets a value indicating whether the request may be retried: HTTP 429 and 5xx, or what the constructor said.</summary>
+    public bool IsRetryable => _isRetryable ?? (StatusCode is { } status && ((int)status == 429 || (int)status >= 500));
 
     /// <summary>Converts the failure to the structured error sent over RPC.</summary>
     /// <returns>The error.</returns>

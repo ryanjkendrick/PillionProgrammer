@@ -341,15 +341,16 @@ public sealed partial class ProviderRegistry : IProviderRegistry, IDisposable
 public sealed class ModelInventory
 {
     private readonly ConcurrentDictionary<string, IReadOnlyList<ProviderModel>> _models = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> _toolDowngrades = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Records the models a provider reported.</summary>
+    /// <summary>Records the models a provider reported. A run-time tools downgrade of a model survives the update.</summary>
     /// <param name="providerId">The provider id.</param>
     /// <param name="models">The models.</param>
     public void Update(string providerId, IReadOnlyList<ProviderModel> models)
     {
         ArgumentNullException.ThrowIfNull(providerId);
         ArgumentNullException.ThrowIfNull(models);
-        _models[providerId] = models;
+        _models[providerId] = _toolDowngrades.IsEmpty ? models : models.Select(ApplyDowngrades).ToList();
     }
 
     /// <summary>Gets the models a provider last reported.</summary>
@@ -367,6 +368,45 @@ public sealed class ModelInventory
         models = [];
         return false;
     }
+
+    /// <summary>
+    /// Downgrades a model's tool calling to <see cref="ToolCallingSupport.None"/> for the rest of the process (work item 3.23):
+    /// its adapter or server refused tool definitions although the catalog or the provider advertised them. Later listings
+    /// keep the downgrade; routing and <see cref="IModelGateway.ListModelsAsync"/> report it.
+    /// </summary>
+    /// <param name="providerId">The provider id.</param>
+    /// <param name="modelId">The model id.</param>
+    /// <param name="reason">Why, for the log and the status bar.</param>
+    public void DowngradeToolCalling(string providerId, string modelId, string reason)
+    {
+        ArgumentNullException.ThrowIfNull(providerId);
+        ArgumentNullException.ThrowIfNull(modelId);
+        _toolDowngrades[DowngradeKey(providerId, modelId)] = reason ?? string.Empty;
+        if (_models.TryGetValue(providerId, out var models))
+        {
+            _models[providerId] = models.Select(ApplyDowngrades).ToList();
+        }
+    }
+
+    /// <summary>Gets the reason a model's tool calling was downgraded at run time, or <see langword="null"/> when it was not.</summary>
+    /// <param name="providerId">The provider id.</param>
+    /// <param name="modelId">The model id.</param>
+    /// <returns>The reason, or <see langword="null"/>.</returns>
+    public string? ToolCallingDowngradeReason(string providerId, string modelId) =>
+        _toolDowngrades.TryGetValue(DowngradeKey(providerId, modelId), out var reason) ? reason : null;
+
+    /// <summary>Applies any run-time downgrade to a model's descriptor (for models the provider has just listed).</summary>
+    /// <param name="model">The model.</param>
+    /// <returns>The model, with tool calling set to <see cref="ToolCallingSupport.None"/> when it was downgraded.</returns>
+    public ProviderModel ApplyDowngrades(ProviderModel model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        return model.Capabilities.ToolCalling != ToolCallingSupport.None && _toolDowngrades.ContainsKey(DowngradeKey(model.ProviderId, model.ModelId))
+            ? model with { Capabilities = model.Capabilities with { ToolCalling = ToolCallingSupport.None } }
+            : model;
+    }
+
+    private static string DowngradeKey(string providerId, string modelId) => providerId + "/" + Normalise(modelId);
 
     /// <summary>Finds a model a provider reported.</summary>
     /// <param name="providerId">The provider id.</param>

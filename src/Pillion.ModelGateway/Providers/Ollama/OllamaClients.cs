@@ -4,12 +4,19 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 using Pillion.Contracts;
+using Pillion.ModelGateway.Providers.Tools;
 using ChatMessage = Microsoft.Extensions.AI.ChatMessage;
 using ChatRole = Microsoft.Extensions.AI.ChatRole;
 
 namespace Pillion.ModelGateway.Providers.Ollama;
 
-/// <summary>Chat over Ollama's <c>/api/chat</c>, streamed as NDJSON.</summary>
+/// <summary>
+/// Chat over Ollama's <c>/api/chat</c>, streamed as NDJSON. Tools go as <c>tools[].function</c>; the model's calls come
+/// back whole in <c>message.tool_calls</c> (arguments as an object, an <c>id</c> on newer servers, else one is made per
+/// response), earlier calls go back in the assistant message's <c>tool_calls</c> and results as <c>tool</c> messages with
+/// <c>tool_name</c> (work item 3.23). A model without the <c>tools</c> capability answers 400 "does not support tools",
+/// which becomes <see cref="ToolsNotSupportedException"/>.
+/// </summary>
 internal sealed class OllamaChatClient : IChatClient
 {
     private readonly OllamaProvider _provider;
@@ -34,16 +41,17 @@ internal sealed class OllamaChatClient : IChatClient
 
         var model = string.IsNullOrWhiteSpace(options?.ModelId) ? _modelId : options.ModelId;
         var messageList = messages as IReadOnlyList<ChatMessage> ?? messages.ToList();
+        var tools = ToolsNode(options);
 
         // One resident configuration per model: the plan names the context the model already has when that is enough, and
-        // loads or reloads it (under a timeout, reporting progress) when it is not.
+        // loads or reloads it (under a timeout, reporting progress) when it is not. The tool definitions count toward the prompt.
         var plan = await _provider.Residency.PrepareAsync(
             new ResidencyRequest(
                 model,
                 IsFim: false,
                 ProfileOf(options),
                 ExplicitContext(options),
-                OllamaResidency.EstimateNeed(messageList.Select(m => m.Text), options?.MaxOutputTokens),
+                OllamaResidency.EstimateNeed(messageList.Select(MessageText).Append(tools?.ToJsonString() ?? string.Empty), options?.MaxOutputTokens),
                 KeepAlive(options),
                 RequestId(options)),
             cancellationToken).ConfigureAwait(false);
@@ -51,19 +59,27 @@ internal sealed class OllamaChatClient : IChatClient
         var body = new JsonObject
         {
             ["model"] = model,
-            ["messages"] = new JsonArray(messageList.Select(ToJson).ToArray<JsonNode?>()),
+            ["messages"] = new JsonArray(messageList.SelectMany(m => ToJson(m, messageList)).ToArray<JsonNode?>()),
             ["stream"] = true,
             ["options"] = BuildOptions(plan.NumCtx, options),
         };
+        if (tools is not null)
+        {
+            body["tools"] = tools;
+        }
+
         OllamaProvider.SetKeepAlive(body, plan.KeepAlive);
 
         var responseId = Guid.NewGuid().ToString("N");
-        await foreach (var line in _provider.Http.PostStreamAsync("api/chat", body, model, cancellationToken).ConfigureAwait(false))
+        var callCount = 0;
+        var stream = ToolJson.GuardTools(_provider.Http.PostStreamAsync("api/chat", body, model, cancellationToken), tools is not null, model, cancellationToken);
+        await foreach (var line in stream.ConfigureAwait(false))
         {
             using (line)
             {
                 var root = line.RootElement;
-                var text = root.TryGetProperty("message", out var message) && message.TryGetProperty("content", out var content)
+                var hasMessage = root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object;
+                var text = hasMessage && message.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String
                     ? content.GetString() ?? string.Empty
                     : string.Empty;
                 var update = new ChatResponseUpdate(ChatRole.Assistant, text)
@@ -72,12 +88,20 @@ internal sealed class OllamaChatClient : IChatClient
                     ResponseId = responseId,
                 };
 
+                if (hasMessage && message.TryGetProperty("tool_calls", out var toolCalls) && toolCalls.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var item in toolCalls.EnumerateArray())
+                    {
+                        update.Contents.Add(ReadToolCall(item, responseId, callCount++, _provider.DisplayName));
+                    }
+                }
+
                 if (root.TryGetProperty("done", out var done) && done.ValueKind == JsonValueKind.True)
                 {
                     update.FinishReason = (root.TryGetProperty("done_reason", out var reason) ? reason.GetString() : null) switch
                     {
                         "length" => ChatFinishReason.Length,
-                        _ => ChatFinishReason.Stop,
+                        _ => callCount > 0 ? ChatFinishReason.ToolCalls : ChatFinishReason.Stop,
                     };
                     update.Contents.Add(new UsageContent(new UsageDetails
                     {
@@ -148,20 +172,92 @@ internal sealed class OllamaChatClient : IChatClient
     private static string? KeepAlive(ChatOptions? options) =>
         options?.AdditionalProperties?.TryGetValue(GatewayOptionKeys.KeepAlive, out var k) == true ? Convert.ToString(k, CultureInfo.InvariantCulture) : null;
 
-    private static JsonObject ToJson(ChatMessage message)
+    /// <summary>The <c>tools</c> array for a request, or <see langword="null"/> when it declares none.</summary>
+    internal static JsonArray? ToolsNode(ChatOptions? options)
+    {
+        var tools = ToolJson.Declarations(options);
+        return tools.Count == 0
+            ? null
+            : new JsonArray(tools.Select(t => (JsonNode?)new JsonObject
+            {
+                ["type"] = "function",
+                ["function"] = new JsonObject
+                {
+                    ["name"] = t.Name,
+                    ["description"] = t.Description,
+                    ["parameters"] = ToolJson.Schema(t),
+                },
+            }).ToArray());
+    }
+
+    /// <summary>Reads one entry of <c>message.tool_calls</c>: <c>function.name</c> and <c>function.arguments</c> (an object, or JSON text from some servers).</summary>
+    private static FunctionCallContent ReadToolCall(JsonElement item, string responseId, int index, string providerName)
+    {
+        var function = item.TryGetProperty("function", out var f) && f.ValueKind == JsonValueKind.Object ? f : item;
+        var name = function.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() ?? string.Empty : string.Empty;
+        var id = item.TryGetProperty("id", out var i) && i.ValueKind == JsonValueKind.String && !string.IsNullOrEmpty(i.GetString())
+            ? i.GetString()!
+            : ToolJson.NewCallId(name, responseId, index);
+        Dictionary<string, object?> arguments;
+        string raw;
+        if (function.TryGetProperty("arguments", out var args) && args.ValueKind == JsonValueKind.Object)
+        {
+            arguments = ToolJson.ToArguments(args, name, providerName);
+            raw = args.GetRawText();
+        }
+        else
+        {
+            raw = args.ValueKind == JsonValueKind.String ? args.GetString() ?? string.Empty : string.Empty;
+            arguments = ToolJson.ParseArguments(raw, name, providerName);
+        }
+
+        return new FunctionCallContent(id, name, arguments) { RawRepresentation = raw };
+    }
+
+    /// <summary>The text of a message for the context estimate: its text plus the arguments and results it carries.</summary>
+    private static string MessageText(ChatMessage message) =>
+        string.Concat(message.Contents.Select(c => c switch
+        {
+            TextContent text => text.Text,
+            FunctionCallContent call => ToolJson.ArgumentsJson(call),
+            FunctionResultContent result => ToolJson.ResultText(result),
+            _ => string.Empty,
+        }));
+
+    /// <summary>Converts one message to its wire messages: one for text and tool calls, and one <c>tool</c> message per result.</summary>
+    private static IEnumerable<JsonObject> ToJson(ChatMessage message, IReadOnlyList<ChatMessage> conversation)
     {
         var role = message.Role == ChatRole.System ? "system"
             : message.Role == ChatRole.Assistant ? "assistant"
             : message.Role == ChatRole.Tool ? "tool"
             : "user";
-        var json = new JsonObject { ["role"] = role, ["content"] = message.Text };
+        var results = message.Contents.OfType<FunctionResultContent>().ToList();
+        var calls = message.Role == ChatRole.Assistant ? message.Contents.OfType<FunctionCallContent>().ToList() : [];
         var images = message.Contents.OfType<DataContent>().Where(d => d.HasTopLevelMediaType("image")).Select(d => (JsonNode?)Convert.ToBase64String(d.Data.Span)).ToArray();
-        if (images.Length > 0)
+
+        if (results.Count == 0 || !string.IsNullOrEmpty(message.Text) || images.Length > 0 || calls.Count > 0)
         {
-            json["images"] = new JsonArray(images);
+            var json = new JsonObject { ["role"] = results.Count > 0 && role == "tool" ? "user" : role, ["content"] = message.Text };
+            if (images.Length > 0)
+            {
+                json["images"] = new JsonArray(images);
+            }
+
+            if (calls.Count > 0)
+            {
+                json["tool_calls"] = new JsonArray(calls.Select(c => (JsonNode?)new JsonObject
+                {
+                    ["function"] = new JsonObject { ["name"] = c.Name, ["arguments"] = ToolJson.ArgumentsNode(c) },
+                }).ToArray());
+            }
+
+            yield return json;
         }
 
-        return json;
+        foreach (var result in results)
+        {
+            yield return new JsonObject { ["role"] = "tool", ["content"] = ToolJson.ResultText(result), ["tool_name"] = ToolJson.NameOfCall(conversation, result.CallId) ?? result.CallId };
+        }
     }
 
     private static long? ReadLong(JsonElement root, string name) =>
