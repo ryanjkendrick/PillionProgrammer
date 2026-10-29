@@ -9,8 +9,9 @@ namespace Pillion.Contracts;
 /// query in flight, 2 s per query, at most five a second. A query over the concurrency or rate limit fails fast with a
 /// <see cref="PillionRpcException"/> (<see cref="PillionErrorCode.Cancelled"/>, with a retry hint) instead of queueing; one
 /// that reaches 2 s is stopped (<see cref="CallersOfAsync"/> then returns what it found, marked truncated). The host falls
-/// back to the index's approximate edges. Contract 1.3 added <see cref="CallersOfAsync"/>; a 1.2 VSIX answers
-/// it with StreamJsonRpc's method-not-found error, which the host treats the same way.
+/// back to the index's approximate edges. Contract 1.3 added <see cref="CallersOfAsync"/>; contract 1.4 added
+/// <see cref="PlanRenameAsync"/> (work item 3.5). An older VSIX answers a newer method with StreamJsonRpc's method-not-found
+/// error, which the host treats the same way.
 /// </remarks>
 public interface IWorkspaceQueryService
 {
@@ -32,7 +33,10 @@ public interface IWorkspaceQueryService
     /// <returns>The symbol information.</returns>
     Task<SymbolResponse> GetSymbolAsync(SymbolRequest request, CancellationToken cancellationToken);
 
-    /// <summary>Renames a symbol across the solution.</summary>
+    /// <summary>
+    /// Renames a symbol across the solution, applying the change inside Visual Studio. The agent never calls it: it plans a
+    /// rename with <see cref="PlanRenameAsync"/> and applies the edits through its changeset.
+    /// </summary>
     /// <param name="request">The request.</param>
     /// <param name="cancellationToken">A token that cancels this call.</param>
     /// <returns>The result of the rename.</returns>
@@ -58,4 +62,14 @@ public interface IWorkspaceQueryService
     /// <param name="cancellationToken">A token that cancels this call.</param>
     /// <returns>The call sites found.</returns>
     Task<CallersOfResponse> CallersOfAsync(CallersOfRequest request, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Plans a symbol rename through Roslyn's renamer without touching a file: the edits per file, the sensitive paths among
+    /// them and the conflicts, for the agent's <c>rename_symbol</c> (work item 3.10), whose proposed edits join its changeset.
+    /// Same budgets as <see cref="CallersOfAsync"/>. Added in contract 1.4 (work item 3.5; implemented by 3.24).
+    /// </summary>
+    /// <param name="request">The symbol's location and its new name.</param>
+    /// <param name="cancellationToken">A token that cancels this call.</param>
+    /// <returns>The plan.</returns>
+    Task<RenamePlan> PlanRenameAsync(RenameSymbolRequest request, CancellationToken cancellationToken);
 }

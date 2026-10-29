@@ -18,7 +18,15 @@ internal static class DtoSamples
             RetryHint = "Remove some attached files.",
             Details = "tokens=140000",
         },
-        new HandshakeRequest { ContractMajor = 1, ContractMinor = 3, ClientProcessId = 4242, ProtocolToken = "token-abc" },
+        new HandshakeRequest
+        {
+            ContractMajor = 1,
+            ContractMinor = 4,
+            ClientProcessId = 4242,
+            ProtocolToken = "token-abc",
+            VisualStudioInstallationPath = @"C:\Program Files\Microsoft Visual Studio\2022\Enterprise",
+            VisualStudioVersion = "17.14.36221.1",
+        },
         new HandshakeResponse
         {
             ContractMajor = 1,
@@ -288,32 +296,162 @@ internal static class DtoSamples
         new ConversationDetail { Conversation = Summary(), Messages = [Message()], Pins = [Pin()] },
         new ConversationCreateRequest { Id = "conv-9", Title = "Order service", ModelId = "ollama/qwen2.5-coder:14b" },
         new DeleteAllConversationsResult { Conversations = 4, Messages = 40, Pins = 6, OutboundEntries = 120 },
-        new AgentSessionRequest { Goal = "Add a unit test.", Profile = Profile.Frontier, ModelId = "cloud/frontier" },
+        new AgentSessionRequest { Goal = "Add a unit test.", Profile = Profile.Frontier, ModelId = "cloud/frontier", ConversationId = "conv-1", Pins = [Pin()], ApprovalMode = AgentApprovalMode.EditsAuto },
         new ProviderTestResult { ProviderId = "openai", IsSuccess = true, Message = "Connected." },
         new FileEdit { Path = @"C:\src\Foo.cs", SearchText = "int x", ReplaceText = "long x" },
-        new Changeset
+        ChangesetSample(),
+        new ApplyResult
         {
-            Id = "cs-1",
-            Edits =
-            [
-                new FileEdit { Path = @"C:\src\Foo.cs", SearchText = "a", ReplaceText = "b" },
-                new FileEdit { Path = @"C:\src\Bar.cs", SearchText = "c", ReplaceText = "d" },
-            ],
-            Description = "Rename variables.",
+            ChangesetId = "cs-1",
+            IsSuccess = true,
+            FailedPaths = [@"C:\src\Bar.cs"],
+            Message = "One edit failed.",
+            Files = [new FileApplyOutcome { Path = @"C:\src\Foo.cs", Kind = FileChangeKind.Edit, IsApplied = true, PostApplyHash = Sha, Message = "Checked out." }],
+            RolledBack = true,
+            CheckpointId = "cp-1",
+            JournalId = "j-1",
         },
-        new ApplyResult { ChangesetId = "cs-1", IsSuccess = true, FailedPaths = [@"C:\src\Bar.cs"], Message = "One edit failed." },
-        new PreviewDecision { ChangesetId = "cs-1", IsAccepted = true },
+        Preview(),
         new OpenDocument { Path = @"C:\src\Foo.cs", LanguageId = "csharp", IsDirty = true, IsActive = true },
-        new ApprovalRequest
+        Approval(),
+        new ApprovalDecision { ApprovalId = "ap-1", IsApproved = true, Reason = "Looks safe.", RememberForSession = true, AddToAllowList = true, Preview = Preview() },
+        new FileCreate { Path = @"C:\src\New.cs", Content = "class New { }", ExpectedHash = Sha },
+        new FileDelete { Path = @"C:\src\Old.cs", ExpectedHash = Sha },
+        new FileRename { OldPath = @"C:\src\Old.cs", NewPath = @"C:\src\Renamed.cs" },
+        new ProjectItemChange { Kind = ProjectItemChangeKind.Rename, ProjectPath = @"C:\src\App.csproj", ItemPath = @"C:\src\Old.cs", NewItemPath = @"C:\src\Renamed.cs" },
+        new FileApplyOutcome { Path = @"C:\src\Renamed.cs", Kind = FileChangeKind.Rename, IsApplied = true, PostApplyHash = Sha, Message = "Renamed." },
+        new DocumentText { Path = @"C:\src\Foo.cs", IsOpen = true, IsDirty = true, Text = "class Foo { }", Hash = Sha },
+        new ApplyBeginRequest
         {
-            ApprovalId = "ap-1",
+            ChangesetId = "cs-1",
+            SessionId = "ses-1",
+            Files = [new ApplyFileSnapshot { Path = @"C:\src\Old.cs", Kind = FileChangeKind.Rename, PreEditText = "class Old { }", NewPath = @"C:\src\Renamed.cs" }],
+            Decision = Preview(),
+        },
+        new ApplyFileSnapshot { Path = @"C:\src\Foo.cs", Kind = FileChangeKind.Rename, PreEditText = "class Foo { }", NewPath = @"C:\src\Foo2.cs" },
+        new ApplyBeginResponse { CheckpointId = "cp-1", JournalId = "j-1" },
+        new ApplyCommitRequest { JournalId = "j-1", Files = [new ApplyFileHash { Path = @"C:\src\Foo.cs", PostApplyHash = Sha }] },
+        new ApplyFileHash { Path = @"C:\src\Foo.cs", PostApplyHash = Sha },
+        new ApplyJournalEntry
+        {
+            JournalId = "j-1",
+            CheckpointId = "cp-1",
+            ChangesetId = "cs-1",
+            SessionId = "ses-1",
+            Status = ApplyJournalStatus.Committed,
+            BeganUtc = new DateTime(2026, 10, 24, 10, 0, 0, DateTimeKind.Utc),
+            EndedUtc = new DateTime(2026, 10, 24, 10, 0, 1, DateTimeKind.Utc),
+            Files = [new ApplyJournalFile { Path = @"C:\src\Foo.cs", Kind = FileChangeKind.Edit, PreEditText = "class Foo { }", PostApplyHash = Sha, NewPath = @"C:\src\Foo2.cs" }],
+            Changeset = ChangesetSample(),
+            Decision = Preview(),
+        },
+        new ApplyJournalFile { Path = @"C:\src\Foo.cs", Kind = FileChangeKind.Create, PreEditText = "x", PostApplyHash = Sha, NewPath = @"C:\src\Foo2.cs" },
+        new TrustRequest
+        {
+            RepositoryRoot = @"C:\src",
+            PillionFolder = @"C:\src\.pillion",
+            ContentHash = Sha,
+            Files = [TrustFileSample()],
+            PreviouslyTrustedHash = OlderSha,
+            Reason = "An agent session wants the repository rules.",
+        },
+        TrustFileSample(),
+        new TrustDecision { RepositoryRoot = @"C:\src", ContentHash = Sha, IsTrusted = true, Remember = true },
+        new RenamePlan
+        {
+            IsSuccess = true,
+            SymbolName = "Pillion.Foo.Bar()",
+            Edits = [new FileEdit { Path = @"C:\src\Foo.cs", SearchText = "Bar(", ReplaceText = "Baz(" }],
+            SensitivePaths = [@"C:\src\FooTests.cs"],
+            Conflicts = [new RenameConflict { Location = Location(12), Message = "A member named Baz already exists." }],
+            Message = "One conflict.",
+            Truncated = true,
+        },
+        new RenameConflict { Location = Location(13), Message = "Ambiguous." },
+        new OpenDeveloperShellRequest { Shell = TerminalShell.PowerShell7, WorkingDirectory = @"C:\src", Columns = 120, Rows = 30 },
+        TerminalSample(),
+        new TerminalScreen
+        {
+            TerminalId = "term-1",
+            Sequence = 42,
+            Columns = 120,
+            Rows = 2,
+            Lines = ["PS C:\\src> dotnet build", "Build succeeded."],
+            CursorRow = 1,
+            CursorColumn = 16,
+            ScrollbackDelta = ["older line"],
+            ScrollbackTotal = 300,
+            IsWaitingForInput = true,
+            ExitCode = 1,
+            Title = "Developer PowerShell",
+        },
+        new BackgroundProcessInfo
+        {
+            BackgroundProcessId = "bg-1",
+            SessionId = "ses-1",
+            TerminalId = "term-2",
+            CommandLine = "dotnet run --project Web",
+            Status = BackgroundProcessStatus.Ready,
+            Port = 5000,
+            Url = "http://localhost:5000/",
+            ProcessId = 777,
+            StartedUtc = new DateTime(2026, 10, 24, 10, 5, 0, DateTimeKind.Utc),
+            ExitCode = 1,
+            Message = "Stopped at session end.",
+        },
+        new AgentSessionState
+        {
+            SessionId = "ses-1",
+            ConversationId = "conv-1",
+            Goal = "Add a unit test.",
+            Status = AgentSessionStatus.WaitingForApproval,
+            ApprovalMode = AgentApprovalMode.EditsAuto,
+            Steps = [Step()],
+            Constraints = ["Do not edit tests."],
+            Budgets = Budgets(),
+            PendingApproval = Approval(),
+            Changesets = [ChangesetSummary()],
+            StartedUtc = new DateTime(2026, 10, 24, 9, 0, 0, DateTimeKind.Utc),
+            UpdatedUtc = new DateTime(2026, 10, 24, 9, 10, 0, DateTimeKind.Utc),
+            Summary = "Waiting to run the tests.",
+            Error = new PillionError { Code = PillionErrorCode.BudgetExhausted, Message = "25 steps used." },
+            ModelId = "anthropic/claude-sonnet-4-5",
+        },
+        Step(),
+        Budgets(),
+        ChangesetSummary(),
+        new AgentToolCallRecord
+        {
+            ToolCallId = "tc-1",
+            SessionId = "ses-1",
+            Step = 3,
             ToolName = "run_command",
             Tier = PermissionTier.T2,
             ArgumentsSummary = "dotnet test",
-            Provenance = "agent step 3",
+            Provenance = ProvenanceKind.ToolOutput,
+            ProvenanceDetail = "read_file C:\\src\\README.md",
             TaintReason = "Arguments include text from a web page.",
+            Status = AgentToolCallStatus.Succeeded,
+            ResultSummary = "Passed 10, failed 0.",
+            DurationMs = 4200,
+            StartedUtc = new DateTime(2026, 10, 24, 9, 5, 0, DateTimeKind.Utc),
+            ApprovalId = "ap-1",
+            IsAutomatic = true,
         },
-        new ApprovalDecision { ApprovalId = "ap-1", IsApproved = true, Reason = "Looks safe." },
+        new AgentSessionSummary
+        {
+            SessionId = "ses-1",
+            ConversationId = "conv-1",
+            Goal = "Add a unit test.",
+            Status = AgentSessionStatus.Completed,
+            ApprovalMode = AgentApprovalMode.EditsAuto,
+            StartedUtc = new DateTime(2026, 10, 24, 9, 0, 0, DateTimeKind.Utc),
+            UpdatedUtc = new DateTime(2026, 10, 24, 9, 10, 0, DateTimeKind.Utc),
+            ChangesetCount = 2,
+        },
+        new AgentSessionListRequest { ConversationId = "conv-1", IncludeFinished = true, Limit = 10 },
+        new AgentMessageRequest { SessionId = "ses-1", Message = "Also cover the null case.", Pins = [Pin()] },
+        new AgentChangesetReady { SessionId = "ses-1", Changeset = ChangesetSample(), ApprovalId = "ap-1", StepIndex = 2 },
         Location(7),
         new FindReferencesRequest { Location = Location(1) },
         new FindReferencesResponse { References = [Location(2), Location(3)] },
@@ -336,6 +474,92 @@ internal static class DtoSamples
         Caller(),
         new CallersOfResponse { IsFound = true, Callers = [Caller()], Truncated = true },
     ];
+
+    /// <summary>A lower-case hexadecimal SHA-256, the form every hash on the contract takes.</summary>
+    private const string Sha = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+
+    private const string OlderSha = "0f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+
+    private static Changeset ChangesetSample() => new()
+    {
+        Id = "cs-1",
+        Edits =
+        [
+            new FileEdit { Path = @"C:\src\Foo.cs", SearchText = "a", ReplaceText = "b" },
+            new FileEdit { Path = @"C:\src\Bar.cs", SearchText = "c", ReplaceText = "d" },
+        ],
+        Description = "Rename variables.",
+        Creates = [new FileCreate { Path = @"C:\src\New.cs", Content = "class New { }", ExpectedHash = Sha }],
+        Deletes = [new FileDelete { Path = @"C:\src\Old.cs", ExpectedHash = Sha }],
+        Renames = [new FileRename { OldPath = @"C:\src\A.cs", NewPath = @"C:\src\B.cs" }],
+        ProjectItemChanges = [new ProjectItemChange { Kind = ProjectItemChangeKind.Add, ProjectPath = @"C:\src\App.csproj", ItemPath = @"C:\src\New.cs", NewItemPath = @"C:\src\New2.cs" }],
+        SensitivePaths = [@"C:\src\App.csproj"],
+        RevertsChangesetId = "cs-0",
+    };
+
+    private static PreviewDecision Preview() => new()
+    {
+        ChangesetId = "cs-1",
+        IsAccepted = true,
+        AcceptedEditIndices = [0],
+        AcceptedCreateIndices = [0],
+        AcceptedDeleteIndices = [0],
+        AcceptedRenameIndices = [0],
+    };
+
+    private static ApprovalRequest Approval() => new()
+    {
+        ApprovalId = "ap-1",
+        ToolName = "run_command",
+        Tier = PermissionTier.T2,
+        ArgumentsSummary = "dotnet test",
+        Provenance = "agent step 3",
+        TaintReason = "Arguments include text from a web page.",
+        SessionId = "ses-1",
+        ToolCallId = "tc-1",
+        ProvenanceKind = ProvenanceKind.WebPage,
+        ChangesetId = "cs-1",
+        RequestedUtc = new DateTime(2026, 10, 24, 9, 4, 0, DateTimeKind.Utc),
+    };
+
+    private static TrustFile TrustFileSample() => new() { RelativePath = "rules.md", Content = "# Rules", SizeBytes = 7, IsTruncated = true };
+
+    private static TerminalInfo TerminalSample() => new()
+    {
+        TerminalId = "term-1",
+        SessionId = "ses-1",
+        Title = "dotnet build",
+        Shell = TerminalShell.Cmd,
+        Columns = 120,
+        Rows = 30,
+        ProcessId = 4321,
+        IsRunning = true,
+        BackgroundProcessId = "bg-1",
+        OpenedUtc = new DateTime(2026, 10, 24, 10, 0, 0, DateTimeKind.Utc),
+    };
+
+    private static AgentPlanStep Step() => new()
+    {
+        Title = "Add the test.",
+        Status = PlanStepStatus.InProgress,
+        Paths = [@"C:\src\FooTests.cs"],
+        SensitivePaths = [@"C:\src\FooTests.cs"],
+        Note = "Test files need approval.",
+    };
+
+    private static AgentBudgetUsage Budgets() => new() { Steps = 3, MaxSteps = 25, Tokens = 12000, MaxTokens = 400000, Cost = 0.12, MaxCost = 2.0, WallSeconds = 95.5, MaxWallSeconds = 3600 };
+
+    private static AgentChangesetSummary ChangesetSummary() => new()
+    {
+        ChangesetId = "cs-1",
+        Description = "Rename variables.",
+        FileCount = 5,
+        IsApplied = true,
+        IsReverted = true,
+        CheckpointId = "cp-1",
+        JournalId = "j-1",
+        AppliedUtc = new DateTime(2026, 10, 24, 9, 6, 0, DateTimeKind.Utc),
+    };
 
     private static Citation Cite(int replyOffset) => new()
     {
