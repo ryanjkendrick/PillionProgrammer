@@ -12,7 +12,7 @@ using Pillion.CommandRunner.Terminal;
 namespace Pillion.CommandRunner;
 
 /// <summary>The <see cref="ICommandSession"/> implementation; created by <see cref="CommandRunner"/>.</summary>
-internal sealed class CommandSession : ICommandSession
+internal sealed partial class CommandSession : ICommandSession
 {
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(5) };
 
@@ -20,7 +20,7 @@ internal sealed class CommandSession : ICommandSession
     private readonly TimeProvider _time;
     private readonly ResolvedShell _shell;
     private readonly JobObject _job;
-    private readonly TerminalScreen _terminal;
+    private readonly TerminalBuffer _terminal;
     private readonly Dictionary<string, string> _environment;
     private readonly List<string> _warnings;
     private readonly SemaphoreSlim _runGate = new(1, 1);
@@ -75,7 +75,7 @@ internal sealed class CommandSession : ICommandSession
         }
 
         Apply(_environment, options.Environment);
-        _terminal = new TerminalScreen(options.Columns, options.Rows, options.ScrollbackLines, RespondToTerminalQuery, _time);
+        _terminal = new TerminalBuffer(options.Columns, options.Rows, options.ScrollbackLines, RespondToTerminalQuery, _time);
         _job = JobObject.Create();
     }
 
@@ -110,7 +110,10 @@ internal sealed class CommandSession : ICommandSession
     public bool IsRunning => Volatile.Read(ref _current) is not null;
 
     /// <inheritdoc/>
-    public IReadOnlyList<BackgroundProcessInfo> BackgroundProcesses
+    public int? CurrentProcessId => Volatile.Read(ref _current)?.Process.ProcessId;
+
+    /// <inheritdoc/>
+    public IReadOnlyList<BackgroundProcessSnapshot> BackgroundProcesses
     {
         get
         {
@@ -177,12 +180,12 @@ internal sealed class CommandSession : ICommandSession
         }
         catch (Win32Exception exception)
         {
-            _logger.LogDebug(exception, "ResizePseudoConsole failed; the command has probably exited");
+            LogResizeFailed(_logger, exception);
         }
     }
 
     /// <inheritdoc/>
-    public async Task<BackgroundProcessInfo> StartBackgroundProcessAsync(BackgroundProcessOptions options, CancellationToken cancellationToken = default)
+    public async Task<BackgroundProcessSnapshot> StartBackgroundProcessAsync(BackgroundProcessOptions options, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -204,8 +207,8 @@ internal sealed class CommandSession : ICommandSession
         var scriptPath = WriteScript($"background-{number}", options.Command);
         var commandLine = ShellLocator.CommandLine(_shell, scriptPath);
 
-        var terminal = new TerminalScreen(Options.Columns, Options.Rows, Options.BackgroundScrollbackLines, null, _time);
-        terminal.Write($"> {options.Command}\r\n".AsSpan());
+        var terminal = new TerminalBuffer(Options.Columns, Options.Rows, Options.BackgroundScrollbackLines, null, _time);
+        terminal.BeginRun($"> {options.Command}");
         var started = Start(commandLine, workingDirectory, environment, terminal);
         var process = new BackgroundProcess(id, options, _time.GetUtcNow(), terminal, started.Console, started.Process, started.Job);
         process.Pump = StartPump(started.Console, terminal);
@@ -215,7 +218,7 @@ internal sealed class CommandSession : ICommandSession
         }
 
         _ = WatchBackgroundExitAsync(process);
-        _logger.LogInformation("Background process {Id} started (pid {Pid}): {Command}", id, started.Process.ProcessId, options.Command);
+        LogBackgroundStarted(_logger, id, started.Process.ProcessId, options.Command);
 
         try
         {
@@ -223,11 +226,11 @@ internal sealed class CommandSession : ICommandSession
             if (failure is null)
             {
                 process.MarkReady();
-                _logger.LogInformation("Background process {Id} is ready", id);
+                LogBackgroundReady(_logger, id);
             }
             else if (process.State == BackgroundProcessState.Starting)
             {
-                _logger.LogWarning("Background process {Id} failed readiness: {Failure}", id, failure);
+                LogBackgroundNotReady(_logger, id, failure);
                 await StopAsync(process, failure).ConfigureAwait(false);
             }
         }
@@ -298,7 +301,7 @@ internal sealed class CommandSession : ICommandSession
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                _logger.LogDebug(exception, "The log folder {Path} could not be deleted", LogDirectory);
+                LogLogFolderKept(_logger, exception, LogDirectory);
             }
         }
     }
@@ -341,8 +344,7 @@ internal sealed class CommandSession : ICommandSession
         var commandLine = ShellLocator.CommandLine(_shell, scriptPath);
         var timeout = options.Timeout ?? Options.Timeout;
 
-        var mark = _terminal.BeginRun();
-        _terminal.Write($"> {command}\r\n".AsSpan());
+        var mark = _terminal.BeginRun($"> {command}");
 
         var started = Start(commandLine, workingDirectory, environment, _terminal);
         var run = new ActiveRun(command, started.Console, started.Process, started.Job);
@@ -351,7 +353,7 @@ internal sealed class CommandSession : ICommandSession
         using var promptStop = new CancellationTokenSource();
         var promptWatcher = WatchPromptAsync(run, promptStop.Token);
         var watch = Stopwatch.StartNew();
-        _logger.LogInformation("Run {Number} started (pid {Pid}, timeout {Timeout}): {Command}", number, started.Process.ProcessId, timeout, command);
+        LogRunStarted(_logger, number, started.Process.ProcessId, timeout, command);
 
         var outcome = CommandOutcome.Completed;
         var exitCode = -1;
@@ -373,7 +375,7 @@ internal sealed class CommandSession : ICommandSession
                 var killed = KillTree(started.Process, started.Job);
                 cancelled = cancellationToken.IsCancellationRequested;
                 outcome = cancelled ? CommandOutcome.Completed : CommandOutcome.TimedOut;
-                _logger.LogInformation("Run {Number} {Reason} after {Elapsed} ms; process tree killed: {Killed}", number, cancelled ? "cancelled" : "timed out", watch.ElapsedMilliseconds, killed);
+                LogRunKilled(_logger, number, cancelled ? "cancelled" : "timed out", watch.ElapsedMilliseconds, killed);
                 if (!killed)
                 {
                     _warnings.Add($"Run {number}: the process tree did not die within {Options.KillTimeout.TotalSeconds:0.#} s of the kill.");
@@ -396,9 +398,10 @@ internal sealed class CommandSession : ICommandSession
             throw new OperationCanceledException("The command was cancelled and its process tree killed.", cancellationToken);
         }
 
+        var end = Math.Max(mark + 1, _terminal.UsedEndIndex);
         var lines = _terminal.GetLinesToEnd(mark);
         var view = ModelView.Build(lines, options.ModelViewByteCap ?? Options.ModelViewByteCap);
-        _logger.LogInformation("Run {Number} {Outcome} with exit code {ExitCode} in {Elapsed} ms; {Lines} lines, {Bytes} bytes to the model", number, outcome, exitCode, watch.ElapsedMilliseconds, lines.Count, view.ByteCount);
+        LogRunCompleted(_logger, number, outcome, exitCode, watch.ElapsedMilliseconds, lines.Count, view.ByteCount);
         return new CommandResult(
             command,
             commandLine,
@@ -406,13 +409,13 @@ internal sealed class CommandSession : ICommandSession
             exitCode,
             watch.Elapsed,
             view,
-            new TerminalRange(mark, mark + lines.Count),
+            new TerminalRange(mark, end),
             binaryLogPath,
             trxPath,
             [.. _warnings]);
     }
 
-    private (PseudoConsole Console, ChildProcess Process, JobObject Job) Start(string commandLine, string workingDirectory, IReadOnlyDictionary<string, string> environment, TerminalScreen terminal)
+    private (PseudoConsole Console, ChildProcess Process, JobObject Job) Start(string commandLine, string workingDirectory, IReadOnlyDictionary<string, string> environment, TerminalBuffer terminal)
     {
         var console = PseudoConsole.Create(terminal.Columns, terminal.Rows);
         ChildProcess? process = null;
@@ -452,7 +455,7 @@ internal sealed class CommandSession : ICommandSession
         return process.WaitForExit(Options.KillTimeout);
     }
 
-    private static Task StartPump(PseudoConsole console, TerminalScreen terminal)
+    private static Task StartPump(PseudoConsole console, TerminalBuffer terminal)
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
@@ -488,21 +491,7 @@ internal sealed class CommandSession : ICommandSession
         return completion.Task;
     }
 
-    private static async Task FinishPumpAsync(PseudoConsole console, Task pump)
-    {
-        // Closing the pseudo-console gives the pump its end of stream once the pending output is drained.
-        console.Close();
-        try
-        {
-            await pump.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-        }
-        catch (TimeoutException)
-        {
-            // Closing the output stream unblocks the reader.
-        }
-
-        console.Dispose();
-    }
+    private Task FinishPumpAsync(PseudoConsole console, Task pump) => OutputDrain.FinishAsync(console, _terminal, pump);
 
     private async Task WatchPromptAsync(ActiveRun run, CancellationToken cancellationToken)
     {
@@ -595,7 +584,7 @@ internal sealed class CommandSession : ICommandSession
         {
             var exitCode = await process.Process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
             process.MarkExited(exitCode);
-            _logger.LogInformation("Background process {Id} exited with {ExitCode}", process.Id, exitCode);
+            LogBackgroundExited(_logger, process.Id, exitCode);
             await process.CloseAsync().ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is ObjectDisposedException or Win32Exception or InvalidOperationException)
@@ -685,13 +674,44 @@ internal sealed class CommandSession : ICommandSession
         var alreadyDown = process.State is BackgroundProcessState.Exited or BackgroundProcessState.Failed or BackgroundProcessState.Stopped;
         if (!alreadyDown)
         {
-            var killed = process.Kill(Options.KillTimeout);
+            // Marked before the kill, so the exit watcher does not record the kill as an exit before it was ready.
             process.MarkStopped(failure);
-            _logger.LogInformation("Background process {Id} stopped; process tree killed: {Killed}", process.Id, killed);
+            var killed = process.Kill(Options.KillTimeout);
+            LogBackgroundStopped(_logger, process.Id, killed);
         }
 
         await process.CloseAsync().ConfigureAwait(false);
     }
+
+    [LoggerMessage(EventId = 3110, Level = LogLevel.Information, Message = "Run {Number} started (pid {Pid}, timeout {Timeout}): {Command}")]
+    private static partial void LogRunStarted(ILogger logger, int number, int pid, TimeSpan timeout, string command);
+
+    [LoggerMessage(EventId = 3111, Level = LogLevel.Information, Message = "Run {Number} {Reason} after {Elapsed} ms; process tree killed: {Killed}.")]
+    private static partial void LogRunKilled(ILogger logger, int number, string reason, long elapsed, bool killed);
+
+    [LoggerMessage(EventId = 3112, Level = LogLevel.Information, Message = "Run {Number} {Outcome} with exit code {ExitCode} in {Elapsed} ms; {Lines} lines, {Bytes} bytes to the model.")]
+    private static partial void LogRunCompleted(ILogger logger, int number, CommandOutcome outcome, int exitCode, long elapsed, int lines, int bytes);
+
+    [LoggerMessage(EventId = 3113, Level = LogLevel.Debug, Message = "ResizePseudoConsole failed; the command has probably exited.")]
+    private static partial void LogResizeFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(EventId = 3114, Level = LogLevel.Debug, Message = "The log folder {Path} could not be deleted.")]
+    private static partial void LogLogFolderKept(ILogger logger, Exception exception, string path);
+
+    [LoggerMessage(EventId = 3120, Level = LogLevel.Information, Message = "Background process {Id} started (pid {Pid}): {Command}")]
+    private static partial void LogBackgroundStarted(ILogger logger, string id, int pid, string command);
+
+    [LoggerMessage(EventId = 3121, Level = LogLevel.Information, Message = "Background process {Id} is ready.")]
+    private static partial void LogBackgroundReady(ILogger logger, string id);
+
+    [LoggerMessage(EventId = 3122, Level = LogLevel.Warning, Message = "Background process {Id} failed readiness: {Failure}")]
+    private static partial void LogBackgroundNotReady(ILogger logger, string id, string failure);
+
+    [LoggerMessage(EventId = 3123, Level = LogLevel.Information, Message = "Background process {Id} exited with {ExitCode}.")]
+    private static partial void LogBackgroundExited(ILogger logger, string id, int exitCode);
+
+    [LoggerMessage(EventId = 3124, Level = LogLevel.Information, Message = "Background process {Id} stopped; process tree killed: {Killed}.")]
+    private static partial void LogBackgroundStopped(ILogger logger, string id, bool killed);
 
     /// <summary>The command running now.</summary>
     private sealed record ActiveRun(string Command, PseudoConsole Console, ChildProcess Process, JobObject Job);

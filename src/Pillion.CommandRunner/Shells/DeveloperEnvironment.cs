@@ -123,7 +123,7 @@ public static partial class DeveloperEnvironment
         if (process.ExitCode != 0)
         {
             var detail = FirstLine(error) ?? FirstLine(output) ?? "no output";
-            logger.LogWarning("VsDevCmd.bat exited with {ExitCode} after {Elapsed} ms: {Detail}", process.ExitCode, watch.ElapsedMilliseconds, detail);
+            LogScriptFailed(logger, process.ExitCode, watch.ElapsedMilliseconds, detail);
             return new DeveloperEnvironmentResult(null, $"VsDevCmd.bat exited with {process.ExitCode} ({detail}); commands run with the plain environment.");
         }
 
@@ -134,7 +134,7 @@ public static partial class DeveloperEnvironment
             return new DeveloperEnvironmentResult(null, "VsDevCmd.bat ran but set no VSINSTALLDIR; commands run with the plain environment.");
         }
 
-        logger.LogInformation("Loaded the Developer PowerShell environment of {Path} ({Count} variables) in {Elapsed} ms", installationPath, environment.Count, watch.ElapsedMilliseconds);
+        LogLoaded(logger, installationPath, environment.Count, watch.ElapsedMilliseconds);
         return new DeveloperEnvironmentResult(environment, null);
     }
 
@@ -158,6 +158,12 @@ public static partial class DeveloperEnvironment
 
         return result;
     }
+
+    [LoggerMessage(EventId = 3130, Level = LogLevel.Warning, Message = "VsDevCmd.bat exited with {ExitCode} after {Elapsed} ms: {Detail}")]
+    private static partial void LogScriptFailed(ILogger logger, int exitCode, long elapsed, string detail);
+
+    [LoggerMessage(EventId = 3131, Level = LogLevel.Information, Message = "Loaded the Developer PowerShell environment of {Path} ({Count} variables) in {Elapsed} ms.")]
+    private static partial void LogLoaded(ILogger logger, string path, int count, long elapsed);
 
     private static string? FirstLine(string text)
     {
@@ -209,11 +215,11 @@ public sealed class DeveloperEnvironmentCache
     {
         if (string.IsNullOrWhiteSpace(installationPath))
         {
-            return await DeveloperEnvironment.CaptureAsync(installationPath, cancellationToken, logger: _logger).ConfigureAwait(false);
+            return await DeveloperEnvironment.CaptureAsync(installationPath, logger: _logger, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
 
         var key = Path.TrimEndingDirectorySeparator(installationPath);
-        var lazy = _cache.GetOrAdd(key, k => new Lazy<Task<DeveloperEnvironmentResult>>(() => DeveloperEnvironment.CaptureAsync(k, CancellationToken.None, logger: _logger)));
+        var lazy = _cache.GetOrAdd(key, k => new Lazy<Task<DeveloperEnvironmentResult>>(() => DeveloperEnvironment.CaptureAsync(k, logger: _logger)));
         var result = await lazy.Value.WaitAsync(cancellationToken).ConfigureAwait(false);
         if (!result.Loaded)
         {

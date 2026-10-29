@@ -214,6 +214,8 @@ internal sealed class VtParser
     {
         _state = State.Escape;
         _parameterCount = 0;
+        _parameters[0] = 0;
+        _subParameter[0] = false;
         _privateMarker = '\0';
         _intermediate = '\0';
         _intermediateCount = 0;

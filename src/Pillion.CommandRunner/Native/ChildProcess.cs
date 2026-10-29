@@ -90,6 +90,11 @@ internal sealed class ChildProcess : IDisposable
                     lpAttributeList = attributes,
                 };
 
+                // Without this a parent whose standard handles are redirected (the host under devenv.exe, a test host) would
+                // hand copies of them to the child, whose output would then bypass the pseudo-console; with it and no handles
+                // given, the child gets the pseudo-console as its standard input, output and error.
+                startup.StartupInfo.dwFlags = NativeMethods.STARTF_USESTDHANDLES;
+
                 // CreateProcessW may write into the command line buffer, so it gets a mutable copy.
                 var commandBuffer = (commandLine + '\0').ToCharArray();
                 var environmentBlock = environment is null ? null : BuildEnvironmentBlock(environment);

@@ -11,6 +11,7 @@ internal static unsafe partial class NativeMethods
     public const uint CREATE_UNICODE_ENVIRONMENT = 0x0000_0400;
     public const uint CREATE_SUSPENDED = 0x0000_0004;
     public const uint CREATE_NO_WINDOW = 0x0800_0000;
+    public const uint STARTF_USESTDHANDLES = 0x0000_0100;
     public const uint STILL_ACTIVE = 259;
     public const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x0000_2000;
     public const int JobObjectExtendedLimitInformation = 9;

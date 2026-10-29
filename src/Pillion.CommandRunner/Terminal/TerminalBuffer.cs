@@ -7,7 +7,7 @@ namespace Pillion.CommandRunner.Terminal;
 /// through the <see cref="VtParser"/> into the <see cref="ScreenBuffer"/>, and exposes the result as an
 /// <see cref="ITerminalBuffer"/>. Every public member takes the buffer lock.
 /// </summary>
-internal sealed class TerminalScreen : ITerminalBuffer
+internal sealed class TerminalBuffer : ITerminalBuffer
 {
     private readonly object _gate = new();
     private readonly ScreenBuffer _buffer;
@@ -18,13 +18,16 @@ internal sealed class TerminalScreen : ITerminalBuffer
     private long _generation;
     private DateTimeOffset? _lastChangedAt;
 
-    /// <summary>Initializes a new instance of the <see cref="TerminalScreen"/> class.</summary>
+    /// <summary>Gets or sets a sink that receives every raw chunk before it is parsed (the fixture recorder in the tests).</summary>
+    internal Action<ReadOnlyMemory<byte>>? RawSink { get; set; }
+
+    /// <summary>Initializes a new instance of the <see cref="TerminalBuffer"/> class.</summary>
     /// <param name="columns">The screen width.</param>
     /// <param name="rows">The screen height.</param>
     /// <param name="scrollbackLimit">The number of scrollback lines kept.</param>
     /// <param name="respond">Writes a reply to the application for terminal queries; may be <see langword="null"/>.</param>
     /// <param name="time">The clock for <see cref="LastChangedAt"/>.</param>
-    public TerminalScreen(int columns, int rows, int scrollbackLimit, Action<string>? respond = null, TimeProvider? time = null)
+    public TerminalBuffer(int columns, int rows, int scrollbackLimit, Action<string>? respond = null, TimeProvider? time = null)
     {
         _buffer = new ScreenBuffer(columns, rows, scrollbackLimit);
         _parser = new VtParser(_buffer, respond);
@@ -88,6 +91,18 @@ internal sealed class TerminalScreen : ITerminalBuffer
         }
     }
 
+    /// <summary>Gets the history index one past the last used screen row (blank rows at the bottom excluded).</summary>
+    public long UsedEndIndex
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _buffer.ScrolledLineCount + _buffer.LastUsedRow + 1;
+            }
+        }
+    }
+
     /// <inheritdoc/>
     public long OldestLineIndex
     {
@@ -145,6 +160,7 @@ internal sealed class TerminalScreen : ITerminalBuffer
             return;
         }
 
+        RawSink?.Invoke(bytes.ToArray());
         lock (_gate)
         {
             var needed = _decoder.GetCharCount(bytes, flush: false);
@@ -174,14 +190,20 @@ internal sealed class TerminalScreen : ITerminalBuffer
         Changed?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>Moves the screen into the scrollback and clears it, so the next output starts at the returned history index.</summary>
-    /// <returns>The history index of the next line of output.</returns>
-    public long BeginRun()
+    /// <summary>
+    /// Moves the screen into the scrollback, appends a header line (the command about to run) to the history and leaves a
+    /// clear screen for the output, which the pseudo-console starts at the top left.
+    /// </summary>
+    /// <param name="header">The header line.</param>
+    /// <returns>The history index of the header; the output follows it.</returns>
+    public long BeginRun(string header)
     {
+        ArgumentNullException.ThrowIfNull(header);
         long mark;
         lock (_gate)
         {
-            mark = _buffer.FlushToScrollback();
+            _buffer.FlushToScrollback();
+            mark = _buffer.AppendHistoryLine(new TerminalLine(header, []));
             MarkChanged();
         }
 

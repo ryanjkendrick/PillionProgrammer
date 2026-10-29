@@ -108,7 +108,7 @@ public enum BackgroundProcessState
     /// <summary>It was stopped by <see cref="ICommandSession.StopBackgroundProcessAsync"/> or at the end of the session.</summary>
     Stopped,
 
-    /// <summary>It exited before it was ready, or readiness timed out and it was stopped. See <see cref="BackgroundProcessInfo.Failure"/>.</summary>
+    /// <summary>It exited before it was ready, or readiness timed out and it was stopped. See <see cref="BackgroundProcessSnapshot.Failure"/>.</summary>
     Failed,
 }
 
@@ -123,7 +123,7 @@ public enum BackgroundProcessState
 /// <param name="ExitCode">The exit code once it has exited.</param>
 /// <param name="Failure">Why it is <see cref="BackgroundProcessState.Failed"/>.</param>
 /// <param name="Output">Its own terminal buffer (full, unredacted).</param>
-public sealed record BackgroundProcessInfo(
+public sealed record BackgroundProcessSnapshot(
     string Id,
     int ProcessId,
     string Command,

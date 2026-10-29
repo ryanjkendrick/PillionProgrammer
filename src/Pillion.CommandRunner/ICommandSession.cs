@@ -40,8 +40,11 @@ public interface ICommandSession : IAsyncDisposable
     /// <summary>Gets a value indicating whether a command is running.</summary>
     bool IsRunning { get; }
 
+    /// <summary>Gets the process id of the shell running the current command, or <see langword="null"/> when none runs (the Terminal window's <c>TerminalInfo.ProcessId</c>).</summary>
+    int? CurrentProcessId { get; }
+
     /// <summary>Gets the background processes started in this session, in start order, with their current state.</summary>
-    IReadOnlyList<BackgroundProcessInfo> BackgroundProcesses { get; }
+    IReadOnlyList<BackgroundProcessSnapshot> BackgroundProcesses { get; }
 
     /// <summary>
     /// Runs a command in the session's shell on the pseudo-console and waits for it to exit, the timeout or the token.
@@ -74,10 +77,10 @@ public interface ICommandSession : IAsyncDisposable
     /// <param name="options">The command and the readiness checks.</param>
     /// <param name="cancellationToken">A cancel stops the process.</param>
     /// <returns>The process as <see cref="BackgroundProcessState.Ready"/>, or <see cref="BackgroundProcessState.Failed"/> with the reason and its output when it exited first or was not ready in time (it is stopped then).</returns>
-    Task<BackgroundProcessInfo> StartBackgroundProcessAsync(BackgroundProcessOptions options, CancellationToken cancellationToken = default);
+    Task<BackgroundProcessSnapshot> StartBackgroundProcessAsync(BackgroundProcessOptions options, CancellationToken cancellationToken = default);
 
     /// <summary>Stops a background process (its whole tree) and waits for it to die.</summary>
-    /// <param name="id">The id from <see cref="BackgroundProcessInfo.Id"/>.</param>
+    /// <param name="id">The id from <see cref="BackgroundProcessSnapshot.Id"/>.</param>
     /// <param name="cancellationToken">Cancels the wait, not the kill.</param>
     /// <returns><see langword="true"/> when the process existed and is now stopped; <see langword="false"/> for an unknown id.</returns>
     Task<bool> StopBackgroundProcessAsync(string id, CancellationToken cancellationToken = default);

@@ -4,7 +4,7 @@ namespace Pillion.CommandRunner.Terminal;
 
 /// <summary>
 /// The screen of a terminal: a grid of cells with a cursor, a scroll region, an alternate screen and a bounded
-/// scrollback. The <see cref="VtParser"/> drives it; <see cref="TerminalScreen"/> wraps both behind a lock. Not
+/// scrollback. The <see cref="VtParser"/> drives it; <see cref="TerminalBuffer"/> wraps both behind a lock. Not
 /// thread-safe on its own.
 /// </summary>
 /// <remarks>
@@ -276,6 +276,18 @@ internal sealed class ScreenBuffer
     public void EraseInDisplay(int mode)
     {
         _wrapPending = false;
+        if (mode is 2 or 3 && !AlternateScreen)
+        {
+            // A full erase on the main screen (cls, a logger starting over) keeps the erased lines as history rather than
+            // losing them: the scrollback is Pillion's record of the run, not the application's.
+            var last = LastUsedRow;
+            for (var row = 0; row <= last; row++)
+            {
+                PushScrollback(RenderRow(_rows[row]));
+                ScrolledLineCount++;
+            }
+        }
+
         switch (mode)
         {
             case 0:
@@ -485,6 +497,16 @@ internal sealed class ScreenBuffer
         _wrapPending = false;
         SetCursorPosition(0, 0);
         return ScrolledLineCount;
+    }
+
+    /// <summary>Appends a line of Pillion's own (a command header) to the history above the screen, which must be clear.</summary>
+    /// <param name="line">The line.</param>
+    /// <returns>Its history index.</returns>
+    public long AppendHistoryLine(TerminalLine line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+        PushScrollback(line);
+        return ScrolledLineCount++;
     }
 
     /// <summary>

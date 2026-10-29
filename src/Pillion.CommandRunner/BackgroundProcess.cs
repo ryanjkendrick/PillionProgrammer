@@ -20,7 +20,7 @@ internal sealed class BackgroundProcess : IDisposable
     /// <param name="console">Its pseudo-console.</param>
     /// <param name="process">The shell process.</param>
     /// <param name="job">Its own kill-on-close job, nested in the session's.</param>
-    public BackgroundProcess(string id, BackgroundProcessOptions options, DateTimeOffset startedAt, TerminalScreen terminal, PseudoConsole console, ChildProcess process, JobObject job)
+    public BackgroundProcess(string id, BackgroundProcessOptions options, DateTimeOffset startedAt, TerminalBuffer terminal, PseudoConsole console, ChildProcess process, JobObject job)
     {
         Id = id;
         Options = options;
@@ -41,7 +41,7 @@ internal sealed class BackgroundProcess : IDisposable
     public DateTimeOffset StartedAt { get; }
 
     /// <summary>Gets its buffer.</summary>
-    public TerminalScreen Terminal { get; }
+    public TerminalBuffer Terminal { get; }
 
     /// <summary>Gets its pseudo-console.</summary>
     public PseudoConsole Console { get; }
@@ -69,11 +69,11 @@ internal sealed class BackgroundProcess : IDisposable
 
     /// <summary>Takes a snapshot for the caller.</summary>
     /// <returns>The info.</returns>
-    public BackgroundProcessInfo Info()
+    public BackgroundProcessSnapshot Info()
     {
         lock (_gate)
         {
-            return new BackgroundProcessInfo(Id, Process.ProcessId, Options.Command, Options.Port, Options.HealthUrl, _state, StartedAt, _exitCode, _failure, Terminal);
+            return new BackgroundProcessSnapshot(Id, Process.ProcessId, Options.Command, Options.Port, Options.HealthUrl, _state, StartedAt, _exitCode, _failure, Terminal);
         }
     }
 
@@ -142,16 +142,12 @@ internal sealed class BackgroundProcess : IDisposable
     /// <returns>A task that completes when the output pump has finished.</returns>
     public async Task CloseAsync()
     {
-        Console.Close();
-        try
+        if (_disposed)
         {
-            await Pump.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-        }
-        catch (TimeoutException)
-        {
-            // The pump did not see the end of stream; closing the stream unblocks it.
+            return;
         }
 
+        await OutputDrain.FinishAsync(Console, Terminal, Pump).ConfigureAwait(false);
         Dispose();
     }
 
