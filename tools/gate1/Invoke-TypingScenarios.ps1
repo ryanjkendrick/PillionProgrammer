@@ -90,6 +90,11 @@ try {
     Write-PillionSettings -Settings $settings
     Write-Gate0Log 'settings.json written for the run (restored at the end).'
 
+    # An idle GPU first (as the gate's live tests have it): a third model left resident by an earlier session can push the
+    # typing pass's model to the CPU, which the first run of this script found (the 1.5B with 0 MB of VRAM, no suggestion in a pass).
+    $unloaded = @(Clear-OllamaResidentModels -Endpoint $OllamaEndpoint)
+    Write-Gate0Log "Ollama models unloaded before the run: $(if ($unloaded.Count -gt 0) { $unloaded -join ', ' } else { 'none were resident' })"
+
     $envVars = @{ PILLION_METRICS_WINDOW_SECONDS = "$MetricsWindowSec"; PILLION_GATE_PROVIDER = $ProviderId; PILLION_GATE_STRONG_MODEL = $StrongModel; PILLION_GATE_FAST_MODEL = $FastModel }
     $result = Invoke-GateIdeRun -RepoRoot $repo -VisualStudio $vs -RunDir $runDir -ScenarioEnvironment $envVars -TestCaseFilter $TestCaseFilter -WaitForDevenvSec $WaitForDevenvSec
 }

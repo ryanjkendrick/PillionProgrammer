@@ -57,7 +57,7 @@ the tokenizer of the model the chat would route to.
 | `@tests` | The Tests pane's text: failing tests with their stack traces | Visual Studio's Tests pane. Test Explorer has no documented event API, so run the tests first, then pin | 4,000 tokens, tail kept |
 | `@selection` | The editor selection | Visual Studio | 12,000 tokens |
 | `@clipboard` | The clipboard text | Visual Studio | 12,000 tokens |
-| `@errors` | The diagnostics, errors first, one line each (severity, id, message, file, line) | The Error List as your filters show it | 12,000 tokens; at most 200 diagnostics |
+| `@errors` | The diagnostics, errors first, one line each (severity, id, message, file, line) | The Error List as your filters show it (connected the first time it is asked for) | 12,000 tokens; at most 200 diagnostics |
 
 `@terminal` (the last Pillion terminal command's screen) is part of the design but **not available yet**: it waits for the command
 runner in phase 3, and answers "not available in this version".

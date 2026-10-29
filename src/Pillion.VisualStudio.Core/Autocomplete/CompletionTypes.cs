@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -77,12 +78,12 @@ public sealed class CompletionResult
 
 /// <summary>
 /// One completion attempt: the debounce, the request and the streamed answer. <see cref="Ready"/> completes with the
-/// first text worth showing: for a single-line request the first chunk with visible text, for a multi-line one its
-/// first complete line (design decision of 2026-10-11, Gate 1 open issue 4: "time to suggestion" is the first visible
-/// text). While the rest streams, <see cref="Updated"/> reports the grown suggestion, at most once per
-/// <see cref="AutocompleteEngine.DisplayUpdateInterval"/>; <see cref="Completed"/> completes with the whole suggestion.
-/// Both tasks complete with <see langword="null"/> when there is nothing to show: cancelled, superseded by a newer
-/// attempt, suppressed, empty or failed. Neither ever faults.
+/// first text worth showing: for a single-line request the whole line, once it is complete; for a multi-line one its
+/// first complete line (issue #51, decided 2026-10-24: Visual Studio's <c>TryUpdateProposal</c> does not change the
+/// displayed ghost text, so what is shown first is what Tab takes, and a multi-line suggestion's remaining lines are
+/// offered after the first is accepted, from the remembered suggestion). <see cref="Completed"/> completes with the whole
+/// suggestion. Both tasks complete with <see langword="null"/> when there is nothing to show: cancelled, superseded by a
+/// newer attempt, suppressed, empty or failed. Neither ever faults.
 /// </summary>
 public sealed class CompletionAttempt
 {
@@ -90,13 +91,14 @@ public sealed class CompletionAttempt
     private readonly TaskCompletionSource<CompletionResult?> _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource<CompletionResult?> _completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object _gate = new();
-    private CompletionResult? _latest;
-    private bool _shownEarly;
+    private int _typedThrough;
+    private long _typedThroughVersion;
 
-    internal CompletionAttempt(long id, string requestId, CancellationTokenSource cancellation)
+    internal CompletionAttempt(long id, string requestId, long textVersion, CancellationTokenSource cancellation)
     {
         Id = id;
         RequestId = requestId;
+        _typedThroughVersion = textVersion;
         _cancellation = cancellation;
     }
 
@@ -113,24 +115,14 @@ public sealed class CompletionAttempt
     public Task<CompletionResult?> Completed => _completed.Task;
 
     /// <summary>
-    /// Raised on a thread-pool thread each time the suggestion shown early has grown (never before <see cref="Ready"/>;
-    /// an update can only race with <see cref="Completed"/>, so handlers act on <see cref="Latest"/> and stop once
-    /// <see cref="Completed"/> has completed); the argument is the suggestion so far. Read <see cref="Latest"/> after
-    /// subscribing so an update raised in between is not missed.
+    /// Gets how many characters the user typed at the caret, straight ahead, while this attempt was in flight (issue #52,
+    /// option 3: typing that does not invalidate the prefix the attempt was made for keeps it alive). The editor compares
+    /// them with the start of the suggestion when it arrives, and offers the remainder at the new caret when they match.
     /// </summary>
-    public event EventHandler<CompletionResult>? Updated;
+    public int TypedThroughLength => Volatile.Read(ref _typedThrough);
 
-    /// <summary>Gets the newest suggestion handed out (by <see cref="Ready"/>, <see cref="Updated"/> or <see cref="Completed"/>), or <see langword="null"/>.</summary>
-    public CompletionResult? Latest
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _latest;
-            }
-        }
-    }
+    /// <summary>Gets the text version the typed-through characters belong to (the request's version while nothing was typed).</summary>
+    public long TypedThroughVersion => Interlocked.Read(ref _typedThroughVersion);
 
     /// <summary>Gets the token that is cancelled when the attempt is cancelled or superseded.</summary>
     internal CancellationToken Token => _cancellation.Token;
@@ -155,42 +147,107 @@ public sealed class CompletionAttempt
     {
         lock (_gate)
         {
-            if (_ready.Task.IsCompleted)
-            {
-                return;
-            }
-
-            _latest = result;
-            _shownEarly = result is not null;
             _ready.TrySetResult(result);
         }
-    }
-
-    /// <summary>Reports the grown suggestion; ignored before <see cref="Ready"/> and after <see cref="Completed"/>.</summary>
-    /// <returns><see langword="true"/> when the update was raised.</returns>
-    internal bool Publish(CompletionResult update)
-    {
-        lock (_gate)
-        {
-            if (!_shownEarly || _completed.Task.IsCompleted)
-            {
-                return false;
-            }
-
-            _latest = update;
-        }
-
-        Updated?.Invoke(this, update);
-        return true;
     }
 
     internal void SetCompleted(CompletionResult? result)
     {
         lock (_gate)
         {
-            _latest = result;
             _ready.TrySetResult(result);
             _completed.TrySetResult(result);
         }
+    }
+
+    /// <summary>Records more typed-through characters (the session calls this under its own lock).</summary>
+    internal void TypedThrough(int chars, long textVersion)
+    {
+        Interlocked.Exchange(ref _typedThroughVersion, textVersion);
+        Interlocked.Add(ref _typedThrough, chars);
+    }
+}
+
+/// <summary>One change of the document text, as the editor reports it: what was replaced and by how much.</summary>
+public readonly struct TextEdit
+{
+    /// <summary>Initializes a new instance of the <see cref="TextEdit"/> struct.</summary>
+    /// <param name="position">Where the change starts, in the text before the change.</param>
+    /// <param name="oldLength">How many characters were replaced (0 for an insertion).</param>
+    /// <param name="newLength">How many characters replaced them (0 for a deletion).</param>
+    public TextEdit(int position, int oldLength, int newLength)
+    {
+        Position = position;
+        OldLength = oldLength;
+        NewLength = newLength;
+    }
+
+    /// <summary>Gets where the change starts, in the text before the change.</summary>
+    public int Position { get; }
+
+    /// <summary>Gets how many characters were replaced (0 for an insertion).</summary>
+    public int OldLength { get; }
+
+    /// <summary>Gets how many characters replaced them (0 for a deletion).</summary>
+    public int NewLength { get; }
+}
+
+/// <summary>
+/// The type-through rule of issue #52 (option 3, decided 2026-10-24): an attempt made for a caret stays alive while the
+/// user types straight ahead at that caret, because the prefix it was made for is still the start of the text; a
+/// deletion, an edit elsewhere, or a caret move invalidates it. When the suggestion arrives, the characters typed
+/// meanwhile must be its start, and the rest is offered at the new caret.
+/// </summary>
+public static class TypeThrough
+{
+    /// <summary>Decides whether a text change keeps an attempt alive.</summary>
+    /// <param name="edits">The edits of one change (the editor may batch several).</param>
+    /// <param name="caret">The caret the attempt was made for, moved by what was typed through so far.</param>
+    /// <returns>How many characters were typed at the caret, or <see langword="null"/> when the change invalidates the prefix.</returns>
+    public static int? TypedAt(IReadOnlyList<TextEdit> edits, int caret)
+    {
+        if (edits is null || edits.Count != 1)
+        {
+            return null; // Several edits at once (a paste with formatting, a rename): not typing.
+        }
+
+        var edit = edits[0];
+        return edit.OldLength == 0 && edit.NewLength > 0 && edit.Position == caret ? edit.NewLength : null;
+    }
+
+    /// <summary>Matches the typed-through text with a suggestion.</summary>
+    /// <param name="suggestion">The suggestion, in the document's line breaks, as made for the original caret.</param>
+    /// <param name="typed">The text the user typed at that caret while the attempt was in flight.</param>
+    /// <param name="virtualSpaces">The original caret's virtual spaces: the editor turns them into real spaces with the first typed character, and the suggestion never repeats them.</param>
+    /// <param name="remainder">The part of the suggestion left to offer at the new caret.</param>
+    /// <returns><see langword="true"/> when the typed text is the start of the suggestion and something non-blank is left.</returns>
+    public static bool TryGetRemainder(string suggestion, string typed, int virtualSpaces, out string remainder)
+    {
+        remainder = string.Empty;
+        if (string.IsNullOrEmpty(suggestion) || typed is null)
+        {
+            return false;
+        }
+
+        var start = 0;
+        while (start < typed.Length && start < virtualSpaces && typed[start] == ' ' && !suggestion.StartsWith(typed.Substring(0, start + 1), StringComparison.Ordinal))
+        {
+            start++;
+        }
+
+        var effective = start == 0 ? typed : typed.Substring(start);
+        if (effective.Length >= suggestion.Length || !suggestion.StartsWith(effective, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var rest = suggestion.Substring(effective.Length);
+        if (rest.Trim().Length == 0)
+        {
+            return false;
+        }
+
+        remainder = rest;
+        return true;
     }
 }

@@ -303,6 +303,8 @@ public sealed class IdeSignalsHub : IIdeSignals, IDisposable
         }
     }
 
+    // VSTHRD003: the shared connection run is thread-pool work (Task.Run) that never needs the caller's context.
+#pragma warning disable VSTHRD003
     /// <inheritdoc/>
     public Task EnsureDiagnosticsConnectedAsync(CancellationToken cancellationToken) =>
         EnsureConnectedAsync(ErrorListConnector, () => ErrorList is not null, ref _errorListConnecting, cancellationToken);
@@ -312,6 +314,7 @@ public sealed class IdeSignalsHub : IIdeSignals, IDisposable
     /// <returns>A task that completes when the Output window is connected (or could not be).</returns>
     public Task EnsureOutputConnectedAsync(CancellationToken cancellationToken) =>
         EnsureConnectedAsync(OutputConnector, () => Output is not null, ref _outputConnecting, cancellationToken);
+#pragma warning restore VSTHRD003
 
     /// <inheritdoc/>
     public async Task<IReadOnlyList<DiagnosticInfo>> GetDiagnosticsAsync(DiagnosticScope scope, CancellationToken cancellationToken)
@@ -467,13 +470,15 @@ public sealed class IdeSignalsHub : IIdeSignals, IDisposable
         try
         {
             // The connector honours the first caller's token; a later caller that is cancelled stops waiting without
-            // cancelling the shared run.
+            // cancelling the shared run. (VSTHRD003: the run is thread-pool work that never needs the caller's context.)
+#pragma warning disable VSTHRD003
             if (await Task.WhenAny(run, Task.Delay(Timeout.Infinite, cancellationToken)).ConfigureAwait(false) != run)
             {
                 cancellationToken.ThrowIfCancellationRequested();
             }
 
             await run.ConfigureAwait(false);
+#pragma warning restore VSTHRD003
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

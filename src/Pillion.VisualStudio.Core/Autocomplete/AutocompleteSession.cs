@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Pillion.Contracts;
@@ -9,10 +10,13 @@ namespace Pillion.VisualStudio.Core.Autocomplete;
 /// The autocomplete request pipeline of one text view (design sections 5, 9 and 13). Each <see cref="Start"/> is one
 /// attempt with its own request id: it waits out the debounce (200 ms, 350 ms while degraded, none right after an
 /// accept), captures the context, decides single-line or multi-line, streams the host's answer through the stop rules
-/// and discards it when a newer attempt has started. <see cref="CancelPending"/>, called on every keystroke and caret
-/// move, cancels the attempt in flight. All waiting and every RPC await run on thread-pool threads; nothing here
-/// blocks the caller, and host failures never surface: they end the attempt with no suggestion and are logged at
-/// most once a minute.
+/// and discards it when a newer attempt has started. A new attempt cancels the one in flight; so does
+/// <see cref="CancelPending"/>. The editor reports every text change and caret move through <see cref="TextChanged"/>
+/// and <see cref="CaretMoved"/>, which cancel the attempt in flight only when they invalidate the prefix it was made
+/// for: typing straight ahead at its caret keeps it alive (issue #52, option 3), and the editor matches what was typed
+/// with the suggestion when it arrives. All waiting and every RPC await run on thread-pool threads; nothing here blocks
+/// the caller, and host failures never surface: they end the attempt with no suggestion and are logged at most once a
+/// minute.
 /// </summary>
 public sealed class AutocompleteSession : IDisposable
 {
@@ -20,6 +24,8 @@ public sealed class AutocompleteSession : IDisposable
     private readonly object _gate = new();
     private CompletionAttempt? _current;
     private CompletionInput? _currentInput;
+    private long _currentVersion;
+    private int _currentCaret;
     private long _latestAttempt;
     private int _acceptedAtLineEnd;
     private bool _disposed;
@@ -54,7 +60,7 @@ public sealed class AutocompleteSession : IDisposable
     /// <returns><see langword="true"/> when no newer attempt has started.</returns>
     public bool IsCurrent(long attempt) => Interlocked.Read(ref _latestAttempt) == attempt;
 
-    /// <summary>Gets the attempt in flight when it was started for exactly this text version and caret.</summary>
+    /// <summary>Gets the attempt in flight when it was started for exactly this text version and caret (nothing typed through since).</summary>
     /// <param name="textVersion">The text version.</param>
     /// <param name="caret">The caret position.</param>
     /// <returns>The attempt, or <see langword="null"/>.</returns>
@@ -62,7 +68,7 @@ public sealed class AutocompleteSession : IDisposable
     {
         lock (_gate)
         {
-            return _current is not null && _currentInput is { } input && input.TextVersion == textVersion && input.Caret == caret ? _current : null;
+            return _current is not null && _currentInput is { } input && input.TextVersion == textVersion && input.Caret == caret && _currentVersion == textVersion ? _current : null;
         }
     }
 
@@ -106,20 +112,67 @@ public sealed class AutocompleteSession : IDisposable
     }
 
     /// <summary>
-    /// Cancels the attempt in flight unless it was started for exactly this text version (and caret, when given).
-    /// Called on every keystroke and caret move; the version check keeps an attempt the broker started for the new
-    /// text (it may ask before this handler runs) alive.
+    /// Reports a text change (called on every keystroke). The attempt in flight is kept when it was started for the new
+    /// version already (the broker may ask before this handler runs) or when the change is typing straight ahead at its
+    /// caret, which leaves the prefix it was made for intact (<see cref="TypeThrough.TypedAt"/>); the typed characters
+    /// are noted on the attempt. Any other change (a deletion, an edit elsewhere, several edits at once) cancels it.
     /// </summary>
     /// <param name="textVersion">The text version after the change.</param>
-    /// <param name="caret">The caret position after a move, or <see langword="null"/> for a text change.</param>
-    public void CancelPendingUnless(long textVersion, int? caret)
+    /// <param name="edits">The change's edits, in the text before the change.</param>
+    public void TextChanged(long textVersion, IReadOnlyList<TextEdit> edits)
+    {
+        CompletionAttempt? current;
+        CompletionInput? input;
+        int? typed = null;
+        lock (_gate)
+        {
+            if (_current is null || _currentInput is null || _currentInput.TextVersion == textVersion || _currentVersion == textVersion)
+            {
+                return;
+            }
+
+            typed = TypeThrough.TypedAt(edits, _currentCaret);
+            if (typed is { } chars)
+            {
+                _currentCaret += chars;
+                _currentVersion = textVersion;
+                _current.TypedThrough(chars, textVersion);
+                return;
+            }
+
+            current = _current;
+            input = _currentInput;
+            _current = null;
+            _currentInput = null;
+        }
+
+        _engine.Log?.Debug(
+            "autocomplete.attempt.cancelled",
+            "The attempt in flight was cancelled.",
+            ("request", current.RequestId),
+            ("by", "textChanged"),
+            ("attemptVersion", input.TextVersion),
+            ("version", textVersion),
+            ("attemptCaret", input.Caret),
+            ("edits", edits?.Count));
+        current.Cancel();
+    }
+
+    /// <summary>
+    /// Reports a caret move. The attempt in flight is kept while the caret is where the attempt expects it: where it was
+    /// made, or right after the characters typed through since; any other position cancels it.
+    /// </summary>
+    /// <param name="textVersion">The text version the caret position belongs to.</param>
+    /// <param name="caret">The new caret position.</param>
+    public void CaretMoved(long textVersion, int caret)
     {
         CompletionAttempt? current;
         CompletionInput? input;
         lock (_gate)
         {
             if (_current is null || _currentInput is null
-                || (_currentInput.TextVersion == textVersion && (caret is null || _currentInput.Caret == caret.Value)))
+                || (_currentInput.TextVersion == textVersion && _currentInput.Caret == caret)
+                || (_currentVersion == textVersion && _currentCaret == caret))
             {
                 return;
             }
@@ -134,7 +187,7 @@ public sealed class AutocompleteSession : IDisposable
             "autocomplete.attempt.cancelled",
             "The attempt in flight was cancelled.",
             ("request", current.RequestId),
-            ("by", caret is null ? "textChanged" : "caretMoved"),
+            ("by", "caretMoved"),
             ("attemptVersion", input.TextVersion),
             ("version", textVersion),
             ("attemptCaret", input.Caret),
@@ -166,7 +219,7 @@ public sealed class AutocompleteSession : IDisposable
 
         var id = _engine.NextAttempt();
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var attempt = new CompletionAttempt(id, _engine.RequestIdFor(id), cancellation);
+        var attempt = new CompletionAttempt(id, _engine.RequestIdFor(id), input.TextVersion, cancellation);
         if (_engine.Gate(input.LanguageId) != SuppressionReason.None)
         {
             CompletionAttempt? superseded;
@@ -198,6 +251,8 @@ public sealed class AutocompleteSession : IDisposable
             previous = _current;
             _current = attempt;
             _currentInput = input;
+            _currentVersion = input.TextVersion;
+            _currentCaret = input.Caret;
             Interlocked.Exchange(ref _latestAttempt, id);
         }
 
@@ -364,9 +419,6 @@ public sealed class AutocompleteSession : IDisposable
         var stoppedEarly = false;
         var recorded = 0;
         var readySent = false;
-        string? lastShown = null;
-        var lastShownAt = DateTimeOffset.MinValue;
-        var updatePending = false;
 
         CompletionResult Snapshot(string text, bool complete) => new()
         {
@@ -391,86 +443,32 @@ public sealed class AutocompleteSession : IDisposable
             }
         }
 
-        // The display rule (decision of 2026-10-11): the first visible text is shown at once (a single-line request's
-        // first chunk, a multi-line request's first complete line) and the suggestion then grows as chunks stream, with
-        // at most one update per DisplayUpdateInterval; what is shown has passed the stop rules.
-        void ShowProgress()
+        // The display rule (issue #51, decided 2026-10-24): a single-line suggestion is shown when its line is complete,
+        // a multi-line one at its first complete line; what is shown has passed the stop rules, and what is shown first
+        // is what Tab takes (Visual Studio's TryUpdateProposal does not change the displayed ghost text). The rest of a
+        // multi-line suggestion streams on to Completed and is offered after the first line is accepted.
+        void ShowFirstLine()
         {
-            if (!multiLine && !AutocompleteEngine.ShowSingleLineEarly)
-            {
-                return; // Shown when the line is complete (see ShowSingleLineEarly).
-            }
-
-            CompletionResult? ready = null;
-            CompletionResult? update = null;
-            var wait = TimeSpan.Zero;
-            lock (shaper)
-            {
-                var text = shaper.DisplayText;
-                if (text is null || text == lastShown || attempt.Completed.IsCompleted || !IsCurrent(attempt.Id) || token.IsCancellationRequested)
-                {
-                    return;
-                }
-
-                var now = _engine.Clock.UtcNow;
-                if (!readySent)
-                {
-                    readySent = true;
-                    ready = Snapshot(text, complete: false);
-                }
-                else if (now - lastShownAt >= AutocompleteEngine.DisplayUpdateInterval)
-                {
-                    update = Snapshot(text, complete: false);
-                }
-                else if (!updatePending)
-                {
-                    updatePending = true;
-                    wait = AutocompleteEngine.DisplayUpdateInterval - (now - lastShownAt);
-                }
-                else
-                {
-                    return;
-                }
-
-                if (ready is not null || update is not null)
-                {
-                    lastShown = text;
-                    lastShownAt = now;
-                }
-            }
-
-            if (ready is not null)
-            {
-                RecordLatency(ready.Latency);
-                attempt.SetReady(ready);
-            }
-            else if (update is not null)
-            {
-                attempt.Publish(update);
-            }
-            else
-            {
-                _ = ShowLaterAsync(wait);
-            }
-        }
-
-        async Task ShowLaterAsync(TimeSpan wait)
-        {
-            try
-            {
-                await _engine.Clock.DelayAsync(wait, token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
+            if (!multiLine || readySent)
             {
                 return;
             }
 
+            CompletionResult? ready;
             lock (shaper)
             {
-                updatePending = false;
+                var text = shaper.DisplayText;
+                if (text is null || !IsCurrent(attempt.Id) || token.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                readySent = true;
+                ready = Snapshot(text, complete: false);
             }
 
-            ShowProgress();
+            RecordLatency(ready.Latency);
+            attempt.SetReady(ready);
         }
 
         var enumerator = service.CompleteAsync(request, token).GetAsyncEnumerator(token);
@@ -529,7 +527,7 @@ public sealed class AutocompleteSession : IDisposable
                     break;
                 }
 
-                ShowProgress();
+                ShowFirstLine();
             }
         }
         finally

@@ -530,7 +530,9 @@ public class SignalsTests
         hub.ErrorListConnector = async _ =>
         {
             attempts++;
+#pragma warning disable VSTHRD003 // A test gate.
             await release.Task;
+#pragma warning restore VSTHRD003
             if (attempts == 1)
             {
                 throw new InvalidOperationException("the Error List service was not available");
@@ -611,7 +613,7 @@ public class SignalsTests
     public void DisconnectSteps_LogTheFailedStepByName_WithoutThrowing()
     {
         var lines = new List<string>();
-        var log = new PillionLog(directory: null) { Sink = line => { lock (lines) { lines.Add(line); } } };
+        var log = new PillionLog(directory: null) { Sink = (_, line) => { lock (lines) { lines.Add(line); } } };
         var steps = new DisconnectSteps();
         steps.Add("the Error List", DereferenceNull);
 

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,10 +9,10 @@ using Pillion.VisualStudio.Core.Autocomplete;
 namespace Pillion.VisualStudio.Tests;
 
 /// <summary>
-/// When a suggestion counts as shown (decision of 2026-10-11, Gate 1 open issue 4): a single-line suggestion is shown
-/// at its first chunk with visible text and grows as chunks stream; a multi-line one is shown at its first complete
-/// line and the rest streams in; at most one update per 50 ms; "time to suggestion" is the first visible text. Also
-/// the availability gate on every request (Gate 1 open issue 3) and the fence guard (open issue 2).
+/// When a suggestion counts as shown (issue #51, decided 2026-10-24: line-complete display): a single-line suggestion
+/// is shown when its line is complete, with no grace period; a multi-line one at its first complete line, and the whole
+/// of it completes later for the remembered suggestion; nothing shown is ever grown. "Time to suggestion" is the first
+/// text shown. Also the availability gate on every request (Gate 1 open issue 3) and the fence guard (open issue 2).
 /// </summary>
 public sealed class AutocompleteDisplayTests
 {
@@ -37,9 +36,8 @@ public sealed class AutocompleteDisplayTests
     [Fact]
     public async Task SingleLine_IsShownWhenItsLineIsComplete_WithoutAGracePeriod()
     {
-        // ShowSingleLineEarly is off: growing a displayed proposal does not change the ghost text in Visual Studio
-        // (CI run 38114630716), so a single line is shown whole, as soon as it is complete.
-        Assert.False(AutocompleteEngine.ShowSingleLineEarly);
+        // Growing a displayed proposal does not change the ghost text in Visual Studio (CI run 38114630716), so a single
+        // line is shown whole, as soon as it is complete (issue #51).
         _model.Respond = _ => ["numbers", ".Min", "();"];
         var (engine, session) = CreateSession();
 
@@ -76,15 +74,13 @@ public sealed class AutocompleteDisplayTests
     }
 
     [Fact]
-    public async Task MultiLine_IsShownAtItsFirstCompleteLine_AndTheRestStreamsIn()
+    public async Task MultiLine_IsShownAtItsFirstCompleteLine_AndTheWholeSuggestionCompletesLater()
     {
         _model.Respond = _ => ["\n        var x", " = 1;\n", "        var y = 2;\n", "        return x + y;\n"];
         var (engine, session) = CreateSession();
-        var updates = new ConcurrentQueue<string>();
         var input = new CompletionInput { DocumentKey = "c.cs", FilePath = "c.cs", LanguageId = "csharp", Text = new StringDocumentText(Body), Caret = Body.IndexOf("        \n", StringComparison.Ordinal) + 8 };
 
         var attempt = await StartAndSendAsync(session, input);
-        attempt.Updated += (_, update) => updates.Enqueue(update.Text);
         Assert.True(_model.Requests.Single().AllowMultiLine);
 
         // Half a line: nothing to show yet.
@@ -93,7 +89,7 @@ public sealed class AutocompleteDisplayTests
         await Wait.UntilAsync(() => _model.WaitsForRelease >= 2, "the first chunk to be handled");
         Assert.False(attempt.Ready.IsCompleted);
 
-        // The first line completes: shown at once.
+        // The first line completes: shown at once, and that is what stays on screen.
         _clock.Advance(TimeSpan.FromMilliseconds(40));
         _model.Release();
         var ready = await attempt.Ready.WithTimeout(Timeout);
@@ -101,16 +97,13 @@ public sealed class AutocompleteDisplayTests
         Assert.False(ready.IsComplete);
         Assert.Equal(TimeSpan.FromMilliseconds(120), engine.Latency.Snapshot().P50);
 
-        // The next line, 50 ms later, is an update.
+        // The rest streams on to Completed (remembered by the view for the request after the first line is accepted).
         _clock.Advance(TimeSpan.FromMilliseconds(50));
-        _model.Release();
-        await Wait.UntilAsync(() => updates.Count == 1, "the second line streamed in");
-        Assert.Equal("\n        var x = 1;\n        var y = 2;", updates.Single());
-
-        _model.Release();
+        _model.Release(2);
         var complete = await attempt.Completed.WithTimeout(Timeout);
         Assert.Equal("\n        var x = 1;\n        var y = 2;\n        return x + y;", complete!.Text);
-        Assert.Equal(complete.Text, attempt.Latest!.Text);
+        Assert.True(complete.IsComplete);
+        Assert.Equal(TimeSpan.FromMilliseconds(120), engine.Latency.Snapshot().P50); // Recorded once, at the first line.
     }
 
     [Fact]
@@ -119,12 +112,10 @@ public sealed class AutocompleteDisplayTests
         // The block ends after "}"; the next member never shows, not even for a moment.
         _model.Respond = _ => ["\n    {\n", "        return numbers.Min();\n", "    }\n", "\n    public int Other()\n"];
         var (_, session) = CreateSession();
-        var shown = new ConcurrentQueue<string>();
         var text = "class C\n{\n    public static int Min(int[] numbers)\n}\n";
         var input = new CompletionInput { DocumentKey = "c.cs", FilePath = "c.cs", LanguageId = "csharp", Text = new StringDocumentText(text), Caret = text.IndexOf(")", StringComparison.Ordinal) + 1 };
 
         var attempt = await StartAndSendAsync(session, input);
-        attempt.Updated += (_, update) => shown.Enqueue(update.Text);
         for (var i = 0; i < 4; i++)
         {
             _clock.Advance(TimeSpan.FromMilliseconds(60));
@@ -135,7 +126,8 @@ public sealed class AutocompleteDisplayTests
         var complete = await attempt.Completed.WithTimeout(Timeout);
         var first = await attempt.Ready.WithTimeout(Timeout);
         Assert.Equal("\n    {\n        return numbers.Min();\n    }", complete!.Text);
-        Assert.DoesNotContain(shown.Concat([first!.Text]), t => t.IndexOf("Other", StringComparison.Ordinal) >= 0);
+        Assert.Equal("\n    {", first!.Text);
+        Assert.DoesNotContain("Other", first.Text, StringComparison.Ordinal);
     }
 
     [Fact]

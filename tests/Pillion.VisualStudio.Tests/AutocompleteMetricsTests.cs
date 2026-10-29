@@ -435,7 +435,7 @@ public sealed class AutocompleteMetricsPipelineTests
         var afterAnswer = engine.Metrics.Snapshot().Recent;
         Assert.Equal(1, afterAnswer.Requests);
         Assert.Equal(TimeSpan.FromMilliseconds(120), afterAnswer.TimeToFirstChunk.P50);
-        Assert.Equal(TimeSpan.FromMilliseconds(420), afterAnswer.TimeToSuggestion.P50); // a single line is shown when complete (ShowSingleLineEarly is off)
+        Assert.Equal(TimeSpan.FromMilliseconds(420), afterAnswer.TimeToSuggestion.P50); // a single line is shown when complete (issue #51)
         Assert.Equal(0, afterAnswer.Shown);
 
         engine.Metrics.SuggestionShown(attempt.Id);
@@ -767,7 +767,7 @@ public sealed class AutocompleteMetricsOutputTests : IDisposable
     public async Task Reporter_WritesOneLineAndOneSummaryPerFiveMinuteWindow_AndNothingWhenIdle()
     {
         var lines = new List<string>();
-        var log = new PillionLog(directory: null, () => _clock.UtcNow) { Sink = line => { lock (lines) { lines.Add(line); } } };
+        var log = new PillionLog(directory: null, () => _clock.UtcNow) { Sink = (_, line) => { lock (lines) { lines.Add(line); } } };
         var diagnostics = new FakeDiagnostics(SampleHost());
         var connection = new FakeHostConnection(HostState.Ready).With<IDiagnosticsService>(diagnostics);
         var engine = new AutocompleteEngine(connection, availability: null, _clock, log);

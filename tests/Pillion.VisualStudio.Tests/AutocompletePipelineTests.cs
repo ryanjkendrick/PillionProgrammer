@@ -70,24 +70,107 @@ public sealed class AutocompletePipelineTests(ITestOutputHelper output)
         Assert.NotEqual(first.RequestId, second.RequestId);
     }
 
+    /// <summary>Issue #52, option 3: typing straight ahead at the attempt's caret keeps it alive; the typed characters are noted on it.</summary>
     [Fact]
-    public async Task CancelPendingUnless_KeepsAnAttemptForTheNewTextAndCancelsAnOlderOne()
+    public async Task TextChanged_TypingStraightAheadKeepsTheAttempt_AndNotesWhatWasTyped()
     {
         var (_, session) = CreateSession();
         var input = InputAt("var smallest = ");
         input.TextVersion = 7;
-
         var attempt = session.Start(input, CancellationToken.None);
-        session.CancelPendingUnless(7, input.Caret);
+
+        session.TextChanged(7, [new TextEdit(input.Caret, 0, 1)]); // The broker asked for version 7 before this handler ran.
+        Assert.False(attempt.IsCancelled);
+        Assert.Equal(0, attempt.TypedThroughLength);
+
+        session.TextChanged(8, [new TextEdit(input.Caret, 0, 1)]); // "n"
+        session.CaretMoved(8, input.Caret + 1);
+        Assert.False(attempt.IsCancelled);
+        Assert.Equal(1, attempt.TypedThroughLength);
+        Assert.Equal(8, attempt.TypedThroughVersion);
+
+        session.TextChanged(9, [new TextEdit(input.Caret + 1, 0, 2)]); // "um" (auto-inserted pairs arrive as one edit too)
+        session.CaretMoved(9, input.Caret + 3);
+        Assert.False(attempt.IsCancelled);
+        Assert.Equal(3, attempt.TypedThroughLength);
+        Assert.Equal(9, attempt.TypedThroughVersion);
+        Assert.Null(session.CurrentFor(7, input.Caret)); // Not the attempt for exactly that text and caret any more.
+
+        session.TextChanged(10, [new TextEdit(input.Caret + 2, 1, 0)]); // Backspace: the prefix is not what it was made for.
+        Assert.True(attempt.IsCancelled);
+        Assert.Null(await attempt.Completed.WithTimeout(Timeout));
+    }
+
+    [Theory]
+    [InlineData("elsewhere", 5, 0, 1)]
+    [InlineData("replacement", 15, 1, 1)]
+    [InlineData("deletion", 15, 1, 0)]
+    public void TextChanged_ThatIsNotTypingAtTheCaret_Cancels(string what, int offset, int oldLength, int newLength)
+    {
+        var (_, session) = CreateSession();
+        var input = InputAt("var smallest = ");
+        input.TextVersion = 7;
+        var attempt = session.Start(input, CancellationToken.None);
+
+        session.TextChanged(8, [new TextEdit(input.Caret - offset, oldLength, newLength)]);
+
+        Assert.True(attempt.IsCancelled, what);
+    }
+
+    [Fact]
+    public void TextChanged_WithSeveralEditsAtOnce_Cancels()
+    {
+        var (_, session) = CreateSession();
+        var input = InputAt("var smallest = ");
+        input.TextVersion = 7;
+        var attempt = session.Start(input, CancellationToken.None);
+
+        session.TextChanged(8, [new TextEdit(input.Caret, 0, 1), new TextEdit(0, 0, 1)]);
+
+        Assert.True(attempt.IsCancelled);
+    }
+
+    [Fact]
+    public void CaretMoved_AwayFromTheAttemptsCaret_Cancels()
+    {
+        var (_, session) = CreateSession();
+        var input = InputAt("var smallest = ");
+        input.TextVersion = 7;
+        var attempt = session.Start(input, CancellationToken.None);
+
+        session.CaretMoved(7, input.Caret);
         Assert.False(attempt.IsCancelled);
 
-        session.CancelPendingUnless(7, input.Caret - 1); // Caret moved.
+        session.CaretMoved(7, input.Caret - 1);
         Assert.True(attempt.IsCancelled);
+    }
 
-        var next = session.Start(input, CancellationToken.None);
-        session.CancelPendingUnless(8, caret: null); // A keystroke made version 8.
-        Assert.True(next.IsCancelled);
-        Assert.Null(await next.Completed.WithTimeout(Timeout));
+    [Theory]
+    [InlineData("numbers.Min();", "num", 0, "bers.Min();")]
+    [InlineData("numbers.Min();", "numbers.Min();", 0, null)]
+    [InlineData("numbers.Min();", "x", 0, null)]
+    [InlineData("numbers.Min();", "", 0, "numbers.Min();")]
+    [InlineData("return x;", "    ret", 4, "urn x;")]
+    [InlineData("return x;", "    ret", 2, null)]
+    [InlineData("  x", "  ", 4, "x")]
+    public void TypeThrough_Remainder_IsTheSuggestionAfterWhatWasTyped(string suggestion, string typed, int virtualSpaces, string? expected)
+    {
+        var matched = TypeThrough.TryGetRemainder(suggestion, typed, virtualSpaces, out var remainder);
+
+        Assert.Equal(expected is not null, matched);
+        Assert.Equal(expected ?? string.Empty, remainder);
+    }
+
+    [Fact]
+    public void TypeThrough_TypedAt_IsTheInsertionAtTheCaretOnly()
+    {
+        Assert.Equal(1, TypeThrough.TypedAt([new TextEdit(10, 0, 1)], 10));
+        Assert.Equal(2, TypeThrough.TypedAt([new TextEdit(10, 0, 2)], 10));
+        Assert.Null(TypeThrough.TypedAt([new TextEdit(9, 0, 1)], 10));
+        Assert.Null(TypeThrough.TypedAt([new TextEdit(10, 1, 1)], 10));
+        Assert.Null(TypeThrough.TypedAt([new TextEdit(10, 0, 0)], 10));
+        Assert.Null(TypeThrough.TypedAt([new TextEdit(10, 0, 1), new TextEdit(20, 0, 1)], 10));
+        Assert.Null(TypeThrough.TypedAt([], 10));
     }
 
     [Fact]
@@ -441,7 +524,7 @@ public sealed class AutocompletePipelineTests(ITestOutputHelper output)
             var text = baseText.Insert(baseText.IndexOf("= ", StringComparison.Ordinal) + 2, new string('x', n % 40));
             var caret = baseText.IndexOf("= ", StringComparison.Ordinal) + 2 + (n % 40);
             engine.Edits.Record(@"C:\src\Calculator.cs", 4, "        var smallest = " + new string('x', n % 40));
-            session.CancelPendingUnless(n, caret: null);
+            session.TextChanged(n, [new TextEdit(caret - 1, 0, 1)]);
             session.Start(
                 new CompletionInput
                 {
