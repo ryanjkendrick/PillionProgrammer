@@ -334,6 +334,18 @@
     <value>Chunks</value>
     <comment>Label.</comment>
   </data>
+  <data name="RedactedLabel" xml:space="preserve">
+    <value>Redacted chunks</value>
+    <comment>Label of the number of chunks the secret scanner redacted before they were stored.</comment>
+  </data>
+  <data name="NoRedactedChunks" xml:space="preserve">
+    <value>None</value>
+    <comment>Shown when no chunk of the root was redacted.</comment>
+  </data>
+  <data name="RolePrevious" xml:space="preserve">
+    <value>Previous index (read-only; serves searches until the new index completes, then retires)</value>
+    <comment>Role text of the previous index of a root whose embedding model changed.</comment>
+  </data>
   <data name="DiskLabel" xml:space="preserve">
     <value>Disk use</value>
     <comment>Label.</comment>

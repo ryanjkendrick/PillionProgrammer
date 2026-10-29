@@ -29,14 +29,27 @@ public sealed class IndexRootRowViewModel : ObservableObject
     /// <summary>Gets whether this host owns the index or reads it.</summary>
     public IndexRole Role => _status.Role;
 
-    /// <summary>Gets the role as text: writer, reader or "not open".</summary>
-    public string RoleText => IndexFormat.Role(_status.Role);
+    /// <summary>Gets the role as text: writer, reader, "not open", or the previous index of a root whose model changed.</summary>
+    public string RoleText => IsPrevious ? IndexStrings.RolePrevious : IndexFormat.Role(_status.Role);
 
     /// <summary>Gets the files indexed out of the files that pass the exclusions, for example "40 of 40".</summary>
     public string FilesText => IndexStrings.Format(IndexStrings.FilesOfFormat, IndexFormat.Count(_status.IndexedFileCount), IndexFormat.Count(_status.TotalFileCount));
 
     /// <summary>Gets the number of chunks.</summary>
     public string ChunksText => IndexFormat.Count(_status.ChunkCount);
+
+    /// <summary>Gets how many chunks the secret scanner redacted before they were stored (work item 3.2).</summary>
+    public long RedactedChunkCount => _status.RedactedChunkCount;
+
+    /// <summary>Gets the redacted chunk count as text: "None", or the count.</summary>
+    public string RedactedText => _status.RedactedChunkCount <= 0 ? IndexStrings.NoRedactedChunks : IndexFormat.Count(_status.RedactedChunkCount);
+
+    /// <summary>
+    /// Gets a value indicating whether this row is the previous index of a root whose embedding model or chunker version
+    /// changed (issue #104): it is read-only, serves searches until the new index's first full sweep completes, then closes
+    /// and retires through retention. It cannot be rebuilt; it can be deleted.
+    /// </summary>
+    public bool IsPrevious { get; private set; }
 
     /// <summary>Gets the index folder's disk use.</summary>
     public string DiskText => IndexFormat.Bytes(_status.DiskBytes);
@@ -110,6 +123,12 @@ public sealed class IndexRootRowViewModel : ObservableObject
             OnPropertyChanged(nameof(ChunksText));
         }
 
+        if (previous.RedactedChunkCount != status.RedactedChunkCount)
+        {
+            OnPropertyChanged(nameof(RedactedChunkCount));
+            OnPropertyChanged(nameof(RedactedText));
+        }
+
         if (previous.DiskBytes != status.DiskBytes)
         {
             OnPropertyChanged(nameof(DiskText));
@@ -138,6 +157,22 @@ public sealed class IndexRootRowViewModel : ObservableObject
         }
 
         OnPropertyChanged(nameof(AutomationName));
+    }
+
+    /// <summary>Marks the row as the previous index of its root (or not), raising the role text and the commands when that changes.</summary>
+    /// <param name="previous">Whether the row is the previous index.</param>
+    internal void SetPrevious(bool previous)
+    {
+        if (IsPrevious == previous)
+        {
+            return;
+        }
+
+        IsPrevious = previous;
+        OnPropertyChanged(nameof(IsPrevious));
+        OnPropertyChanged(nameof(RoleText));
+        OnPropertyChanged(nameof(AutomationName));
+        RaiseCommands();
     }
 
     internal void RaiseCommands()

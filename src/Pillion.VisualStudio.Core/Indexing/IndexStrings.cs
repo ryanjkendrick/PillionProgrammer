@@ -234,6 +234,15 @@ public static class IndexStrings
     /// <summary>Gets the string: Label.</summary>
     public static string ChunksLabel => Get(nameof(ChunksLabel));
 
+    /// <summary>Gets the string: Label of the redacted chunk count (work item 3.2).</summary>
+    public static string RedactedLabel => Get(nameof(RedactedLabel));
+
+    /// <summary>Gets the string: Shown when no chunk of the root was redacted.</summary>
+    public static string NoRedactedChunks => Get(nameof(NoRedactedChunks));
+
+    /// <summary>Gets the string: Role text of the previous index of a root whose embedding model changed (issue #104).</summary>
+    public static string RolePrevious => Get(nameof(RolePrevious));
+
     /// <summary>Gets the string: Label.</summary>
     public static string DiskLabel => Get(nameof(DiskLabel));
 
