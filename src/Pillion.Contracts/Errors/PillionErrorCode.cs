@@ -36,4 +36,10 @@ public enum PillionErrorCode
     /// message names the feature. Added in contract 1.3.
     /// </summary>
     NotImplemented,
+
+    /// <summary>
+    /// An agent session used up one of its budgets (tool steps, tokens, cost or wall time; design section 8) and stopped with a
+    /// report against its ledger. The message names the budget. Added in contract 1.4; a 1.3 peer sees an unknown number.
+    /// </summary>
+    BudgetExhausted,
 }

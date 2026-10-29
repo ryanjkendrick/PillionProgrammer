@@ -185,7 +185,7 @@ internal sealed partial class RpcConnection : IAsyncDisposable
 
         LogAccepted(_logger, Id, request.ContractMajor, request.ContractMinor);
         _notificationPump = PumpNotificationsAsync();
-        _context.Vsix.Attach(_rpc);
+        _context.Vsix.Attach(_rpc, VsixClientInfo.From(request));
         return response;
     }
 

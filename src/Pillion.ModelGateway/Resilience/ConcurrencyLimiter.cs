@@ -44,6 +44,7 @@ public sealed class ConcurrencyLimiter
     {
         TaskClass.Autocomplete => ConcurrencyLane.Autocomplete,
         TaskClass.Agent => ConcurrencyLane.Agent,
+        TaskClass.AgentPlanning => ConcurrencyLane.Agent, // Contract 1.4: one agent request per provider, planning included.
         TaskClass.Embedding => ConcurrencyLane.Embedding,
         _ => ConcurrencyLane.Chat,
     };

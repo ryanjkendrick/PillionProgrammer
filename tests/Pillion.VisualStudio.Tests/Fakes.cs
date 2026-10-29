@@ -140,6 +140,32 @@ internal sealed class FakeSession(int processId, HostState initialState) : IHost
     public void ReportIndexStatus(IndexStatus status) =>
         IndexStatusChanged?.Invoke(this, new HostIndexStatusChangedEventArgs(status));
 
+    // Contract 1.4 notifications.
+    public event EventHandler<HostAgentSessionChangedEventArgs>? AgentSessionChanged;
+
+    public void ReportAgentSession(AgentSessionState session) =>
+        AgentSessionChanged?.Invoke(this, new HostAgentSessionChangedEventArgs(session));
+
+    public event EventHandler<HostAgentToolCallEventArgs>? AgentToolCall;
+
+    public void ReportAgentToolCall(AgentToolCallRecord toolCall) =>
+        AgentToolCall?.Invoke(this, new HostAgentToolCallEventArgs(toolCall));
+
+    public event EventHandler<HostAgentChangesetReadyEventArgs>? AgentChangesetReady;
+
+    public void ReportAgentChangesetReady(AgentChangesetReady changeset) =>
+        AgentChangesetReady?.Invoke(this, new HostAgentChangesetReadyEventArgs(changeset));
+
+    public event EventHandler<HostTerminalScreenChangedEventArgs>? TerminalScreenChanged;
+
+    public void ReportTerminalScreen(TerminalScreen screen) =>
+        TerminalScreenChanged?.Invoke(this, new HostTerminalScreenChangedEventArgs(screen));
+
+    public event EventHandler<HostBackgroundProcessChangedEventArgs>? BackgroundProcessChanged;
+
+    public void ReportBackgroundProcess(BackgroundProcessInfo process) =>
+        BackgroundProcessChanged?.Invoke(this, new HostBackgroundProcessChangedEventArgs(process));
+
     public int ProcessId { get; } = processId;
 
     public HostState LatestHostState => _latest;

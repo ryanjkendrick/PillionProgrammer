@@ -9,7 +9,8 @@ namespace Pillion.Contracts;
 /// <remarks>
 /// Contract 1.2 defined <see cref="File"/>, <see cref="Folder"/>, <see cref="Selection"/>, <see cref="Errors"/> and
 /// <see cref="Clipboard"/>. Contract 1.3 added <see cref="Symbol"/>, <see cref="Docs"/>, <see cref="Solution"/>,
-/// <see cref="Git"/>, <see cref="Output"/>, <see cref="Build"/> and <see cref="Tests"/> (work item 2.13).
+/// <see cref="Git"/>, <see cref="Output"/>, <see cref="Build"/> and <see cref="Tests"/> (work item 2.13). Contract 1.4 added
+/// <see cref="Terminal"/> (work item 3.5, resolved by the host from the Pillion terminal's screen buffer in 3.15).
 /// </remarks>
 public static class MentionKinds
 {
@@ -48,4 +49,11 @@ public static class MentionKinds
 
     /// <summary>The last failing tests with their stack traces (the client sends them as the payload). Added in 1.3.</summary>
     public const string Tests = "tests";
+
+    /// <summary>
+    /// The tail of the Pillion terminal's screen buffer and scrollback (resolved by the host, which owns the buffer; the
+    /// integrated terminal is not visible to it). <see cref="MentionRequest.Arguments"/> may name a terminal id, otherwise the
+    /// session's or the most recently active one. Added in 1.4.
+    /// </summary>
+    public const string Terminal = "terminal";
 }

@@ -49,12 +49,13 @@ public class ContextContractTests
     }
 
     [Fact]
-    public void Summarise_IsTheLastTaskClass_AndKeepsTheOlderWireValues()
+    public void Summarise_KeepsTheOlderWireValues()
     {
-        Assert.Equal(TaskClass.Summarise, Enum.GetValues<TaskClass>()[^1]);
+        // Summarise was the last task class until contract 1.4 appended AgentPlanning (ContractV14Tests pins that one).
+        Assert.Equal(6, (int)TaskClass.Summarise);
         Assert.Equal(
             [("Autocomplete", 0), ("InlineEdit", 1), ("Chat", 2), ("Agent", 3), ("Embedding", 4), ("Vision", 5), ("Summarise", 6)],
-            Enum.GetValues<TaskClass>().Select(t => (t.ToString(), (int)t)));
+            Enum.GetValues<TaskClass>().Take(7).Select(t => (t.ToString(), (int)t)));
     }
 
     [Fact]

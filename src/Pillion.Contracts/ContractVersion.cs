@@ -26,9 +26,16 @@ public static class ContractVersion
     /// <see cref="SearchResponse"/>, <see cref="Citation"/>s on chat replies and mentions, the retrieval switch on
     /// <see cref="ChatRequest"/>, the 1.3 <see cref="MentionKinds"/>, <c>CallersOfAsync</c> on
     /// <see cref="IWorkspaceQueryService"/>, and <see cref="PillionErrorCode.StorageUnavailable"/> and
-    /// <see cref="PillionErrorCode.NotImplemented"/> (see the README).
+    /// <see cref="PillionErrorCode.NotImplemented"/> (see the README). 1.4 added agent session control and
+    /// <c>AnswerApprovalAsync</c> on <see cref="IAgentService"/> with the ledger (<see cref="AgentSessionState"/>) and the
+    /// notifications <c>agentSessionChanged</c>, <c>agentToolCall</c>, <c>agentChangesetReady</c>, <c>terminalScreenChanged</c>
+    /// and <c>backgroundProcessChanged</c>, <see cref="ITerminalService"/>, <see cref="IJournalService"/>, <see cref="ITrustService"/>,
+    /// <c>ReadDocumentAsync</c> on <see cref="IEditorService"/>, <c>PlanRenameAsync</c> on <see cref="IWorkspaceQueryService"/>, the
+    /// creates, deletes, renames and project-item changes on <see cref="Changeset"/>, the per-hunk <see cref="PreviewDecision"/>,
+    /// the per-file <see cref="ApplyResult"/>, the Visual Studio installation on <see cref="HandshakeRequest"/>,
+    /// <see cref="MentionKinds.Terminal"/>, <see cref="TaskClass.AgentPlanning"/> and <see cref="PillionErrorCode.BudgetExhausted"/>.
     /// </summary>
-    public const int Minor = 3;
+    public const int Minor = 4;
 
     /// <summary>Gets the contract version formatted as <c>major.minor</c>.</summary>
     public static string Text => Major.ToString(System.Globalization.CultureInfo.InvariantCulture)

@@ -41,6 +41,21 @@ public interface IHostSession : IDisposable
     /// <summary>Raised on a background thread when the host sends <c>indexStatusChanged</c> (contract 1.3).</summary>
     event EventHandler<HostIndexStatusChangedEventArgs>? IndexStatusChanged;
 
+    /// <summary>Raised on a background thread when the host sends <c>agentSessionChanged</c> (contract 1.4).</summary>
+    event EventHandler<HostAgentSessionChangedEventArgs>? AgentSessionChanged;
+
+    /// <summary>Raised on a background thread when the host sends <c>agentToolCall</c> (contract 1.4).</summary>
+    event EventHandler<HostAgentToolCallEventArgs>? AgentToolCall;
+
+    /// <summary>Raised on a background thread when the host sends <c>agentChangesetReady</c> (contract 1.4).</summary>
+    event EventHandler<HostAgentChangesetReadyEventArgs>? AgentChangesetReady;
+
+    /// <summary>Raised on a background thread when the host sends <c>terminalScreenChanged</c> (contract 1.4).</summary>
+    event EventHandler<HostTerminalScreenChangedEventArgs>? TerminalScreenChanged;
+
+    /// <summary>Raised on a background thread when the host sends <c>backgroundProcessChanged</c> (contract 1.4).</summary>
+    event EventHandler<HostBackgroundProcessChangedEventArgs>? BackgroundProcessChanged;
+
     /// <summary>
     /// Gets a task that completes when the connection is lost or the process exits. Its result describes what
     /// happened (for example "host process exited with code 3").

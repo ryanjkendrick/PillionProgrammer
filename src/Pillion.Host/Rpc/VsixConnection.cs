@@ -21,6 +21,9 @@ internal interface IVsixConnection
     /// <summary>Gets a value indicating whether an authenticated VSIX connection exists.</summary>
     bool IsConnected { get; }
 
+    /// <summary>Gets what the connected VSIX said about itself in the handshake (contract 1.4), or <see langword="null"/> when none is connected.</summary>
+    VsixClientInfo? Client { get; }
+
     /// <summary>Gets the editor service on the current connection.</summary>
     /// <returns>A proxy for <see cref="IEditorService"/>.</returns>
     /// <exception cref="PillionRpcException">No VSIX is connected (<see cref="PillionErrorCode.HostRestarting"/>).</exception>
@@ -35,6 +38,34 @@ internal interface IVsixConnection
     /// <returns>A proxy for <see cref="IWorkspaceQueryService"/>.</returns>
     /// <exception cref="PillionRpcException">No VSIX is connected (<see cref="PillionErrorCode.HostRestarting"/>).</exception>
     IWorkspaceQueryService GetWorkspaceQueryService();
+
+    /// <summary>Gets the workspace trust service on the current connection (contract 1.4; a 1.3 VSIX answers method-not-found).</summary>
+    /// <returns>A proxy for <see cref="ITrustService"/>.</returns>
+    /// <exception cref="PillionRpcException">No VSIX is connected (<see cref="PillionErrorCode.HostRestarting"/>).</exception>
+    ITrustService GetTrustService();
+}
+
+/// <summary>What the connected VSIX reported in its <see cref="HandshakeRequest"/>.</summary>
+/// <param name="ProcessId">The devenv.exe process id.</param>
+/// <param name="ContractMajor">The client's contract major version.</param>
+/// <param name="ContractMinor">The client's contract minor version (a 1.3 client calls none of the 1.4 methods and handles none of its notifications).</param>
+/// <param name="VisualStudioInstallationPath">The launching Visual Studio's installation path (contract 1.4), or empty from a 1.3 client; the Command Runner (work item 3.11) loads its Developer PowerShell environment.</param>
+/// <param name="VisualStudioVersion">The launching Visual Studio's version, or empty.</param>
+internal sealed record VsixClientInfo(int ProcessId, int ContractMajor, int ContractMinor, string VisualStudioInstallationPath, string VisualStudioVersion)
+{
+    /// <summary>Creates the record from an accepted handshake request.</summary>
+    /// <param name="request">The request.</param>
+    /// <returns>The record.</returns>
+    public static VsixClientInfo From(HandshakeRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return new VsixClientInfo(
+            request.ClientProcessId,
+            request.ContractMajor,
+            request.ContractMinor,
+            request.VisualStudioInstallationPath ?? string.Empty,
+            request.VisualStudioVersion ?? string.Empty);
+    }
 }
 
 /// <summary>The <see cref="IVsixConnection"/> the RPC server keeps up to date.</summary>
@@ -59,6 +90,18 @@ internal sealed class VsixConnection : IVsixConnection
     }
 
     /// <inheritdoc/>
+    public VsixClientInfo? Client
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _current?.Client;
+            }
+        }
+    }
+
+    /// <inheritdoc/>
     public IEditorService GetEditorService() => GetCurrent().Editor.Value;
 
     /// <inheritdoc/>
@@ -67,14 +110,18 @@ internal sealed class VsixConnection : IVsixConnection
     /// <inheritdoc/>
     public IWorkspaceQueryService GetWorkspaceQueryService() => GetCurrent().Workspace.Value;
 
+    /// <inheritdoc/>
+    public ITrustService GetTrustService() => GetCurrent().Trust.Value;
+
     /// <summary>Makes <paramref name="rpc"/> the current connection (after its handshake is accepted).</summary>
     /// <param name="rpc">The connection's JSON-RPC instance.</param>
-    public void Attach(JsonRpc rpc)
+    /// <param name="client">What the client said in the handshake, or <see langword="null"/> when not known.</param>
+    public void Attach(JsonRpc rpc, VsixClientInfo? client = null)
     {
         ArgumentNullException.ThrowIfNull(rpc);
         lock (_lock)
         {
-            _current = new Proxies(rpc);
+            _current = new Proxies(rpc, client);
         }
 
         ConnectionChanged?.Invoke(this, EventArgs.Empty);
@@ -135,14 +182,18 @@ internal sealed class VsixConnection : IVsixConnection
         }
     }
 
-    private sealed class Proxies(JsonRpc rpc)
+    private sealed class Proxies(JsonRpc rpc, VsixClientInfo? client)
     {
         public JsonRpc Rpc { get; } = rpc;
+
+        public VsixClientInfo? Client { get; } = client;
 
         public Lazy<IEditorService> Editor { get; } = new(rpc.Attach<IEditorService>);
 
         public Lazy<IApprovalService> Approval { get; } = new(rpc.Attach<IApprovalService>);
 
         public Lazy<IWorkspaceQueryService> Workspace { get; } = new(rpc.Attach<IWorkspaceQueryService>);
+
+        public Lazy<ITrustService> Trust { get; } = new(rpc.Attach<ITrustService>);
     }
 }

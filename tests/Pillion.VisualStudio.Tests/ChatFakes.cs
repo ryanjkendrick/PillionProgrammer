@@ -46,6 +46,19 @@ internal sealed class FakeHostConnection : IHostConnection
         return Task.Run(() => IndexStatusChanged?.Invoke(this, args));
     }
 
+    // Contract 1.4 notifications; nothing in the extension subscribes yet (work items 3.14 and 3.15).
+#pragma warning disable CS0067 // Raised by no test yet.
+    public event EventHandler<HostAgentSessionChangedEventArgs>? AgentSessionChanged;
+
+    public event EventHandler<HostAgentToolCallEventArgs>? AgentToolCall;
+
+    public event EventHandler<HostAgentChangesetReadyEventArgs>? AgentChangesetReady;
+
+    public event EventHandler<HostTerminalScreenChangedEventArgs>? TerminalScreenChanged;
+
+    public event EventHandler<HostBackgroundProcessChangedEventArgs>? BackgroundProcessChanged;
+#pragma warning restore CS0067
+
     public ConnectivityState? Connectivity
     {
         get

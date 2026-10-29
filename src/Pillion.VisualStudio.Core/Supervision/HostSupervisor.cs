@@ -65,6 +65,21 @@ public sealed class HostSupervisor : IHostConnection, IDisposable
     public event EventHandler<HostIndexStatusChangedEventArgs>? IndexStatusChanged;
 
     /// <inheritdoc/>
+    public event EventHandler<HostAgentSessionChangedEventArgs>? AgentSessionChanged;
+
+    /// <inheritdoc/>
+    public event EventHandler<HostAgentToolCallEventArgs>? AgentToolCall;
+
+    /// <inheritdoc/>
+    public event EventHandler<HostAgentChangesetReadyEventArgs>? AgentChangesetReady;
+
+    /// <inheritdoc/>
+    public event EventHandler<HostTerminalScreenChangedEventArgs>? TerminalScreenChanged;
+
+    /// <inheritdoc/>
+    public event EventHandler<HostBackgroundProcessChangedEventArgs>? BackgroundProcessChanged;
+
+    /// <inheritdoc/>
     public ConnectivityState? Connectivity
     {
         get
@@ -454,6 +469,11 @@ public sealed class HostSupervisor : IHostConnection, IDisposable
         session.ConnectivityChanged += OnSessionConnectivityChanged;
         session.SettingsChanged += OnSessionSettingsChanged;
         session.IndexStatusChanged += OnSessionIndexStatusChanged;
+        session.AgentSessionChanged += OnSessionAgentSessionChanged;
+        session.AgentToolCall += OnSessionAgentToolCall;
+        session.AgentChangesetReady += OnSessionAgentChangesetReady;
+        session.TerminalScreenChanged += OnSessionTerminalScreenChanged;
+        session.BackgroundProcessChanged += OnSessionBackgroundProcessChanged;
         try
         {
             // The connectivity notification may have arrived during the handshake, before this subscription.
@@ -491,6 +511,11 @@ public sealed class HostSupervisor : IHostConnection, IDisposable
             session.ConnectivityChanged -= OnSessionConnectivityChanged;
             session.SettingsChanged -= OnSessionSettingsChanged;
             session.IndexStatusChanged -= OnSessionIndexStatusChanged;
+            session.AgentSessionChanged -= OnSessionAgentSessionChanged;
+            session.AgentToolCall -= OnSessionAgentToolCall;
+            session.AgentChangesetReady -= OnSessionAgentChangesetReady;
+            session.TerminalScreenChanged -= OnSessionTerminalScreenChanged;
+            session.BackgroundProcessChanged -= OnSessionBackgroundProcessChanged;
             SetConnectivity(session, null, force: true);
             var owned = false;
             lock (_gate)
@@ -631,6 +656,48 @@ public sealed class HostSupervisor : IHostConnection, IDisposable
 #pragma warning restore CA1031
             {
                 _log.Error("supervisor.index_status_handler_failed", "An IndexStatusChanged handler threw.", ("error", ex.GetType().Name), ("detail", ex.Message));
+            }
+        }
+    }
+
+    private void OnSessionAgentSessionChanged(object? sender, HostAgentSessionChangedEventArgs e) => Forward(sender, AgentSessionChanged, e, "AgentSessionChanged");
+
+    private void OnSessionAgentToolCall(object? sender, HostAgentToolCallEventArgs e) => Forward(sender, AgentToolCall, e, "AgentToolCall");
+
+    private void OnSessionAgentChangesetReady(object? sender, HostAgentChangesetReadyEventArgs e) => Forward(sender, AgentChangesetReady, e, "AgentChangesetReady");
+
+    private void OnSessionTerminalScreenChanged(object? sender, HostTerminalScreenChangedEventArgs e) => Forward(sender, TerminalScreenChanged, e, "TerminalScreenChanged");
+
+    private void OnSessionBackgroundProcessChanged(object? sender, HostBackgroundProcessChangedEventArgs e) => Forward(sender, BackgroundProcessChanged, e, "BackgroundProcessChanged");
+
+    /// <summary>Forwards a contract 1.4 notification of the current session (a stale session's is ignored) to every subscriber, none of which may break supervision.</summary>
+    private void Forward<TArgs>(object? sender, EventHandler<TArgs>? handlers, TArgs e, string name)
+        where TArgs : EventArgs
+    {
+        lock (_gate)
+        {
+            if (!ReferenceEquals(sender, _session))
+            {
+                return;
+            }
+        }
+
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (EventHandler<TArgs> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(this, e);
+            }
+#pragma warning disable CA1031 // A faulty subscriber must not break supervision.
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                _log.Error("supervisor.notification_handler_failed", "A notification handler threw.", ("event", name), ("error", ex.GetType().Name), ("detail", ex.Message));
             }
         }
     }

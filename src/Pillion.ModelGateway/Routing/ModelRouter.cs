@@ -75,6 +75,7 @@ public sealed class ModelRouter : IModelRouter
             TaskClass.Chat => switches.Chat,
             TaskClass.Summarise => switches.Chat,
             TaskClass.Agent => switches.Agent,
+            TaskClass.AgentPlanning => switches.Agent, // Contract 1.4: the planning turn shares the agent switch (work item 3.17 routes it).
             TaskClass.Vision => switches.Vision,
             TaskClass.Embedding => switches.Embedding,
             _ => false,
@@ -222,6 +223,7 @@ public sealed class ModelRouter : IModelRouter
                 return online ? (Profile.Balanced, "Auto: Balanced (online)") : (Profile.LocalStrong, $"Auto: LocalStrong ({state})");
 
             case TaskClass.Agent:
+            case TaskClass.AgentPlanning: // Contract 1.4; design section 6 routes planning to Frontier (work item 3.17 settles the steps).
             case TaskClass.Vision:
                 return online ? (Profile.Frontier, "Auto: Frontier (online)") : (Profile.LocalStrong, $"Auto: LocalStrong ({state})");
 

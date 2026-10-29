@@ -44,7 +44,7 @@ public sealed class ContractV13RpcTests : IDisposable
 
         Assert.True(response.Accepted, response.Reason);
         Assert.Equal(1, response.ContractMajor);
-        Assert.Equal(3, response.ContractMinor);
+        Assert.Equal(ContractVersion.Minor, response.ContractMinor); // 1.4 since work item 3.5; ContractV14RpcTests pins the number.
         var status = await client.Attach<IContextService>().GetIndexStatusAsync(CancellationToken.None).WaitAsync(Wait);
         Assert.False(status.IsIndexing);
     }

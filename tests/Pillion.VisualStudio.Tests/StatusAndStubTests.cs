@@ -54,6 +54,20 @@ public class StatusAndStubTests
     }
 
     [Fact]
+    public async Task ContractOnePointFourStubs_FailWithNotImplementedNamingTheWorkItem()
+    {
+        var targets = HostLocalTargets.CreateNotImplemented();
+
+        var trust = await Assert.ThrowsAsync<PillionRpcException>(() => targets.Trust.RequestTrustAsync(new TrustRequest(), CancellationToken.None));
+        var read = await Assert.ThrowsAsync<PillionRpcException>(() => targets.Editor.ReadDocumentAsync(@"C:\src\A.cs", CancellationToken.None));
+        var rename = await Assert.ThrowsAsync<PillionRpcException>(() => targets.WorkspaceQuery.PlanRenameAsync(new RenameSymbolRequest(), CancellationToken.None));
+
+        Assert.Equal((PillionErrorCode.NotImplemented, "work item 3.14"), (trust.Error.Code, trust.Error.Details));
+        Assert.Equal((PillionErrorCode.NotImplemented, "work item 3.13"), (read.Error.Code, read.Error.Details));
+        Assert.Equal((PillionErrorCode.NotImplemented, "work item 3.24"), (rename.Error.Code, rename.Error.Details));
+    }
+
+    [Fact]
     public async Task EditorStub_RefusesChangesButListsNoDocuments()
     {
         var targets = HostLocalTargets.CreateNotImplemented();

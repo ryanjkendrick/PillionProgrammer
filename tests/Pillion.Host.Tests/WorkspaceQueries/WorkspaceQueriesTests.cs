@@ -410,11 +410,15 @@ public sealed class WorkspaceQueriesTests : IDisposable
 
         public bool IsConnected => Connected;
 
+        public VsixClientInfo? Client => Connected ? new VsixClientInfo(1, ContractVersion.Major, ContractVersion.Minor, string.Empty, string.Empty) : null;
+
         public IEditorService GetEditorService() => throw RpcErrors.NotConnected();
 
         public IApprovalService GetApprovalService() => throw RpcErrors.NotConnected();
 
         public IWorkspaceQueryService GetWorkspaceQueryService() => Connected ? Service : throw RpcErrors.NotConnected();
+
+        public ITrustService GetTrustService() => throw RpcErrors.NotConnected();
     }
 
     /// <summary>The extension's side, canned.</summary>
@@ -455,6 +459,8 @@ public sealed class WorkspaceQueriesTests : IDisposable
         public Task<RenameSymbolResponse> RenameSymbolAsync(RenameSymbolRequest request, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<RunTestsResponse> RunTestsAsync(RunTestsRequest request, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<RenamePlan> PlanRenameAsync(RenameSymbolRequest request, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         private async Task RespondAsync(CancellationToken cancellationToken)
         {
