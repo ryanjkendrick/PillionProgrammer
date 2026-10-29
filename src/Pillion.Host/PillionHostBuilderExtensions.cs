@@ -6,6 +6,7 @@ using Pillion.Common;
 using Pillion.Common.Connectivity;
 using Pillion.Common.Settings;
 using Pillion.Contracts;
+using Pillion.Host.Agents;
 using Pillion.Host.Connectivity;
 using Pillion.Host.Context;
 using Pillion.Host.Context.Retrieval;
@@ -139,6 +140,12 @@ internal static class PillionHostBuilderExtensions
         // until then).
         builder.Services.AddPillionLocalStore();
         builder.Services.AddRpcTarget<IConversationService, ConversationRpcService>();
+
+        // Contract 1.4 stubs (work item 3.5): the agent, terminal and journal services answer NotImplemented naming the work item
+        // that implements them (3.6, 3.11, 3.8), which replaces its line here.
+        builder.Services.AddRpcTarget<IAgentService, NotImplementedAgentService>();
+        builder.Services.AddRpcTarget<ITerminalService, NotImplementedTerminalService>();
+        builder.Services.AddRpcTarget<IJournalService, NotImplementedJournalService>();
 
         // Persistence (work item 2.2): chat requests that name a conversation are saved as they run, and the Outbound log's
         // records are written to the store as they are produced (the gateway's in-memory log feeds the sink), so the
