@@ -36,7 +36,7 @@ public static class IndexSchema
         CREATE INDEX ix_files_partition ON files (partition);
         """;
 
-    /// <summary>Gets the schema: every migration of <c>index.db</c>, in order: version 1 here, version 2 from the index storage (work item 2.8), version 3 for the symbols (work item 2.5).</summary>
+    /// <summary>Gets the schema: every migration of <c>index.db</c>, in order: version 1 here, version 2 from the index storage (work item 2.8), version 3 for the symbols (work item 2.5), version 4 for the redacted flag on chunks (work item 3.2).</summary>
     public static StoreSchema Schema { get; } = IndexStorageSchema.After(StoreMigration.Sql(1, 1, "files", Version1));
 }
 

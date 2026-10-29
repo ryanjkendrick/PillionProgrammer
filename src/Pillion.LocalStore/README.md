@@ -125,8 +125,11 @@ Schema. Index schema version 1 (the `files` table and the index identity) belong
 `new StoreSchema("index", [version1, IndexStorageSchema.Migration])`, or `IndexStorageSchema.After(version1)`. It needs
 only `files (id, language, partition)` and raises `min_reader_version` to 2. Version 3 (`IndexSymbolsSchema`, work item
 2.5) recreates the symbol tables with stable ids and ambiguity columns and keeps the reader version at 2;
-`IndexStorageSchema.After(version1)` returns all three, and `IndexStorage` needs version 3. The tables are listed in
-`Index/IndexStorageSchema.cs` and `Index/IndexSymbolsSchema.cs`:
+Version 4 (`IndexRedactionSchema`, work item 3.2) adds `chunks.redacted` (0 or 1: the secret scanner replaced something in
+the chunk's text before it was stored, with an index placeholder `<redacted-index:kind>`) and a partial index over it, and
+keeps the reader version at 2; `IndexStorageSchema.After(version1)` returns all four, `IndexStorage` needs version 3, and
+`IChunkRepository.CountRedactedChunksAsync` counts the flagged chunks. The tables are listed in
+`Index/IndexStorageSchema.cs`, `Index/IndexSymbolsSchema.cs` and `Index/IndexRedactionSchema.cs`:
 
 | Table | Columns |
 | --- | --- |

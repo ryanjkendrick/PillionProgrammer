@@ -8,12 +8,18 @@ namespace Pillion.LocalStore.Index;
 /// <param name="EndLine">The last line of the chunk.</param>
 /// <param name="Kind">What the chunk is, for example <c>method</c>, <c>type-header</c> or <c>window</c>.</param>
 /// <param name="Breadcrumb">The breadcrumb <c>path &gt; namespace &gt; type &gt; member</c>; indexed with the text.</param>
-/// <param name="Text">The chunk text as it is in the file.</param>
+/// <param name="Text">The chunk text as it is in the file, or with its secrets replaced by index placeholders (<see cref="IsRedacted"/>).</param>
 /// <param name="TokenCount">Its size in the embedding model's tokens.</param>
 public sealed record NewChunk(int StartLine, int EndLine, string Kind, string Breadcrumb, string Text, int TokenCount)
 {
     /// <summary>Gets the int8 embedding, or empty when the chunk is not embedded yet (see <see cref="IChunkRepository.UpsertEmbeddingsAsync"/>).</summary>
     public ReadOnlyMemory<sbyte> Embedding { get; init; }
+
+    /// <summary>
+    /// Gets a value indicating whether the secret scanner replaced something in <see cref="Text"/> before it was stored
+    /// (work item 3.2, issue #103); stored in <c>chunks.redacted</c> (schema version 4) and counted per index.
+    /// </summary>
+    public bool IsRedacted { get; init; }
 
     /// <summary>Gets the float32 embedding, or empty. <b>Development only</b> (int8 recall-loss measurement); dropped before release.</summary>
     public ReadOnlyMemory<float> EmbeddingFloat32 { get; init; }

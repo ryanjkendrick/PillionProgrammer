@@ -8,7 +8,8 @@ Design doc sections 12 (Secret scanner), 6 (Streaming, caching and resilience) a
 | --- | --- |
 | `SecretScanner.Scan(text)` | Finds secrets. Returns non-overlapping `SecretMatch` (kind, start, length, severity) in document order. |
 | `RedactionSession` | Reversible redaction for **one model request**: `Redact`, `Restore`, `FindUnresolved`, `Redactions`, `Dispose`. |
-| `LogRedactor.Redact(text)` | One-way, stateless redaction for logs, the audit trail and index writes. |
+| `LogRedactor.Redact(text)` | One-way, stateless redaction for logs and the audit trail (`<redacted:kind>`). |
+| `IndexRedactor.Redact(text)` | One-way redaction of a chunk's text before it is stored in the index (work item 3.2, issue #103): `<redacted-index:kind>`, with the count of secrets replaced. `ContainsPlaceholder` and `FindPlaceholders` recognise index placeholders in retrieved text or a proposed edit. |
 | `SecretKind`, `SecretSeverity`, `SecretMatch`, `RedactionSummary` | Value types. |
 
 ## The one rule: redact at the model boundary, never at the process boundary
@@ -30,11 +31,18 @@ before anything is written to logs, the audit trail or the index. In practice:
 4. The session is disposed when the request ends (originals are dropped from memory).
 5. Local models (Ollama, LM Studio and similar) are not a cloud boundary and are not redacted, unless the user
    asks for it.
-6. Logs, audit and index writes call `LogRedactor.Redact` and cannot restore. Do not put a `RedactionSession`
+6. Logs and audit writes call `LogRedactor.Redact` and cannot restore. Do not put a `RedactionSession`
    in a log call.
+7. The indexing pipeline calls `IndexRedactor.Redact` on every chunk's text before the chunk is written (its row, its
+   FTS5 rows and the text the embedding is computed from), so no secret from an ordinary source file reaches `index.db`.
+   The placeholder is marked as the index's, `<redacted-index:kind>`, and is never restored by any session: a
+   retrieved chunk that carries one is sent to the model as is (the scanner at the model boundary allow-lists it, so it is
+   not counted again), and an edit that carries one is bounced to the model (work item 3.10), since only text read from a
+   file is literal. The Index window shows how many chunks of each root were redacted.
 
 If scanning throws `RegexMatchTimeoutException`, the text could not be verified. The gateway must not send it.
-`LogRedactor` fails closed too: it returns `<redacted:scan-failed>` instead of the text.
+`LogRedactor` fails closed too: it returns `<redacted:scan-failed>` instead of the text, and `IndexRedactor` stores
+`<redacted-index:scan-failed>` in place of the chunk's text.
 
 ## Placeholders
 
@@ -130,7 +138,7 @@ Kept small on purpose. A candidate value is skipped when:
    `wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY` (AWS docs), the Azurite/storage-emulator `devstoreaccount1` key, and
    Stripe's documentation key `sk_test_4eC39HqLyjWDarjtT1zdp7dc`;
 2. it ends in `EXAMPLE` or `EXAMPLEKEY` (the AWS documentation convention, e.g. `ASIAIOSFODNN7EXAMPLE`);
-3. it starts with `<redacted:` (already one of our placeholders);
+3. it starts with `<redacted:` or `<redacted-index:` (already one of our placeholders: a request's, or the index's);
 4. it is one repeated character (`0000...`, `xxxx...`), or for values of 16 or more characters is 60% or more one
    character (`AKIAXXXXXXXXXXXXXXXX`, `ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`);
 5. it is exactly (case-insensitive) one of `password passwd pass pwd secret changeme change-me redacted null none`;
