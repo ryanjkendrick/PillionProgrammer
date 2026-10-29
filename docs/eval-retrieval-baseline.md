@@ -161,6 +161,124 @@ These are facts for the product owner, not a recommendation from this item.
   files. It was the tool's background mechanism killing the process, not a fault in the provider. The same run completed
   when started directly. The figures above come from later runs.
 
+## Truncated embeddings, work item 3.4
+
+Issue #90 asked whether embedding only the first part of a long chunk, with the full text still stored, would buy back
+indexing time on the CPU tier without costing retrieval. The product owner's decision of 2026-10-24 made it a phase 3
+side item with this harness as its judge. This section gives the figures; **the default is not changed**:
+`indexing.embeddingTokenCap` ships at 0 (off).
+
+### What the option does
+
+- `indexing.embeddingTokenCap` (settings file only, 0 by default) caps the text handed to the embedding model at N
+  tokens of the chunk's own tokenizer count. The chunk's stored text, its lexical (FTS) entry and its `token_count` stay
+  complete; only the vector is made from less.
+- **The breadcrumb counts inside the cap and comes first.** It carries the file, namespace, type and member names, which
+  is what the symbol and "where" queries match on, so it is never cut; the leading text gets what remains, cut at a
+  white-space boundary. A cap the breadcrumb alone fills embeds the breadcrumb and nothing else. A cap of zero or less is
+  off; a cap at or above the chunk cap (512) is off too, since nothing would be cut; a small positive cap is raised to 16.
+- **The cap is part of what identifies the vectors.** The cap in force is written to the index `meta`
+  (`embedding_token_cap`) before the first vector of a run; a full run over an index whose recorded cap differs from the
+  setting wipes the index and embeds everything again, as a model change does, and a settings change to another cap
+  queues that run. An index built before the option has no row and counts as 0, so existing indexes are left alone.
+- The harness takes `--embedding-token-cap <n>`, records the cap and the number of chunks cut, and scores the int8 loss
+  on the vectors of the capped inputs. It now also reports the embedding time, chunks per second and the index size.
+
+### Runs
+
+- **Date:** 2026-10-29. **Machine:** RYAN-DESKTOP as above (.NET 10.0.14, ONNX Runtime on the CPU). Another agent's
+  build ran during the first baseline run, which is the likely reason it is 48 s slower than its repeat; the two 256 runs
+  agree to 0.3 s.
+- **Set:** `pillion-src` at this branch's `src`: 619 files, 615 indexed, 113,412 lines, 10,560 chunks. The baseline here
+  is run on the same day with the same harness, not the 2026-10-15 figures above (the corpus has grown since).
+- **Model:** bundled `bge-small-en-v1.5` int8 on the CPU, hybrid, lexical and vector modes, `MaxResults` 10, 60 s budget.
+- The baseline and the 256 run were each run twice to show the run-to-run noise. The repeats embed identical inputs; the
+  small differences between them (one symbol query, 0.001 to 0.015 of MRR) come from the batch composition the int8
+  model sees, since the pipeline sorts chunks by length within a window and batches are padded to their longest text.
+
+| Cap | Chunks cut (of 10,560) | Index time | Embedding time | Chunks/s | Hybrid recall@1 / @5 / @10 file | Hybrid MRR file | Hybrid recall@10 / MRR symbol | Vector recall@10 / MRR file | Vector recall@10 symbol | Hybrid p50 / p95 ms | Database bytes a chunk |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| off | 0 | 280.1 s | 266.3 s | 37.7 | 0.77 / 0.90 / **0.967** | **0.825** | 0.717 / 0.395 | 0.950 / 0.752 | 0.783 | 13 / 17 | 2,179 |
+| off (repeat) | 0 | 232.0 s | 219.9 s | 45.5 | 0.77 / 0.90 / **0.967** | **0.826** | 0.733 / 0.399 | 0.950 / 0.755 | 0.783 | 12 / 16 | 2,266 |
+| 256 | 2,211 (21%) | 177.2 s | 166.5 s | 59.6 | 0.70 / 0.92 / **0.967** | **0.788** | 0.783 / 0.417 | 0.933 / 0.744 | 0.733 | 13 / 16 | 2,171 |
+| 256 (repeat) | 2,211 (21%) | 176.9 s | 166.0 s | 59.7 | 0.72 / 0.90 / **0.967** | **0.803** | 0.783 / 0.404 | 0.950 / 0.751 | 0.750 | 13 / 17 | 2,174 |
+| 128 | 4,914 (47%) | 135.7 s | 124.7 s | 77.8 | 0.67 / 0.90 / **0.983** | **0.763** | 0.750 / 0.370 | 0.917 / 0.673 | 0.717 | 12 / 17 | 2,167 |
+
+The lexical rows are identical in every run (recall@10 file 0.933, MRR 0.789, recall@10 symbol 0.683), as they must be:
+the cap never touches the lexical index. The int8 loss stayed at 0.0 points of file recall for the baseline and 256 runs
+(top-10 overlap 0.982 to 0.988); at 128 the int8 vectors scored 1.7 points above float32 by file and 1.7 below by
+symbol, which is one query each way.
+
+By query kind, hybrid mode (recall@10 file / MRR file / recall@10 symbol):
+
+| Cap | concept (16) | symbol (14) | where (16) | which (14) |
+| --- | --- | --- | --- | --- |
+| off | 0.88 / 0.68 / 0.50 | 1.00 / 0.96 / 0.79 | 1.00 / 0.94 / 0.69 | 1.00 / 0.72 / 0.93 |
+| off (repeat) | 0.88 / 0.68 / 0.56 | 1.00 / 0.96 / 0.86 | 1.00 / 0.94 / 0.69 | 1.00 / 0.72 / 0.86 |
+| 256 | 0.88 / 0.64 / 0.50 | 1.00 / 0.96 / 0.86 | 1.00 / 0.89 / 0.88 | 1.00 / 0.66 / 0.93 |
+| 256 (repeat) | 0.88 / 0.66 / 0.50 | 1.00 / 0.96 / 0.86 | 1.00 / 0.91 / 0.88 | 1.00 / 0.69 / 0.93 |
+| 128 | 0.94 / 0.58 / 0.56 | 1.00 / 0.96 / 0.79 | 1.00 / 0.91 / 0.81 | 1.00 / 0.60 / 0.86 |
+
+The two file misses in hybrid mode are the same in every run but one (`gw-17`, a concept query about the autocomplete
+suggestion cache, and `core-12`, about stop words in the full-text match expression; at 128 `gw-17` happened to land in
+the top 10). The cap does not change which files are found; it changes their rank.
+
+### What the figures say
+
+- **Recall at 10 by file, the gate metric, is unchanged at 256** (0.967, 58 of 60, in all four runs) and within one query
+  at 128. Every expected file is still found, because the lexical leg sees the whole text and the fusion keeps it.
+- **The cost of 256 is rank, not recall.** Hybrid MRR by file falls from 0.825 / 0.826 to 0.788 / 0.803 (0.02 to 0.04, against
+  0.001 between the baseline repeats and 0.015 between the 256 repeats), and recall at 1 from 0.77 to 0.70 / 0.72: three or
+  four of the 60 queries lose their first-place hit. The loss sits in the `concept` and `which` kinds, whose answers are
+  often long members and type headers (21% of this corpus's chunks are over 256 tokens) whose tails the vector leg no
+  longer sees. In the vector leg alone, recall at 10 moved by at most one query and MRR by 0.001 to 0.011, so the fused
+  rank is where the difference shows.
+- **Symbol recall improves at 256** in hybrid mode (0.717 / 0.733 to 0.783, the `where` kind from 0.69 to 0.88): with the
+  breadcrumb first and less text behind it, a long member's vector carries more of its own name. The vector-leg symbol
+  recall falls (0.783 to 0.733 / 0.750), so the gain comes through the fusion.
+- **128 is too far.** Hybrid MRR falls to 0.763 (0.06), recall at 1 to 0.67, and the vector leg loses a tenth of its MRR
+  (0.752 to 0.673) and 3 points of file recall.
+- **Time: 256 saves a quarter to a third of the indexing time on real code**: 177 s against 232 to 280 s (embedding
+  166 s against 220 to 266 s), 59.7 chunks a second against 37.7 to 45.5. Per 100,000 lines of this code that is 1.6
+  minutes against 2.0 to 2.5 here, well inside both the restated CPU-tier target of 4 minutes and the original 3. 128
+  saves about half (136 s).
+- **Index size does not change.** The vector has the same 384 int8 dimensions whatever the model saw, and the text is
+  stored whole, so the database holds 2,167 to 2,266 bytes a chunk in every run; the spread is SQLite page layout, not
+  the cap. The issue's 2.3 KB figure is untouched by this experiment.
+- **Query latency does not change** (hybrid p50 12 to 13 ms, p95 16 to 17 ms): the query is embedded whole and the
+  vector search is the same size.
+
+### Recommendation
+
+**Keep the option off by default.** The 256 cap is a real indexing-time saving on the CPU tier (about 30%), but it
+pays for it with first-rank quality on exactly the queries the design cares about for chat context: three or four of 60
+answers slip from rank 1, and hybrid MRR falls by 0.02 to 0.04, outside the run-to-run noise. The metric the cap leaves
+intact, recall at 10, is the gate metric, but the product shows a handful of chunks and the first is the one that
+matters most. The pressure that motivated the experiment has also eased: the product owner restated the CPU-tier targets
+on 2026-10-24 to figures the uncapped pipeline meets, the index size, the other half of issue #90, is not affected by the
+cap at all, and the DirectML decision (issue #78) addresses the GPU tier without any quality cost. 128 should not be
+offered as a default under any tier.
+
+What the option is good for: an opt-in for very large repositories on the CPU tier (at 1,000,000 lines the saving is
+of the order of 10 minutes), and a documented, measured knob should the targets be tightened again. It is settable in
+`settings.json` today; it has no options-page control, which is right for an experiment. If the product owner prefers
+the time over the rank, 256 is the value to take; the index rebuilds itself when the setting changes.
+
+### Commands
+
+```powershell
+dotnet build PillionProgrammer.NoVsix.slnf -c Release
+# baseline (run twice)
+dotnet tools\eval\Pillion.Eval\bin\Release\net10.0\Pillion.Eval.dll retrieval --set eval\retrieval\pillion-src --model bundled/bge-small-en-v1.5
+# cap 256 (run twice) and cap 128
+dotnet tools\eval\Pillion.Eval\bin\Release\net10.0\Pillion.Eval.dll retrieval --set eval\retrieval\pillion-src --model bundled/bge-small-en-v1.5 --embedding-token-cap 256
+dotnet tools\eval\Pillion.Eval\bin\Release\net10.0\Pillion.Eval.dll retrieval --set eval\retrieval\pillion-src --model bundled/bge-small-en-v1.5 --embedding-token-cap 128
+```
+
+Each run takes 3 to 6 minutes on the reference machine and leaves `summary.md`, `pillion-src__bundled_bge-small-en-v1.5[__cap<n>].json`
+and `.md` under `tools/eval/out/<timestamp>/`. The runs above are `20261029-081323` and `20261029-082400` (baseline),
+`20261029-081820` and `20261029-082817` (256) and `20261029-082131` (128) on the development machine.
+
 ## Raw results
 
 Results are under `tools/eval/out/` on the development machine (git-ignored). Each run folder has `summary.md`, and a
