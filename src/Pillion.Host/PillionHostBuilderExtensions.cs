@@ -4,9 +4,11 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Pillion.Common;
 using Pillion.Common.Connectivity;
+using Pillion.CommandRunner;
 using Pillion.Common.Settings;
 using Pillion.Contracts;
 using Pillion.Host.Agents;
+using Pillion.Host.CommandSessions;
 using Pillion.Host.Connectivity;
 using Pillion.Host.Context;
 using Pillion.Host.Context.Retrieval;
@@ -146,6 +148,15 @@ internal static class PillionHostBuilderExtensions
         builder.Services.AddRpcTarget<IAgentService, NotImplementedAgentService>();
         builder.Services.AddRpcTarget<ITerminalService, NotImplementedTerminalService>();
         builder.Services.AddRpcTarget<IJournalService, NotImplementedJournalService>();
+
+        // The Command Runner (work item 3.11), behind features.commandRunner: sessions on a pseudo-console with the Developer
+        // PowerShell environment of the Visual Studio named in the handshake (HostCommandSessions fills the path in). No RPC
+        // surface yet: the agent tools (3.12) and the Terminal window (3.15) create their sessions through HostCommandSessions.
+        builder.Services.AddPillionCommandRunner();
+        builder.Services.TryAddSingleton(sp => new HostCommandSessions(
+            sp.GetRequiredService<ICommandRunner>(),
+            sp.GetService<IVsixConnection>(),
+            sp.GetService<ILoggerFactory>()));
 
         // Persistence (work item 2.2): chat requests that name a conversation are saved as they run, and the Outbound log's
         // records are written to the store as they are produced (the gateway's in-memory log feeds the sink), so the

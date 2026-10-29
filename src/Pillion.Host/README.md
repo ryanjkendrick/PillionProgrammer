@@ -627,3 +627,15 @@ no values; the client reads the settings it shows again through `ISettingsServic
   `AddPillionSettingsNotifications`). In the VSIX it surfaces as `IHostConnection.SettingsChanged`; the chat model
   picker, the open Options pages and autocomplete availability read their settings again when a section they use
   is named.
+
+## Command Runner (`CommandSessions/`)
+
+Work item 3.11, design sections 8 and 19, behind `features.commandRunner`. The library is `src/Pillion.CommandRunner`
+(its README has the API; [docs/command-runner.md](../../docs/command-runner.md) the behaviour). The host registers
+`ICommandRunner` and the shared `DeveloperEnvironmentCache` through `AddPillionCommandRunner()` and composes
+`HostCommandSessions`, which creates sessions with the launching Visual Studio's installation path from the handshake
+(`IVsixConnection.Client.VisualStudioInstallationPath`, contract 1.4), or the newest installation `vswhere.exe` reports
+when a 1.3 client sent none, so every session loads that installation's Developer PowerShell environment once per host.
+There is no RPC surface yet: `ITerminalService` keeps its `NotImplemented` stub until the agent tools (work item 3.12)
+and the Terminal window (3.15) create their sessions through `HostCommandSessions`. With the flag off,
+`CreateSessionAsync` fails with `PolicyDenied` naming the flag and nothing is started.

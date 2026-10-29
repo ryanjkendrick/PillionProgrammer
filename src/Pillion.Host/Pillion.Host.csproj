@@ -34,6 +34,8 @@
     <ProjectReference Include="..\Pillion.Indexing\Pillion.Indexing.csproj" />
     <!-- The symbol graph's approximate reference edges, the fallback of the workspace queries (work item 2.14). -->
     <ProjectReference Include="..\Pillion.ContextEngine\Pillion.ContextEngine.csproj" />
+    <!-- The Command Runner (work item 3.11): shell commands under a pseudo-console for agent sessions, behind features.commandRunner. -->
+    <ProjectReference Include="..\Pillion.CommandRunner\Pillion.CommandRunner.csproj" />
   </ItemGroup>
 
   <ItemGroup>

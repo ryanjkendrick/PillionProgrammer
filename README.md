@@ -241,7 +241,8 @@ on except `reranker`, which waits on a licence review. They are listed below in 
     "workspaceQueries": true,
     "indexWindow": true,
     "retrieval": true,
-    "reranker": false
+    "reranker": false,
+    "commandRunner": true
   }
 }
 ```
@@ -270,6 +271,7 @@ on except `reranker`, which waits on a licence review. They are listed below in 
 | `indexWindow` | **View > Other Windows > Pillion Index** and **Tools > Pillion: Open Index** are hidden, the status bar shows no indexing indicator, and the **Indexing** Options page (`indexing.exclude`, `maxMemoryMb`, `pauseOnBattery`, `retentionDays`) says it is disabled by settings or policy. Pillion Host indexes either way (that is the `indexing` flag); the setting values stay in `settings.json`. The extension reads the flag when Pillion Host becomes ready and when the Tools menu opens (an absent flag means on). |
 | `retrieval` | `IContextService.SearchAsync` and `SearchDetailedAsync` (hybrid retrieval, work item 2.11: lexical, vector and symbol candidates fused with Reciprocal Rank Fusion, see `src/Pillion.ContextEngine/README.md`) fail with `PolicyDenied` and a message that names the flag. Searching also needs `indexing` and `localStore` to open an index, and the vector candidates need `embeddings`; without them the search answers from what it can open (no index: no hits; no embeddings: lexical and symbol hits only, marked `Degraded`). |
 | `reranker` | **Off by default.** The cross-encoder reranker of hybrid retrieval waits on the licence review in design section 18, so no reranker ships yet: this version keeps the fused order whether the flag is on or off. A policy can keep it off; nothing turns it on but the user. |
+| `commandRunner` | Pillion Host refuses to create a Command Runner session (`ICommandRunner.CreateSessionAsync`, work item 3.11, see `docs/command-runner.md`) with `PolicyDenied` and a message that names the flag: no shell is started, no pseudo-console is created and no Developer PowerShell environment is loaded. Nothing else changes; the agent tools (3.12) and the Terminal window (3.15) that build on it are later work items. |
 
 A repository can switch flags off for everyone who opens it with `disabledFeatures` in `.pillion/policy.json`, next to
 `localOnly`, `disabledTools`, `exclude` and `denyCommands`:
