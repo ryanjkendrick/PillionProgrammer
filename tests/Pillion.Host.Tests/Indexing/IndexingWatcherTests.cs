@@ -107,7 +107,9 @@ public sealed class IndexingWatcherTests(ITestOutputHelper output) : IDisposable
         var storage = harness.Root.Storage;
         await UntilAsync(async () => (await storage.Chunks.SearchLexicalAsync("quarterly_wombat_summary", 3)).Count > 0, "the watched edit to be indexed");
         Assert.Equal(fullRuns, harness.Service.FullRuns);
-        Assert.True(harness.Service.IncrementalRuns >= 1);
+        // The run writes the chunks before it counts itself (IndexingService increments after RunIncrementalAsync), so the search above
+        // can succeed a moment before the counter moves; wait for the count rather than assert it (failed on CI run 40802271491).
+        await UntilAsync(() => Task.FromResult(harness.Service.IncrementalRuns >= 1), "the incremental run to be counted");
         Assert.Equal(1, harness.Service.LastIncrementalStatistics!.FilesIndexed);
     }
 
