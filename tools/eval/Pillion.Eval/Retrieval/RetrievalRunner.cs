@@ -9,6 +9,7 @@ using Pillion.Contracts;
 using Pillion.Eval.Golden;
 using Pillion.Eval.Metrics;
 using Pillion.Eval.Models;
+using Pillion.Host.Indexing;
 using Pillion.ModelGateway;
 
 namespace Pillion.Eval.Retrieval;
@@ -59,7 +60,7 @@ internal static class RetrievalRunner
             {
                 await log.WriteLineAsync($"== {set.Name} with {model} ==").ConfigureAwait(false);
                 var result = await RunOneAsync(set, model, options, machine, log, cancellationToken).ConfigureAwait(false);
-                var jsonPath = Path.Combine(output, $"{set.Name}__{model.FileSafeName}.json");
+                var jsonPath = Path.Combine(output, $"{set.Name}__{model.FileSafeName}{(options.EmbeddingTokenCap > 0 ? string.Create(CultureInfo.InvariantCulture, $"__cap{options.EmbeddingTokenCap}") : string.Empty)}.json");
                 result = result with { JsonPath = jsonPath };
                 await File.WriteAllTextAsync(jsonPath, JsonSerializer.Serialize(result, Json), cancellationToken).ConfigureAwait(false);
                 await File.WriteAllTextAsync(Path.ChangeExtension(jsonPath, ".md"), RetrievalReport.Single(result), cancellationToken).ConfigureAwait(false);
@@ -140,17 +141,27 @@ internal static class RetrievalRunner
             }
 
             var stats = environment.Indexing.LastRunStatistics;
-            var index = new IndexFigures(corpusFiles.Count, files.Count, chunks, embedded, stats?.Lines ?? 0, clock.Elapsed.TotalSeconds, stats?.EmbeddingTime.TotalSeconds ?? 0);
-            await log.WriteLineAsync(string.Create(CultureInfo.InvariantCulture, $"  indexed {index.IndexedFiles} files, {index.Chunks} chunks ({index.EmbeddedChunks} embedded) in {index.Seconds:0.0} s")).ConfigureAwait(false);
+            var databaseBytes = await storage.Database.ReadAsync(
+                (connection, _) =>
+                {
+                    using var command = connection.CreateCommand();
+                    command.CommandText = "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()";
+                    return Task.FromResult(Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture));
+                },
+                cancellationToken).ConfigureAwait(false);
+            var index = new IndexFigures(corpusFiles.Count, files.Count, chunks, embedded, stats?.Lines ?? 0, clock.Elapsed.TotalSeconds, stats?.EmbeddingTime.TotalSeconds ?? 0, databaseBytes, root.Store.Folder.GetDiskUsageBytes(), stats?.ChunksTruncatedForEmbedding ?? 0);
+            var cap = Math.Max(0, root.EmbeddingTokenCap);
+            await log.WriteLineAsync(string.Create(CultureInfo.InvariantCulture, $"  indexed {index.IndexedFiles} files, {index.Chunks} chunks ({index.EmbeddedChunks} embedded{(cap > 0 ? $", {index.TruncatedChunks} cut to {cap} tokens" : string.Empty)}) in {index.Seconds:0.0} s, {index.BytesPerChunk:0} bytes a chunk")).ConfigureAwait(false);
 
-            // Every chunk of the index, with its corpus-relative file and breadcrumb (the reachability check and the int8 loss read them).
+            // Every chunk of the index, with its corpus-relative file and breadcrumb (the reachability check and the int8 loss read
+            // them). The embedding text is what the model saw: under a cap, the breadcrumb and the leading text that fit.
             var indexed = new List<IndexedChunk>();
             foreach (var file in files)
             {
                 var relative = Relative(root.Path, file.Path);
                 foreach (var chunk in await storage.Chunks.GetChunksByFileAsync(file.FileId, cancellationToken).ConfigureAwait(false))
                 {
-                    indexed.Add(new IndexedChunk(relative, chunk.Breadcrumb, chunk.Breadcrumb + "\n" + chunk.Text));
+                    indexed.Add(new IndexedChunk(relative, chunk.Breadcrumb, EmbeddingInput.For(chunk.Breadcrumb, chunk.Text, chunk.TokenCount, cap, root.Model.TokenCounter)));
                 }
             }
 
@@ -220,6 +231,7 @@ internal static class RetrievalRunner
                 Model = model.QualifiedId,
                 Identity = identity,
                 EmbeddingModel = described,
+                EmbeddingTokenCap = cap,
                 Index = index,
                 Search = new SearchSettings(RetrievalMetrics.K, RetrievalOptions.Default.DefaultMaxPerFile, options.Budget.TotalMilliseconds),
                 Modes = modes,

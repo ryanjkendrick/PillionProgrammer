@@ -97,7 +97,12 @@ through `IRetrievalService` in the Hybrid, Lexical and Vector modes with `MaxRes
   both ways, top 10 chunks by exact cosine with no per-file cap or expansion, and the recall at 10 difference is
   reported in points with the top-10 overlap;
 - the model's id and hash: the SHA-256 of the bundled model's graph (verified against `models.manifest.json` when the
-  runtime locates it) or the digest Ollama reports in `/api/tags`; the machine; the index size and time.
+  runtime locates it) or the digest Ollama reports in `/api/tags`; the machine; the index time, the embedding time,
+  chunks per second, and the index size (the database's pages, and the folder with its WAL) with the bytes a chunk;
+- with `--embedding-token-cap <n>` (work item 3.4), the corpus is indexed with `indexing.embeddingTokenCap` n: the model
+  sees the breadcrumb and the first n tokens of a long chunk while the stored text stays whole. The result records the
+  cap and how many chunks were cut, the file names carry `__cap<n>`, and the int8 measurement scores the vectors of the
+  capped inputs, as the pipeline made them.
 
 Output goes to `tools/eval/out/<timestamp>/` (git-ignored): `summary.md`, and a `.json` (every figure and every query's
 ranks and top 10) and `.md` (breakdown, warnings, misses) per set and model. Bundled models other than the build's own
