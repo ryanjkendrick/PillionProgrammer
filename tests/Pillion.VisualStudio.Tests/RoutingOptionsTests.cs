@@ -30,7 +30,7 @@ public sealed class RoutingOptionsTests : IDisposable
         Assert.Equal(
             Enum.GetValues(typeof(TaskClass)).Cast<TaskClass>().OrderBy(t => (int)t),
             vm.TaskRoutes.Select(r => r.TaskClass).OrderBy(t => (int)t));
-        Assert.Equal(["autocomplete", "inlineEdit", "chat", "agent", "embedding", "summarise", "vision"], vm.TaskRoutes.Select(r => r.Key));
+        Assert.Equal(["autocomplete", "inlineEdit", "chat", "agent", "agentPlanning", "embedding", "summarise", "vision"], vm.TaskRoutes.Select(r => r.Key));
         Assert.Equal(["auto", "fast", "balanced", "frontier", "localFast", "localStrong"], RoutingChoices.Profiles.Select(p => p.Value));
         Assert.Equal(["Auto", "Fast", "Balanced", "Frontier", "Local-fast", "Local-strong"], RoutingChoices.Profiles.Select(p => p.Label));
         Assert.Equal(["fast", "balanced", "frontier", "localFast", "localStrong"], vm.ProfileOverrides.Select(p => p.Key));
@@ -50,7 +50,7 @@ public sealed class RoutingOptionsTests : IDisposable
         Assert.False(vm.IsDirty);
         Assert.All(vm.TaskRoutes, r => Assert.Equal("auto", r.SelectedProfile.Value));
         Assert.Equal(
-            [false, true, true, false, false, false, true],
+            [false, true, true, false, false, false, false, true],
             vm.TaskRoutes.Select(r => r.CloudSwitchOn));
         Assert.All(vm.ProfileOverrides, p => Assert.Equal(string.Empty, p.ModelId));
         Assert.False(vm.ThinkHarder);
@@ -90,8 +90,9 @@ public sealed class RoutingOptionsTests : IDisposable
 
         await vm.LoadAsync();
 
-        Assert.Equal(["localFast", "balanced", "auto", "frontier", "auto", "auto", "auto"], vm.TaskRoutes.Select(r => r.SelectedProfile.Value));
-        Assert.Equal([false, true, true, true, false, false, true], vm.TaskRoutes.Select(r => r.CloudSwitchOn));
+        // Agent planning (contract 1.4) has no routing.tasks value here and no switch of its own: Auto, off.
+        Assert.Equal(["localFast", "balanced", "auto", "frontier", "auto", "auto", "auto", "auto"], vm.TaskRoutes.Select(r => r.SelectedProfile.Value));
+        Assert.Equal([false, true, true, true, false, false, false, true], vm.TaskRoutes.Select(r => r.CloudSwitchOn));
         Assert.Equal(["mistral/codestral-latest", string.Empty, string.Empty, "qwen2.5-coder:7b", string.Empty], vm.ProfileOverrides.Select(p => p.ModelId));
         Assert.True(vm.ThinkHarder);
         Assert.Equal("12gb", vm.SelectedGpuTier.Value);
