@@ -95,6 +95,7 @@ public sealed partial class ModelGateway
                 {
                     ModelId = candidate.ModelId,
                     MaxOutputTokens = request.MaxOutputTokens,
+                    Temperature = request.Temperature,
                     Tools = sendTools ? [.. declarations] : null,
                     ToolMode = sendTools ? request.ToolMode : null,
                     AdditionalProperties = new AdditionalPropertiesDictionary

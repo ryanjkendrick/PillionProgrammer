@@ -72,6 +72,10 @@ internal sealed class OllamaChatClient : IChatClient
 
         var responseId = Guid.NewGuid().ToString("N");
         var callCount = 0;
+        var modelReported = model;
+
+        // A call the model wrote as plain JSON text (Qwen2.5-Coder without its <tool_call> tags) is caught at the end of the reply.
+        var bare = new BareToolCalls(ToolJson.Declarations(options).Select(d => d.Name), responseId, _provider.DisplayName);
         var stream = ToolJson.GuardTools(_provider.Http.PostStreamAsync("api/chat", body, model, cancellationToken), tools is not null, model, cancellationToken);
         await foreach (var line in stream.ConfigureAwait(false))
         {
@@ -82,9 +86,10 @@ internal sealed class OllamaChatClient : IChatClient
                 var text = hasMessage && message.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String
                     ? content.GetString() ?? string.Empty
                     : string.Empty;
-                var update = new ChatResponseUpdate(ChatRole.Assistant, text)
+                modelReported = root.TryGetProperty("model", out var m) ? m.GetString() ?? model : model;
+                var update = new ChatResponseUpdate(ChatRole.Assistant, bare.Push(text))
                 {
-                    ModelId = root.TryGetProperty("model", out var m) ? m.GetString() : model,
+                    ModelId = modelReported,
                     ResponseId = responseId,
                 };
 
@@ -98,6 +103,7 @@ internal sealed class OllamaChatClient : IChatClient
 
                 if (root.TryGetProperty("done", out var done) && done.ValueKind == JsonValueKind.True)
                 {
+                    AddHeldText(update, bare, ref callCount);
                     update.FinishReason = (root.TryGetProperty("done_reason", out var reason) ? reason.GetString() : null) switch
                     {
                         "length" => ChatFinishReason.Length,
@@ -112,6 +118,31 @@ internal sealed class OllamaChatClient : IChatClient
 
                 yield return update;
             }
+        }
+
+        // A stream that ended without "done" still releases what was held back.
+        var late = new ChatResponseUpdate { Role = ChatRole.Assistant, ModelId = modelReported, ResponseId = responseId };
+        AddHeldText(late, bare, ref callCount);
+        if (late.Contents.Count > 0)
+        {
+            late.FinishReason = callCount > 0 ? ChatFinishReason.ToolCalls : null;
+            yield return late;
+        }
+    }
+
+    /// <summary>Adds what the bare-call detector held back: the calls it found, or the text as it was.</summary>
+    private static void AddHeldText(ChatResponseUpdate update, BareToolCalls bare, ref int callCount)
+    {
+        var (calls, rest) = bare.Finish();
+        if (rest.Length > 0)
+        {
+            update.Contents.Insert(0, new TextContent(rest));
+        }
+
+        foreach (var call in calls)
+        {
+            update.Contents.Add(call);
+            callCount++;
         }
     }
 

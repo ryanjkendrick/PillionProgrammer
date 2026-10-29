@@ -39,6 +39,9 @@ public sealed record ToolChatRequest
     /// <summary>Gets the most tokens to generate, or <see langword="null"/> for the adapter's default.</summary>
     public int? MaxOutputTokens { get; init; }
 
+    /// <summary>Gets the sampling temperature, or <see langword="null"/> for the model's default (an adapter that never sends one, such as Anthropic's, ignores it).</summary>
+    public float? Temperature { get; init; }
+
     /// <summary>Gets how the model may use the tools (<see cref="ChatToolMode.Auto"/> when <see langword="null"/>).</summary>
     public ChatToolMode? ToolMode { get; init; }
 }

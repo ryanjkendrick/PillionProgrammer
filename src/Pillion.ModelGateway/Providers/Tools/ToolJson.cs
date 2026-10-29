@@ -42,6 +42,12 @@ public sealed class ToolsNotSupportedException : ProviderException
 /// <summary>What the adapters share when they carry tools: declarations, argument JSON, result text and the error rules.</summary>
 internal static class ToolJson
 {
+    /// <summary>
+    /// Serialiser options for argument JSON that must survive redaction: the default encoder writes the angle brackets as
+    /// Unicode escapes, which would hide a <c>&lt;redacted:...&gt;</c> placeholder from the restorer.
+    /// </summary>
+    public static readonly JsonSerializerOptions Relaxed = new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
     /// <summary>Gets the function declarations of a request's tools; other kinds of <see cref="AITool"/> are not carried.</summary>
     public static IReadOnlyList<AIFunctionDeclaration> Declarations(ChatOptions? options) =>
         options?.Tools is { Count: > 0 } tools ? tools.OfType<AIFunctionDeclaration>().ToList() : [];
@@ -139,7 +145,7 @@ internal static class ToolJson
 
     /// <summary>The arguments of a call as JSON text.</summary>
     public static string ArgumentsJson(FunctionCallContent call) =>
-        call.Arguments is null ? "{}" : JsonSerializer.Serialize(call.Arguments);
+        call.Arguments is null ? "{}" : JsonSerializer.Serialize(call.Arguments, Relaxed);
 
     /// <summary>The UTF-8 size of a call's arguments, for the Outbound log.</summary>
     public static int ArgumentBytes(FunctionCallContent call) => Encoding.UTF8.GetByteCount(ArgumentsJson(call));

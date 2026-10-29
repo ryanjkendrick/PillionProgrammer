@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Pillion.Common.Redaction;
+using Pillion.ModelGateway.Providers.Tools;
 
 namespace Pillion.ModelGateway;
 
@@ -196,7 +197,7 @@ public sealed class RedactingChatClient : DelegatingChatClient
             return arguments;
         }
 
-        var json = _session.Redact(JsonSerializer.Serialize(arguments));
+        var json = _session.Redact(JsonSerializer.Serialize(arguments, ToolJson.Relaxed));
         return ParseArguments(json) ?? arguments;
     }
 
@@ -207,7 +208,7 @@ public sealed class RedactingChatClient : DelegatingChatClient
             return call;
         }
 
-        var json = JsonSerializer.Serialize(call.Arguments);
+        var json = JsonSerializer.Serialize(call.Arguments, ToolJson.Relaxed);
         var restored = _session.Restore(json);
         if (string.Equals(json, restored, StringComparison.Ordinal))
         {
