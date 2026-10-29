@@ -1,0 +1,12 @@
+data: {"id":"chatcmpl-r1","object":"chat.completion.chunk","created":1767225600,"model":"google/gemma-4-e2b","choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning_content":"The user wants the weather in Paris."},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-r1","object":"chat.completion.chunk","created":1767225600,"model":"google/gemma-4-e2b","choices":[{"index":0,"delta":{"content":"","reasoning_content":" I should call get_weather."},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-r1","object":"chat.completion.chunk","created":1767225600,"model":"google/gemma-4-e2b","choices":[{"index":0,"delta":{"content":"","tool_calls":[{"index":0,"id":"call_lms_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\": \"Paris\"}"}}]},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-r1","object":"chat.completion.chunk","created":1767225600,"model":"google/gemma-4-e2b","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}],"usage":null}
+
+data: {"id":"chatcmpl-r1","object":"chat.completion.chunk","created":1767225600,"model":"google/gemma-4-e2b","choices":[],"usage":{"prompt_tokens":350,"completion_tokens":160,"total_tokens":510}}
+
+data: [DONE]
+

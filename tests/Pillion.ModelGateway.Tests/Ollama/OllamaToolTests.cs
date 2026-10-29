@@ -101,6 +101,29 @@ public sealed class OllamaToolTests
     }
 
     [Fact]
+    public async Task ACallWrittenAsPlainJsonText_IsCaughtAsACall_WhenToolsWereOffered()
+    {
+        // qwen2.5-coder:7b through Ollama 0.14 answered the get_weather question this way (2026-10-29): the call's JSON as content.
+        var handler = FakeOllamaHandler.WithDefaults();
+        handler.Json("POST api/chat", FakeOllamaHandler.Fixture("chat-tool-call-bare.ndjson"), "application/x-ndjson");
+        using var provider = Create(handler);
+
+        var updates = await ChatAsync(provider, TestTools.Question(), Options(TestTools.GetWeather));
+
+        Assert.Empty(string.Concat(updates.Select(u => u.Text)));
+        var call = Assert.Single(updates.SelectMany(u => u.Contents).OfType<FunctionCallContent>());
+        Assert.Equal("get_weather", call.Name);
+        Assert.Equal("Paris", TestTools.Argument(call, "city"));
+        Assert.Equal(ChatFinishReason.ToolCalls, updates[^1].FinishReason);
+
+        // Without tools the same text is an ordinary reply.
+        var plain = await ChatAsync(provider, TestTools.Question(), Options());
+        Assert.Equal("{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Paris\", \"unit\": \"celsius\"}}", string.Concat(plain.Select(u => u.Text)));
+        Assert.DoesNotContain(plain.SelectMany(u => u.Contents), c => c is FunctionCallContent);
+        Assert.Equal(ChatFinishReason.Stop, plain[^1].FinishReason);
+    }
+
+    [Fact]
     public async Task AModelWithoutTheToolsCapability_IsToolsNotSupported()
     {
         var handler = FakeOllamaHandler.WithDefaults();
@@ -119,7 +142,8 @@ public sealed class OllamaToolTests
         var handler = FakeOllamaHandler.WithDefaults();
         handler.On("POST api/show", (_, body) => body?["model"]?.GetValue<string>() switch
         {
-            "gemma4:e2b" => FakeOllamaHandler.Respond(HttpStatusCode.OK, FakeOllamaHandler.Fixture("show-gemma4.json")),
+            // A chat model whose show lists no "tools" (the 1.5B coder's recorded show), and one whose show does (the 7B's).
+            "gemma4:e2b" => FakeOllamaHandler.Respond(HttpStatusCode.OK, FakeOllamaHandler.Fixture("show-qwen-coder.json")),
             "qwen2.5-coder:1.5b" => FakeOllamaHandler.Respond(HttpStatusCode.OK, FakeOllamaHandler.Fixture("show-qwen-coder-7b.json")),
             "qwen3-embedding:0.6b" => FakeOllamaHandler.Respond(HttpStatusCode.OK, FakeOllamaHandler.Fixture("show-qwen3-embedding.json")),
             _ => FakeOllamaHandler.Respond(HttpStatusCode.NotFound, FakeOllamaHandler.Fixture("error-model-not-found.json")),
@@ -129,6 +153,6 @@ public sealed class OllamaToolTests
         var models = await provider.ListModelsAsync(CancellationToken.None);
 
         Assert.Equal(ToolCallingSupport.Native, models.Single(m => m.ModelId == "qwen2.5-coder:1.5b").Capabilities.ToolCalling);
-        Assert.Equal(ToolCallingSupport.None, models.Single(m => m.ModelId == "qwen3-embedding:0.6b").Capabilities.ToolCalling);
+        Assert.Equal(ToolCallingSupport.None, models.Single(m => m.ModelId == "gemma4:e2b").Capabilities.ToolCalling);
     }
 }

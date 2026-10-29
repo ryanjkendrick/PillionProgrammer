@@ -1,0 +1,4 @@
+{"model":"qwen2.5-coder:7b","created_at":"2026-10-29T08:40:01.0000000Z","message":{"role":"assistant","content":"{\"name\": \"get_weather\", "},"done":false}
+{"model":"qwen2.5-coder:7b","created_at":"2026-10-29T08:40:01.2000000Z","message":{"role":"assistant","content":"\"arguments\": {\"city\": \"Par"},"done":false}
+{"model":"qwen2.5-coder:7b","created_at":"2026-10-29T08:40:01.4000000Z","message":{"role":"assistant","content":"is\", \"unit\": \"celsius\"}}"},"done":false}
+{"model":"qwen2.5-coder:7b","created_at":"2026-10-29T08:40:01.6000000Z","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","total_duration":2000000000,"prompt_eval_count":193,"eval_count":24}

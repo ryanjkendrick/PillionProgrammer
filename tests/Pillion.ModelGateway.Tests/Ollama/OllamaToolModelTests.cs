@@ -9,18 +9,18 @@ using AiChatRole = Microsoft.Extensions.AI.ChatRole;
 
 namespace Pillion.ModelGateway.Tests.Ollama;
 
-/// <summary>A fact that needs the local Ollama and a named installed model.</summary>
-public sealed class OllamaModelFactAttribute : FactAttribute
+/// <summary>A fact that needs the local Ollama and the tool model of <see cref="OllamaToolModelTests"/> installed.</summary>
+public sealed class OllamaToolModelFactAttribute : FactAttribute
 {
-    public OllamaModelFactAttribute(string model)
+    public OllamaToolModelFactAttribute()
     {
         if (!LiveOllama.IsReachable)
         {
             Skip = $"Ollama is not answering at {LiveOllama.Endpoint}api/version.";
         }
-        else if (!LiveOllama.Has(model))
+        else if (!LiveOllama.Has(OllamaToolModelTests.Model))
         {
-            Skip = $"{model} is not installed.";
+            Skip = $"{OllamaToolModelTests.Model} is not installed.";
         }
     }
 }
@@ -32,12 +32,20 @@ public sealed class OllamaModelFactAttribute : FactAttribute
 [Trait("Category", "Model")]
 public sealed class OllamaToolModelTests
 {
-    /// <summary>The smallest installed model whose <c>ollama show</c> lists the <c>tools</c> capability and that follows a tool prompt.</summary>
-    public const string Model = "qwen2.5-coder:7b";
+    /// <summary>The environment variable that names the model to drive; <c>qwen2.5-coder:7b</c> when unset.</summary>
+    public const string ModelVariable = "PILLION_TEST_OLLAMA_TOOL_MODEL";
 
-    private static readonly TimeSpan Budget = TimeSpan.FromMinutes(5);
+    /// <summary>
+    /// The model: by default the 7B coder, the smallest installed model that both lists the <c>tools</c> capability and answers
+    /// from a tool result (the 1.5B calls the tool but then repeats the call instead of answering). On the 8 GB development
+    /// GPU each turn with the 7B takes about four minutes, because the residency manager swaps it in beside the pinned 1.5B
+    /// autocomplete model and restores the pin afterwards; <see cref="ModelVariable"/> names another model.
+    /// </summary>
+    public static string Model { get; } = Environment.GetEnvironmentVariable(ModelVariable) is { Length: > 0 } configured ? configured : "qwen2.5-coder:7b";
 
-    [OllamaModelFact(Model)]
+    private static readonly TimeSpan Budget = TimeSpan.FromMinutes(10);
+
+    [OllamaToolModelFact]
     public async Task GetWeather_IsCalledNatively_AndTheResultIsUsedInTheAnswer()
     {
         var settings = new PillionSettings();
@@ -65,6 +73,7 @@ public sealed class OllamaToolModelTests
             TaskClass = TaskClass.Agent,
             ModelId = "ollama/" + Model,
             MaxOutputTokens = 256,
+            Temperature = 0,
         };
 
         var route = gateway.ResolveToolRoute(Request("route"));
@@ -73,10 +82,12 @@ public sealed class OllamaToolModelTests
 
         // Turn 1: the model asks for the weather.
         var first = await gateway.ChatWithToolsAsync(Request("m1"), cts.Token).CollectAsync(cts.Token);
+        var firstTurn = $"transport {first[^1].Transport}, finish {first[^1].FinishReason}, error {first[^1].Error?.Message ?? "none"}, text \"{string.Concat(first.Select(u => u.Text))}\", calls {string.Join(",", first.Where(u => u.ToolCall is not null).Select(u => u.ToolCall!.Name))}";
         Assert.All(first, u => Assert.Equal(ToolTransport.Native, u.Transport));
-        Assert.True(first[^1].IsFinal);
-        Assert.Null(first[^1].Error);
-        var call = Assert.Single(first.Where(u => u.ToolCall is not null)).ToolCall!;
+        Assert.True(first[^1].IsFinal, firstTurn);
+        Assert.True(first[^1].Error is null, firstTurn);
+        Assert.True(first.Count(u => u.ToolCall is not null) == 1, firstTurn);
+        var call = first.Single(u => u.ToolCall is not null).ToolCall!;
         Assert.Equal("get_weather", call.Name);
         Assert.Contains("paris", TestTools.Argument(call, "city")?.ToLowerInvariant() ?? string.Empty, StringComparison.Ordinal);
         Assert.Equal(ChatFinishReason.ToolCalls, first[^1].FinishReason);
@@ -86,8 +97,9 @@ public sealed class OllamaToolModelTests
         messages.Add(new AiChatMessage(AiChatRole.Tool, [new FunctionResultContent(call.CallId, "{\"temperature_c\":18,\"conditions\":\"light rain\"}")]));
         var second = await gateway.ChatWithToolsAsync(Request("m2"), cts.Token).CollectAsync(cts.Token);
         var answer = string.Concat(second.Where(u => u.Text is not null).Select(u => u.Text));
-        Assert.Null(second[^1].Error);
-        Assert.True(answer.Contains("18", StringComparison.Ordinal) || answer.Contains("rain", StringComparison.OrdinalIgnoreCase), answer);
+        var secondTurn = $"transport {second[^1].Transport}, finish {second[^1].FinishReason}, error {second[^1].Error?.Message ?? "none"}, text \"{answer}\", calls {string.Join(",", second.Where(u => u.ToolCall is not null).Select(u => u.ToolCall!.Name))}";
+        Assert.True(second[^1].Error is null, secondTurn);
+        Assert.True(answer.Contains("18", StringComparison.Ordinal) || answer.Contains("rain", StringComparison.OrdinalIgnoreCase), secondTurn);
 
         var records = log.GetRecent();
         Assert.Equal(2, records.Count);

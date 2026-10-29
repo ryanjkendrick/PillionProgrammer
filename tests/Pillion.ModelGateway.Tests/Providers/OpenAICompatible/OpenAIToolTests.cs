@@ -121,6 +121,37 @@ public sealed class OpenAIToolTests
     }
 
     [Fact]
+    public async Task ReasoningContent_IsTolerated_AndTheCallAfterItIsDecoded()
+    {
+        // LM Studio puts a reasoning model's thinking in reasoning_content with an empty content (checked against Gemma 4, 2026-10-29).
+        using var provider = Create(Serving("tool-call-reasoning.sse"));
+
+        var updates = await ChatAsync(provider, TestTools.Question(), WithTools());
+
+        Assert.Empty(string.Concat(updates.Select(u => u.Text)));
+        Assert.DoesNotContain(updates.SelectMany(u => u.Contents), c => c is TextContent { Text.Length: > 0 });
+        var call = Assert.Single(updates.SelectMany(u => u.Contents).OfType<FunctionCallContent>());
+        Assert.Equal("call_lms_1", call.CallId);
+        Assert.Equal("Paris", TestTools.Argument(call, "city"));
+        Assert.Equal(ChatFinishReason.ToolCalls, updates.Single(u => u.FinishReason is not null).FinishReason);
+        Assert.Equal(160, Assert.Single(updates.SelectMany(u => u.Contents).OfType<UsageContent>()).Details.OutputTokenCount);
+    }
+
+    [Fact]
+    public async Task AReplyCutOffWhileReasoning_EndsWithLength_AndNoCallOrText_NotAnError()
+    {
+        // Gemma 4 spends about 140 reasoning tokens before a tool call; with a small max_tokens the reply is empty and ends with "length".
+        using var provider = Create(Serving("tool-call-length.sse"));
+
+        var updates = await ChatAsync(provider, TestTools.Question(), new ChatOptions { Tools = [TestTools.GetWeather], MaxOutputTokens = 32 });
+
+        Assert.Empty(string.Concat(updates.Select(u => u.Text)));
+        Assert.DoesNotContain(updates.SelectMany(u => u.Contents), c => c is FunctionCallContent);
+        Assert.Equal(ChatFinishReason.Length, updates.Single(u => u.FinishReason is not null).FinishReason);
+        Assert.Equal(32, Assert.Single(updates.SelectMany(u => u.Contents).OfType<UsageContent>()).Details.OutputTokenCount);
+    }
+
+    [Fact]
     public async Task ParallelToolCalls_InterleavedByIndex_EachBecomeACall()
     {
         using var provider = Create(Serving("tool-calls-parallel.sse"));

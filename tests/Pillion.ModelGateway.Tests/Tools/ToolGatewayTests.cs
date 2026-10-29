@@ -91,7 +91,7 @@ public sealed class ToolGatewayTests
         Assert.Equal(Encoding.UTF8.GetByteCount("""{"city":"Paris","unit":"celsius"}"""), record.ToolArgumentBytes);
         Assert.Equal(Encoding.UTF8.GetByteCount("{\"temperature_c\":18}"), record.ToolResultBytes);
         Assert.Equal(20, record.CompletionTokens);
-        Assert.Equal(300, record.EstimatedPromptTokens);
+        Assert.True(record.EstimatedPromptTokens > 0); // The estimate, as for ChatAsync; the reported count goes to the final update.
     }
 
     [Fact]
@@ -232,7 +232,27 @@ public sealed class ToolGatewayTests
         var listed = await harness.Gateway.ListModelsAsync(CancellationToken.None);
         Assert.False(listed.Single(m => m.Id == LocalModel).Capabilities.HasFlag(ModelCapabilities.Tools));
         Assert.Equal(ToolCallingSupport.None, harness.Inventory.Find("local", "qwen2.5-coder:14b")!.Capabilities.ToolCalling);
-        Assert.Empty(harness.Health.Events.Where(e => e.StartsWith("failed:", StringComparison.Ordinal)));
+        Assert.DoesNotContain(harness.Health.Events, e => e.StartsWith("failed:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ATurnCutOffBeforeAnyTextOrCall_IsFinalWithLength_NotAnError()
+    {
+        // A reasoning model that spends its max_tokens thinking (Gemma 4 on LM Studio) answers with nothing but a finish reason.
+        using var harness = Harness();
+        harness.Local!.ChatUpdates = (_, _, ct) => FakeProvider.Updates(ct, FakeProvider.FinalUpdate(ChatFinishReason.Length, 350, 32));
+
+        var updates = await harness.Gateway.ChatWithToolsAsync(Request() with { MaxOutputTokens = 32, Temperature = null }, CancellationToken.None).CollectAsync();
+
+        var only = Assert.Single(updates);
+        Assert.True(only.IsFinal);
+        Assert.Null(only.Error);
+        Assert.Equal(ChatFinishReason.Length, only.FinishReason);
+        Assert.Equal(ToolTransport.Native, only.Transport);
+        Assert.Equal(32, only.CompletionTokens);
+        Assert.Equal(32, Assert.Single(harness.Local.ReceivedOptions)!.MaxOutputTokens);
+        Assert.Null(Assert.Single(harness.Local.ReceivedOptions)!.Temperature);
+        Assert.Equal(OutboundOutcome.Succeeded, Assert.Single(harness.OutboundLog.GetRecent()).Outcome);
     }
 
     [Fact]
@@ -250,7 +270,7 @@ public sealed class ToolGatewayTests
         Assert.True(final.ErrorIsRetryable);
         Assert.Contains("not a valid JSON object", final.Error!.Message, StringComparison.Ordinal);
         Assert.Equal(OutboundOutcome.Failed, Assert.Single(harness.OutboundLog.GetRecent()).Outcome);
-        Assert.Empty(harness.Health.Events.Where(e => e.StartsWith("failed:", StringComparison.Ordinal)));
+        Assert.DoesNotContain(harness.Health.Events, e => e.StartsWith("failed:", StringComparison.Ordinal));
     }
 
     [Fact]
