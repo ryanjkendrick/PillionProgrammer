@@ -4,3 +4,6 @@
 *.sln text eol=crlf
 *.vsix binary
 *.png binary
+
+# Raw pseudo-console recordings of the Command Runner tests: bytes, never line-ending normalised.
+*.vt binary

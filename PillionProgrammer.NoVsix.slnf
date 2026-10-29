@@ -22,7 +22,9 @@
       "src\\Pillion.Indexing\\Pillion.Indexing.csproj",
       "tests\\Pillion.Indexing.Tests\\Pillion.Indexing.Tests.csproj",
       "tools\\eval\\Pillion.Eval\\Pillion.Eval.csproj",
-      "tests\\Pillion.Eval.Tests\\Pillion.Eval.Tests.csproj"
+      "tests\\Pillion.Eval.Tests\\Pillion.Eval.Tests.csproj",
+      "src\\Pillion.CommandRunner\\Pillion.CommandRunner.csproj",
+      "tests\\Pillion.CommandRunner.Tests\\Pillion.CommandRunner.Tests.csproj"
     ]
   }
 }

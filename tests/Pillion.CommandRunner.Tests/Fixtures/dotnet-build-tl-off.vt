@@ -1,0 +1,8 @@
+[?9001h[?1004h[?25l[2J[m[H  Determining projects to restore...
+]0;C:\Program Files\PowerShell\7\pwsh.exe[?25h  All projects are up-to-date for restore.
+  Hello -> C:\Users\ryan\AppData\Local\Temp\pillion-cr-tests\cf72bc22\bin\Debug\net10.0\Hello.dll
+
+[?25l[38;5;10mBuild succeeded.[m
+    0 Warning(s)
+    0 Error(s)[9;1HBinaryLogger wrote to: C:\Users\ryan\AppData\Local\Temp\pillion-cr-tests\cf72bc22\logs\run-2.binlog[11;1HTime Elapsed 00:00:01.31
+[?25h[?9001l[?1004l
