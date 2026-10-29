@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Command Runner tests (work item 3.11). The component tests start real shells on a real pseudo-console and run in CI
+    (the Windows runners have ConPTY, PowerShell 7, Windows PowerShell, cmd and the .NET SDK); none needs a model.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Pillion.CommandRunner\Pillion.CommandRunner.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Recorded pseudo-console output (dotnet build with the Terminal Logger on and off, a progress bar, git log colour), replayed through the parser. -->
+    <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

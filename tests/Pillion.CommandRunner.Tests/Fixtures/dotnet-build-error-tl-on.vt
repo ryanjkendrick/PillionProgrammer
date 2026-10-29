@@ -1,0 +1,7 @@
+[?9001h[?1004h]9;4;3;\[?25l[2J[m[H]0;C:\Program Files\PowerShell\7\pwsh.exe[?25hRestore complete (0.4s)
+  Hello [36m[1mnet10.0[m [31m[1mfailed with 2 error(s)[m (0.2s)
+    C:\Users\ryan\AppData\Local\Temp\pillion-cr-tests\cf72bc22\[1mProgram.cs[22m(1,27): [31m[1merror[m [31m[1mCS1002[m: ; expected
+    C:\Users\ryan\AppData\Local\Temp\pillion-cr-tests\cf72bc22\[1mProgram.cs[22m(2,9): [31m[1merror[m [31m[1mCS1525[m: Invalid expression term ';'
+]9;4;0;\
+Build [31m[1mfailed with 2 error(s)[m in 1.2s
+[?9001l[?1004l

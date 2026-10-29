@@ -1,0 +1,46 @@
+[?9001h[?1004h[?25l[2J[m[33m[Hc]0;C:\Program Files\PowerShell\7\pwsh.exe[?25h[?25l[m[33mommit cd9ae0eaef8d1a5174a24580436c5b8efb4c542c ([36m[1mHEAD[33m[22m -> [32m[1mmaster[33m[22m)[m
+Author: Test <t@example.com>
+Date:   Thu Oct 29 12:25:14 2026 +0000[5;1H    commit 3[7;1H file3.txt | 1 [32m+[m
+ 1 file changed, 1 insertion(+)[33m[10;1Hcommit eba8a1cd1f163ebe39e1eb601b401b0874f4c3dc[m
+Author: Test <t@example.com>
+Date:   Thu Oct 29 12:25:14 2026 +0000[14;1H    commit 2[16;1H file2.txt | 1 [32m+[m
+ 1 file changed, 1 insertion(+)[33m[19;1Hcommit f36caa4de1543979a2e420f9df83844ac45c11f9[m
+Author: Test <t@example.com>
+Date:   Thu Oct 29 12:25:14 2026 +0000[23;1H    commit 1[25;1H[?25h Directory.Build.props                              |   1 [32m+[m
+ Directory.Build.targets                            |   1 [32m+[m
+ Directory.Packages.props                           |   1 [32m+[m
+ Hello.csproj                                       |   1 [32m+[m
+ Program.cs                                         |   2 [32m+[m
+ bin/Debug/net10.0/Hello.deps.json                  |  23 [32m++[m
+ bin/Debug/net10.0/Hello.dll                        | Bin [31m0 [m-> [32m4608 [mbytes
+ bin/Debug/net10.0/Hello.exe                        | Bin [31m0 [m-> [32m162304 [mbytes
+ bin/Debug/net10.0/Hello.pdb                        | Bin [31m0 [m-> [32m10824 [mbytes
+ bin/Debug/net10.0/Hello.runtimeconfig.json         |  12 [32m+[m
+ file1.txt                                          |   1 [32m+[m
+ logs/run-1.ps1                                     |   4 [32m+[m
+ logs/run-2.binlog                                  | Bin [31m0 [m-> [32m421497 [mbytes
+ logs/run-2.ps1                                     |   4 [32m+[m
+ logs/run-3.ps1                                     |   4 [32m+[m
+ logs/run-4.ps1                                     |   4 [32m+[m
+ logs/run-5.ps1                                     |   4 [32m+[K[m
+ ....NETCoreApp,Version=v10.0.AssemblyAttributes.cs |   4 [32m+[K[m
+ obj/Debug/net10.0/Hello.AssemblyInfo.cs            |  22 [32m++[K[m
+ obj/Debug/net10.0/Hello.AssemblyInfoInputs.cache   |   1 [32m+[K[m
+ ...Hello.GeneratedMSBuildEditorConfig.editorconfig |  18 [32m++[K[m
+ obj/Debug/net10.0/Hello.GlobalUsings.g.cs          |   8 [32m+[K[m
+ obj/Debug/net10.0/Hello.assets.cache               | Bin [31m0 [m-> [32m227 [mbytes[K
+ .../net10.0/Hello.csproj.CoreCompileInputs.cache   |   1 [32m+[K[m
+ .../net10.0/Hello.csproj.FileListAbsolute.txt      |  14 [32m+[K[m
+ obj/Debug/net10.0/Hello.dll                        | Bin [31m0 [m-> [32m4608 [mbytes[K
+ obj/Debug/net10.0/Hello.genruntimeconfig.cache     |   1 [32m+[K[m
+ obj/Debug/net10.0/Hello.pdb                        | Bin [31m0 [m-> [32m10824 [mbytes[K
+ obj/Debug/net10.0/apphost.exe                      | Bin [31m0 [m-> [32m162304 [mbytes[K
+ obj/Debug/net10.0/ref/Hello.dll                    | Bin [31m0 [m-> [32m5120 [mbytes[K
+ obj/Debug/net10.0/refint/Hello.dll                 | Bin [31m0 [m-> [32m5120 [mbytes[K
+ obj/Hello.csproj.nuget.dgspec.json                 | 350 [32m++++++++++++++++++++[K[m
+ obj/Hello.csproj.nuget.g.props                     |  16 [32m+[K[m
+ obj/Hello.csproj.nuget.g.targets                   |   2 [32m+[K[m
+ obj/project.assets.json                            | 356 [32m+++++++++++++++++++++[K[m
+ obj/project.nuget.cache                            |   8 [32m+[K[m
+ 36 files changed, 863 insertions(+)
+[?9001l[?1004l

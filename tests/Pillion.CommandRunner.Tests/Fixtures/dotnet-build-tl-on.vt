@@ -1,0 +1,5 @@
+[?9001h[?1004h]9;4;3;\[?25l[2J[m[H]0;C:\Program Files\PowerShell\7\pwsh.exe[?25hRestore complete (0.4s)
+  Hello [36m[1mnet10.0[m [32m[1msucceeded[m (0.4s) → ]8;id=73248-1;file:///C:/Users/ryan/AppData/Local/Temp/pillion-cr-tests/cf72bc22/bin/Debug/net10.0\bin\Debug\net10.0\Hello.dll
+]8;;\]9;4;0;\
+Build [32m[1msucceeded[m in 1.4s
+[?9001l[?1004l
