@@ -7,8 +7,8 @@ into both processes.
 ## What lives here
 
 - Service interfaces. VSIX to host: `IModelService`, `IInlineEditService`, `IContextService`, `IAgentService`,
-  `ISettingsService`, `IHostLifecycleService`, `IDiagnosticsService`, `IConversationService`. Host to VSIX: `IEditorService`,
-  `IApprovalService`, `IWorkspaceQueryService`.
+  `ISettingsService`, `IHostLifecycleService`, `IDiagnosticsService`, `IConversationService`, `ITerminalService` (1.4),
+  `IJournalService` (1.4). Host to VSIX: `IEditorService`, `IApprovalService`, `IWorkspaceQueryService`, `ITrustService` (1.4).
 - The DTOs those interfaces exchange, the shared enums, `PillionError` / `PillionRpcException`, and
   `ContractVersion`.
 
@@ -33,6 +33,142 @@ VSIX-to-host service on one JSON-RPC connection under its CLR method names, and 
 ones), and must not clash with a notification name (`ContractV13Tests`).
 
 ## Changelog
+
+### 1.4 (phase 3)
+
+Additive only, batched at the boundary of phase 3's first wave into one minor bump (`ContractVersion` says 1.4; work item 3.5,
+decision of 2026-10-24 in `docs/phase-3-plan.md`). A 1.3 peer is still accepted by the handshake: a 1.3 host answers the new
+methods with StreamJsonRpc's method-not-found error, a 1.3 client never calls them and registers no handler for the five new
+notifications, and each side reads the new fields' defaults from the other (`ContractV14Tests`, and over the real pipe
+`ContractV14RpcTests` and `HandshakeCompatibilityTests` in the host tests). Every new DTO is round-tripped by `DtoRoundTripTests`,
+and `ContractV14Tests.EveryDataMemberOrder_MatchesTheOnePointFourSnapshot` pins the `Order` of every member of every DTO, so a
+renamed, removed or reordered member fails the build's tests. Until the consuming work items land, Pillion Host serves
+`IAgentService`, `ITerminalService` and `IJournalService` as stubs answering `PillionErrorCode.NotImplemented` with the work item
+in `Details` (see the host README, Contract 1.4 stubs), and the VSIX answers `ReadDocumentAsync`, `PlanRenameAsync` and
+`RequestTrustAsync` the same way (`HostLocalTargets`).
+
+Every addition, by the work item that consumes it (the sections below give the members and their `Order` values):
+
+| Area | Added to the contract | Consumed by |
+| --- | --- | --- |
+| Agent sessions | `AgentSessionRequest.ConversationId`, `Pins`, `ApprovalMode`; `IAgentService.AnswerApprovalAsync`, `ListSessionsAsync`, `GetSessionAsync`, `SendMessageAsync`, `SetApprovalModeAsync`, `RevertSessionAsync`; `AgentSessionState` (the ledger) with `AgentPlanStep`, `AgentBudgetUsage`, `AgentChangesetSummary`; `AgentToolCallRecord`, `AgentSessionSummary`, `AgentSessionListRequest`, `AgentMessageRequest`, `AgentChangesetReady`; enums `AgentApprovalMode`, `AgentSessionStatus`, `PlanStepStatus`, `ProvenanceKind`, `AgentToolCallStatus`; notifications `agentSessionChanged`, `agentToolCall`, `agentChangesetReady` | Host: the Agent Runtime (3.6), permissions (3.7), routing (3.17). VSIX: the Agent window and approval UX (3.14) |
+| Approvals | `ApprovalDecision.RememberForSession`, `AddToAllowList`, `Preview`; `ApprovalRequest.SessionId`, `ToolCallId`, `ProvenanceKind`, `ChangesetId`, `RequestedUtc` | 3.6, 3.7, 3.14. `IApprovalService.RequestApprovalAsync` stays on the contract, unused by the runtime |
+| Changesets and apply | `Changeset.Creates`, `Deletes`, `Renames`, `ProjectItemChanges`, `SensitivePaths`, `RevertsChangesetId` with `FileCreate`, `FileDelete`, `FileRename`, `ProjectItemChange`, `FileChangeKind`, `ProjectItemChangeKind`; `PreviewDecision.AcceptedEditIndices`, `AcceptedCreateIndices`, `AcceptedDeleteIndices`, `AcceptedRenameIndices`; `ApplyResult.Files` (`FileApplyOutcome`), `RolledBack`, `CheckpointId`, `JournalId`; `IEditorService.ReadDocumentAsync` with `DocumentText` | Host: edit plans (3.10). VSIX: changeset preview and apply (3.13) |
+| Journal and checkpoints | `IJournalService` (VSIX to host): `BeginApplyAsync`, `CommitApplyAsync`, `AbortApplyAsync`, `ListInterruptedAppliesAsync` with `ApplyBeginRequest`, `ApplyFileSnapshot`, `ApplyBeginResponse`, `ApplyCommitRequest`, `ApplyFileHash`, `ApplyJournalEntry`, `ApplyJournalFile`, `ApplyJournalStatus` | Host: audit, checkpoints and the agent tables (3.8). VSIX: apply (3.13) |
+| Terminal | `ITerminalService` (VSIX to host): `SendInputAsync`, `ResizeAsync`, `OpenDeveloperShellAsync`, `GetScreenAsync`, `ListTerminalsAsync`, `CloseTerminalAsync` with `OpenDeveloperShellRequest`, `TerminalInfo`, `TerminalScreen`, `TerminalShell`, `BackgroundProcessInfo`, `BackgroundProcessStatus`; notifications `terminalScreenChanged`, `backgroundProcessChanged`; `MentionKinds.Terminal`; `HandshakeRequest.VisualStudioInstallationPath`, `VisualStudioVersion` | Host: the Command Runner (3.11). VSIX: the Terminal window and `@terminal` (3.15) |
+| Workspace trust | `ITrustService` (host to VSIX): `RequestTrustAsync` with `TrustRequest`, `TrustFile`, `TrustDecision` | Host: workspace trust (3.7). VSIX: the trust prompt (3.14) |
+| Workspace queries | `IWorkspaceQueryService.PlanRenameAsync` with `RenamePlan`, `RenameConflict` | VSIX: Roslyn's renamer (3.24). Host: `rename_symbol` (3.10) |
+| Routing and errors | `TaskClass.AgentPlanning` (enum value 7); `PillionErrorCode.BudgetExhausted` (enum value 9) | 3.17; 3.6 |
+
+- **Agent sessions and the ledger.** `IAgentService` keeps `StartSessionAsync`, `ApproveAsync`, `DenyAsync`, `StopAsync` and
+  `RevertAsync` as they were. Approvals are session state: the ledger carries the pending `ApprovalRequest`, persisted with the
+  session, and the VSIX answers it through `ApproveAsync` or `DenyAsync` (a plain yes or no) or the new `AnswerApprovalAsync`,
+  which carries the decision flags the two older methods cannot; an answer given after either process restarted still counts.
+  Time spent waiting for an approval is excluded from the wall-time budget.
+
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `AgentSessionRequest` | `ConversationId` | 3 | The conversation the task starts from; empty for none |
+  | `AgentSessionRequest` | `Pins` | 4 | `ConversationPin[]`, resolved again by the host |
+  | `AgentSessionRequest` | `ApprovalMode` | 5 | `AgentApprovalMode` (new enum): `Ask` 0 (the default, what a 1.3 client gets), `EditsAuto`, `Autonomous` (reserved for phase 4; a phase 3 host refuses it with `PolicyDenied`). Named `AgentApprovalMode` because `Pillion.Common.Settings` already has an `ApprovalMode` (the settings default) |
+  | `IAgentService` | `AnswerApprovalAsync(ApprovalDecision)` | | The full decision: approve or deny with `RememberForSession`, `AddToAllowList` and, for a changeset, the per-hunk `Preview`; an unknown or answered approval fails with `PolicyDenied` |
+  | `IAgentService` | `ListSessionsAsync(AgentSessionListRequest)` | | `AgentSessionSummary[]`, most recently updated first |
+  | `IAgentService` | `GetSessionAsync(string sessionId)` | | The `AgentSessionState`, or `null` for an unknown id |
+  | `IAgentService` | `SendMessageAsync(AgentMessageRequest)` | | A follow-up with provenance `User`; resumes a Paused session; a finished session answers `PolicyDenied` |
+  | `IAgentService` | `SetApprovalModeAsync(string sessionId, AgentApprovalMode mode)` | | From the next decision on |
+  | `IAgentService` | `RevertSessionAsync(string sessionId)` | | Every applied changeset of the session, newest first (the Agent window's primary revert); a running session is stopped first |
+  | `AgentSessionState` (new) | `SessionId`, `ConversationId`, `Goal`, `Status`, `ApprovalMode`, `Steps`, `Constraints`, `Budgets`, `PendingApproval`, `Changesets`, `StartedUtc`, `UpdatedUtc`, `Summary`, `Error`, `ModelId` | 0-14 | The ledger. `Status` is `AgentSessionStatus` (new enum): `Running` 0, `WaitingForApproval`, `Paused`, `Stopped`, `Completed`, `Failed`; `PendingApproval` is an `ApprovalRequest?`; `Changesets` are `AgentChangesetSummary[]`; `Error` is `PillionError?` (`BudgetExhausted` for a budget) |
+  | `AgentPlanStep` (new) | `Title`, `Status`, `Paths`, `SensitivePaths`, `Note` | 0-4 | `Status` is `PlanStepStatus` (new enum): `Pending` 0, `InProgress`, `Done`, `Skipped`, `Failed` |
+  | `AgentBudgetUsage` (new) | `Steps`, `MaxSteps`, `Tokens`, `MaxTokens`, `Cost`, `MaxCost`, `WallSeconds`, `MaxWallSeconds` | 0-7 | Used and limit for each of the four budgets; cost in US dollars |
+  | `AgentChangesetSummary` (new) | `ChangesetId`, `Description`, `FileCount`, `IsApplied`, `IsReverted`, `CheckpointId`, `JournalId`, `AppliedUtc` | 0-7 | A changeset as the ledger lists it; the ids are what the VSIX reported in its `ApplyResult` |
+  | `AgentToolCallRecord` (new) | `ToolCallId`, `SessionId`, `Step`, `ToolName`, `Tier`, `ArgumentsSummary`, `Provenance`, `ProvenanceDetail`, `TaintReason`, `Status`, `ResultSummary`, `DurationMs`, `StartedUtc`, `ApprovalId`, `IsAutomatic` | 0-14 | One tool call; `Provenance` is `ProvenanceKind` (new enum): `Unknown` 0, `User`, `RulesFile`, `RepositoryFile`, `ToolOutput`, `Terminal`, `Git`, `WebPage`, `McpServer` (the last two arrive in phase 4, declared now so the audit format does not change); `Status` is `AgentToolCallStatus` (new enum): `Started` 0, `Succeeded`, `Failed`, `Denied`, `Cancelled`; `ToolCallId` matches `ApprovalRequest.ToolCallId` |
+  | `AgentSessionSummary` (new) | `SessionId`, `ConversationId`, `Goal`, `Status`, `ApprovalMode`, `StartedUtc`, `UpdatedUtc`, `ChangesetCount` | 0-7 | |
+  | `AgentSessionListRequest` (new) | `ConversationId`, `IncludeFinished`, `Limit` | 0-2 | Empty conversation id lists all; `Limit` 0 means 50, capped at 500 |
+  | `AgentMessageRequest` (new) | `SessionId`, `Message`, `Pins` | 0-2 | |
+  | `AgentChangesetReady` (new) | `SessionId`, `Changeset`, `ApprovalId`, `StepIndex` | 0-3 | `ApprovalId` is the approval the apply waits for, or `null` when the mode applies it without asking; `StepIndex` is -1 when unknown |
+  | `ApprovalRequest` | `SessionId`, `ToolCallId`, `ProvenanceKind`, `ChangesetId`, `RequestedUtc` | 6-10 | The pending approval of a ledger; `Provenance` (order 4) keeps the detail text; `ChangesetId` is set for a T1 apply |
+  | `ApprovalDecision` | `RememberForSession`, `AddToAllowList`, `Preview` | 3-5 | Never honoured for T3, a sensitive path or a tainted call; `Preview` is a `PreviewDecision?` with the per-hunk decision for a changeset approval |
+  | `TaskClass` | `AgentPlanning` | enum value 7 | The planning turn (Frontier online, Local-strong offline); `Agent` keeps its meaning of a step |
+  | `PillionErrorCode` | `BudgetExhausted` | enum value 9 | A session used up a budget and stopped with a report; a 1.3 peer sees an unknown number |
+
+  Notifications, host to client, one positional argument each, none replayed to a client that connects later (it calls
+  `GetSessionAsync`): `agentSessionChanged` (the `AgentSessionState`, on every change of the ledger), `agentToolCall` (the
+  `AgentToolCallRecord`, when a call starts and again when it ends, same `ToolCallId`), `agentChangesetReady` (the
+  `AgentChangesetReady`). Like `indexStatusChanged` they are not methods on a contract interface; a 1.3 client registers no handler.
+  In the VSIX they surface as `IHostConnection.AgentSessionChanged`, `AgentToolCall` and `AgentChangesetReady` (no subscriber until 3.14).
+
+- **Changesets, preview, apply and the journal.** The VSIX is the only writer and the host owns every record that must survive a
+  restart, so before its first edit the VSIX hands the host the pre-edit text (`BeginApplyAsync`), and after its last commits with
+  the post-apply hashes (`CommitApplyAsync`) or aborts (`AbortApplyAsync`). Every hash on the contract is the lower-case
+  hexadecimal SHA-256 of the text encoded as UTF-8 without a byte-order mark, computed by the VSIX; the host stores and echoes it.
+  A revert is a changeset the host builds from the checkpoint with `RevertsChangesetId` set; the VSIX may undo instead while the
+  reverted changeset is still undoable, and opens a merge view where `FileCreate.ExpectedHash` no longer matches.
+
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `Changeset` | `Creates`, `Deletes`, `Renames` | 3-5 | `FileCreate[]` (whole-file writes), `FileDelete[]`, `FileRename[]`, applied after `Edits` in that order; a 1.3 VSIX reads `Edits` only |
+  | `Changeset` | `ProjectItemChanges` | 6 | `ProjectItemChange[]` for projects that list items explicitly |
+  | `Changeset` | `SensitivePaths` | 7 | `string[]`: the paths the changeset view marks and that need explicit approval in every mode |
+  | `Changeset` | `RevertsChangesetId` | 8 | `string?`: set on a restore changeset |
+  | `FileChangeKind` (new enum) | `Edit` 0, `Create`, `Delete`, `Rename` | | |
+  | `FileCreate` (new) | `Path`, `Content`, `ExpectedHash` | 0-2 | `ExpectedHash` `null`: the file must not exist; otherwise the hash the current content must have (a revert's post-apply hash) |
+  | `FileDelete` (new) | `Path`, `ExpectedHash` | 0-1 | `ExpectedHash` `null` deletes whatever is there |
+  | `FileRename` (new) | `OldPath`, `NewPath` | 0-1 | An edit to a renamed file names its old path |
+  | `ProjectItemChange` (new) | `Kind`, `ProjectPath`, `ItemPath`, `NewItemPath` | 0-3 | `Kind` is `ProjectItemChangeKind` (new enum): `Add` 0, `Remove`, `Rename` |
+  | `PreviewDecision` | `AcceptedEditIndices`, `AcceptedCreateIndices`, `AcceptedDeleteIndices`, `AcceptedRenameIndices` | 2-5 | `int[]?` each, ascending; `null` (what a 1.3 VSIX sends) means all when `IsAccepted` is set; a project-item change follows its file |
+  | `ApplyResult` | `Files` | 4 | `FileApplyOutcome[]` (new): `Path`, `Kind`, `IsApplied`, `PostApplyHash`, `Message` (0-4) |
+  | `ApplyResult` | `RolledBack` | 5 | After a failure, the files already changed were rolled back and the journal aborted |
+  | `ApplyResult` | `CheckpointId`, `JournalId` | 6-7 | From `BeginApplyAsync`; empty when the apply never began |
+  | `IEditorService` | `ReadDocumentAsync(string path)` | | `DocumentText` (new): `Path`, `IsOpen`, `IsDirty`, `Text`, `Hash` (0-4); `Text` and `Hash` are `null` when the document is not open, and the host reads the disk |
+  | `IJournalService` (new, VSIX to host) | `BeginApplyAsync(ApplyBeginRequest)` | | Records the intent and checkpoints the pre-edit text; returns `ApplyBeginResponse` |
+  | `IJournalService` | `CommitApplyAsync(ApplyCommitRequest)` | | The post-apply hash per file; an unknown or closed journal fails with `PolicyDenied` |
+  | `IJournalService` | `AbortApplyAsync(string journalId, string? reason)` | | The VSIX rolled back (during the apply, or an interrupted one at start-up) |
+  | `IJournalService` | `ListInterruptedAppliesAsync()` | | `ApplyJournalEntry[]` with an intent but no commit or abort, oldest first |
+  | `ApplyBeginRequest` (new) | `ChangesetId`, `SessionId`, `Files`, `Decision` | 0-3 | `Files` are `ApplyFileSnapshot[]`; `Decision` is the `PreviewDecision?` the user made |
+  | `ApplyFileSnapshot` (new) | `Path`, `Kind`, `PreEditText`, `NewPath` | 0-3 | `PreEditText` is the buffer or the disk, `null` for a created file |
+  | `ApplyBeginResponse` (new) | `CheckpointId`, `JournalId` | 0-1 | |
+  | `ApplyCommitRequest` (new) | `JournalId`, `Files` | 0-1 | `Files` are `ApplyFileHash[]` |
+  | `ApplyFileHash` (new) | `Path`, `PostApplyHash` | 0-1 | `null` for a deleted file |
+  | `ApplyJournalEntry` (new) | `JournalId`, `CheckpointId`, `ChangesetId`, `SessionId`, `Status`, `BeganUtc`, `EndedUtc`, `Files`, `Changeset`, `Decision` | 0-9 | `Status` is `ApplyJournalStatus` (new enum): `Intent` 0, `Committed`, `Aborted`; `Files` are `ApplyJournalFile[]` (roll-back), `Changeset` the `Changeset?` (roll-forward) |
+  | `ApplyJournalFile` (new) | `Path`, `Kind`, `PreEditText`, `PostApplyHash`, `NewPath` | 0-4 | |
+
+- **Terminal and background processes.** `ITerminalService` is VSIX to host; the host pushes screens and process state.
+
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `ITerminalService` (new, VSIX to host) | `SendInputAsync(string terminalId, string text)` | | The Terminal window's input line (how a waiting prompt is answered; the agent never answers one) |
+  | `ITerminalService` | `ResizeAsync(string terminalId, int columns, int rows)` | | |
+  | `ITerminalService` | `OpenDeveloperShellAsync(OpenDeveloperShellRequest)` | | A shell for the user with the launching Visual Studio's Developer PowerShell environment; returns `TerminalInfo` |
+  | `ITerminalService` | `GetScreenAsync(string terminalId)` | | The whole screen and scrollback, for a window that opens mid-session |
+  | `ITerminalService` | `ListTerminalsAsync()` | | `TerminalInfo[]`, oldest first |
+  | `ITerminalService` | `CloseTerminalAsync(string terminalId)` | | Kills the process tree within 1 s |
+  | `OpenDeveloperShellRequest` (new) | `Shell`, `WorkingDirectory`, `Columns`, `Rows` | 0-3 | `Shell` is `TerminalShell` (new enum): `Default` 0, `PowerShell7`, `WindowsPowerShell`, `Cmd`; 0 cells means the host default (120 by 30) |
+  | `TerminalInfo` (new) | `TerminalId`, `SessionId`, `Title`, `Shell`, `Columns`, `Rows`, `ProcessId`, `IsRunning`, `BackgroundProcessId`, `OpenedUtc` | 0-9 | |
+  | `TerminalScreen` (new) | `TerminalId`, `Sequence`, `Columns`, `Rows`, `Lines`, `CursorRow`, `CursorColumn`, `ScrollbackDelta`, `ScrollbackTotal`, `IsWaitingForInput`, `ExitCode`, `Title` | 0-11 | The rendered screen (`Lines`, one per row, no colour) and the lines scrolled off since the previous notification; `Sequence` detects a gap; `IsWaitingForInput` is the prompt rule of design section 8; `ExitCode` is `int?` |
+  | `BackgroundProcessInfo` (new) | `BackgroundProcessId`, `SessionId`, `TerminalId`, `CommandLine`, `Status`, `Port`, `Url`, `ProcessId`, `StartedUtc`, `ExitCode`, `Message` | 0-10 | `Status` is `BackgroundProcessStatus` (new enum): `Starting` 0, `Ready`, `Exited`, `Stopped`, `Failed` |
+  | `HandshakeRequest` | `VisualStudioInstallationPath`, `VisualStudioVersion` | 4-5 | The launching Visual Studio (the folder holding `Common7\IDE`, and its version), for the Developer PowerShell environment; empty from a 1.3 client, and the host then uses the newest installation it finds. The host keeps it on `IVsixConnection.Client` |
+  | `MentionKinds` | `Terminal` | | `terminal`: the tail of the Pillion terminal's buffer, resolved by the host; `Arguments` may name a terminal id |
+
+  Notifications, host to client, one positional argument each, not replayed (a late client calls `ListTerminalsAsync` and
+  `GetScreenAsync`): `terminalScreenChanged` (the `TerminalScreen`, whenever the screen changes, at most 30 times a second per
+  terminal, coalesced) and `backgroundProcessChanged` (the `BackgroundProcessInfo`, on every status change). In the VSIX they
+  surface as `IHostConnection.TerminalScreenChanged` and `BackgroundProcessChanged` (no subscriber until 3.15).
+
+- **Workspace trust and rename plans.** Host to VSIX.
+
+  | Type | Member | Order | Meaning |
+  | --- | --- | --- | --- |
+  | `ITrustService` (new, host to VSIX) | `RequestTrustAsync(TrustRequest)` | | Shows the `.pillion` contents and their hash and waits for the user; a 1.3 VSIX answers method-not-found, which the host reads as not trusted |
+  | `TrustRequest` (new) | `RepositoryRoot`, `PillionFolder`, `ContentHash`, `Files`, `PreviouslyTrustedHash`, `Reason` | 0-5 | `ContentHash`: SHA-256 over the files as relative path (lower-cased, `/`), U+001F, bytes, U+001E, in path order; `Files` are `TrustFile[]` |
+  | `TrustFile` (new) | `RelativePath`, `Content`, `SizeBytes`, `IsTruncated` | 0-3 | `Content` cut at 64 KB |
+  | `TrustDecision` (new) | `RepositoryRoot`, `ContentHash`, `IsTrusted`, `Remember` | 0-3 | `Remember` false asks again next time |
+  | `IWorkspaceQueryService` | `PlanRenameAsync(RenameSymbolRequest)` | | A rename through Roslyn's renamer without touching a file; same budgets as `CallersOfAsync`. The agent never calls the applied `RenameSymbolAsync` |
+  | `RenamePlan` (new) | `IsSuccess`, `SymbolName`, `Edits`, `SensitivePaths`, `Conflicts`, `Message`, `Truncated` | 0-6 | `Edits` are `FileEdit[]`, one per occurrence, each matching exactly once in its file; `Conflicts` are `RenameConflict[]` |
+  | `RenameConflict` (new) | `Location`, `Message` | 0-1 | |
+
+- **Stubs.** Pillion Host serves `IAgentService` (3.6), `ITerminalService` (3.11) and `IJournalService` (3.8) as stubs answering
+  `NotImplemented` with `Details` `work item <id>` until those items land; the VSIX's `HostLocalTargets` answers
+  `ReadDocumentAsync` (3.13), `PlanRenameAsync` (3.24) and `RequestTrustAsync` (3.14) the same way.
 
 ### 1.3 (phase 2)
 

@@ -15,7 +15,13 @@ public class InterfaceShapeTests
             "SearchAsync", "ResolveMentionAsync", "GetIndexStatusAsync", "PauseIndexingAsync",
             "SearchDetailedAsync", "ListExcludedFilesAsync", "RebuildIndexAsync", "DeleteIndexAsync", "ListIndexesAsync", "SetWorkspaceAsync",
         ],
-        [typeof(IAgentService)] = ["StartSessionAsync", "ApproveAsync", "DenyAsync", "StopAsync", "RevertAsync"],
+        [typeof(IAgentService)] =
+        [
+            "StartSessionAsync", "ApproveAsync", "DenyAsync", "StopAsync", "RevertAsync",
+            "AnswerApprovalAsync", "ListSessionsAsync", "GetSessionAsync", "SendMessageAsync", "SetApprovalModeAsync", "RevertSessionAsync",
+        ],
+        [typeof(ITerminalService)] = ["SendInputAsync", "ResizeAsync", "OpenDeveloperShellAsync", "GetScreenAsync", "ListTerminalsAsync", "CloseTerminalAsync"],
+        [typeof(IJournalService)] = ["BeginApplyAsync", "CommitApplyAsync", "AbortApplyAsync", "ListInterruptedAppliesAsync"],
         [typeof(ISettingsService)] = ["GetAsync", "SetAsync", "TestProviderAsync"],
         [typeof(IHostLifecycleService)] = ["HandshakeAsync", "GetStateAsync", "ShutdownAsync"],
         [typeof(IInlineEditService)] = ["EditAsync", "CancelEditAsync"],
@@ -27,9 +33,10 @@ public class InterfaceShapeTests
         ],
 
         // Host to VSIX.
-        [typeof(IEditorService)] = ["ApplyChangesetAsync", "ShowPreviewAsync", "GetOpenDocumentsAsync"],
+        [typeof(IEditorService)] = ["ApplyChangesetAsync", "ShowPreviewAsync", "GetOpenDocumentsAsync", "ReadDocumentAsync"],
         [typeof(IApprovalService)] = ["RequestApprovalAsync"],
-        [typeof(IWorkspaceQueryService)] = ["FindReferencesAsync", "GetDiagnosticsAsync", "GetSymbolAsync", "RenameSymbolAsync", "RunTestsAsync", "CallersOfAsync"],
+        [typeof(IWorkspaceQueryService)] = ["FindReferencesAsync", "GetDiagnosticsAsync", "GetSymbolAsync", "RenameSymbolAsync", "RunTestsAsync", "CallersOfAsync", "PlanRenameAsync"],
+        [typeof(ITrustService)] = ["RequestTrustAsync"],
     };
 
     public static TheoryData<Type> Interfaces => new(ExpectedMethods.Keys);
@@ -114,8 +121,68 @@ public class InterfaceShapeTests
     public void PillionErrorCode_HasExpectedMembers()
     {
         Assert.Equal(
-            ["ProviderUnavailable", "ModelNotInstalled", "ContextOverflow", "PolicyDenied", "ApprovalDenied", "HostRestarting", "Cancelled", "StorageUnavailable", "NotImplemented"],
+            ["ProviderUnavailable", "ModelNotInstalled", "ContextOverflow", "PolicyDenied", "ApprovalDenied", "HostRestarting", "Cancelled", "StorageUnavailable", "NotImplemented", "BudgetExhausted"],
             Enum.GetNames<PillionErrorCode>());
+    }
+
+    [Fact]
+    public void ApprovalMode_HasExpectedMembers()
+    {
+        Assert.Equal(["Ask", "EditsAuto", "Autonomous"], Enum.GetNames<AgentApprovalMode>());
+    }
+
+    [Fact]
+    public void AgentSessionStatus_HasExpectedMembers()
+    {
+        Assert.Equal(["Running", "WaitingForApproval", "Paused", "Stopped", "Completed", "Failed"], Enum.GetNames<AgentSessionStatus>());
+    }
+
+    [Fact]
+    public void PlanStepStatus_HasExpectedMembers()
+    {
+        Assert.Equal(["Pending", "InProgress", "Done", "Skipped", "Failed"], Enum.GetNames<PlanStepStatus>());
+    }
+
+    [Fact]
+    public void ProvenanceKind_HasExpectedMembers()
+    {
+        Assert.Equal(["Unknown", "User", "RulesFile", "RepositoryFile", "ToolOutput", "Terminal", "Git", "WebPage", "McpServer"], Enum.GetNames<ProvenanceKind>());
+    }
+
+    [Fact]
+    public void AgentToolCallStatus_HasExpectedMembers()
+    {
+        Assert.Equal(["Started", "Succeeded", "Failed", "Denied", "Cancelled"], Enum.GetNames<AgentToolCallStatus>());
+    }
+
+    [Fact]
+    public void FileChangeKind_HasExpectedMembers()
+    {
+        Assert.Equal(["Edit", "Create", "Delete", "Rename"], Enum.GetNames<FileChangeKind>());
+    }
+
+    [Fact]
+    public void ProjectItemChangeKind_HasExpectedMembers()
+    {
+        Assert.Equal(["Add", "Remove", "Rename"], Enum.GetNames<ProjectItemChangeKind>());
+    }
+
+    [Fact]
+    public void ApplyJournalStatus_HasExpectedMembers()
+    {
+        Assert.Equal(["Intent", "Committed", "Aborted"], Enum.GetNames<ApplyJournalStatus>());
+    }
+
+    [Fact]
+    public void TerminalShell_HasExpectedMembers()
+    {
+        Assert.Equal(["Default", "PowerShell7", "WindowsPowerShell", "Cmd"], Enum.GetNames<TerminalShell>());
+    }
+
+    [Fact]
+    public void BackgroundProcessStatus_HasExpectedMembers()
+    {
+        Assert.Equal(["Starting", "Ready", "Exited", "Stopped", "Failed"], Enum.GetNames<BackgroundProcessStatus>());
     }
 
     [Fact]
@@ -163,7 +230,7 @@ public class InterfaceShapeTests
     [Fact]
     public void TaskClass_HasExpectedMembers()
     {
-        Assert.Equal(["Autocomplete", "InlineEdit", "Chat", "Agent", "Embedding", "Vision", "Summarise"], Enum.GetNames<TaskClass>());
+        Assert.Equal(["Autocomplete", "InlineEdit", "Chat", "Agent", "Embedding", "Vision", "Summarise", "AgentPlanning"], Enum.GetNames<TaskClass>());
     }
 
     [Fact]

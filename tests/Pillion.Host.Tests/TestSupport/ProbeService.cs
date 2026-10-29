@@ -79,4 +79,7 @@ internal sealed class FakeEditorService : IEditorService
 
     public Task<OpenDocument[]> GetOpenDocumentsAsync(CancellationToken cancellationToken) =>
         Task.FromResult(new[] { new OpenDocument { Path = @"C:\src\Program.cs" } });
+
+    public Task<DocumentText> ReadDocumentAsync(string path, CancellationToken cancellationToken) =>
+        Task.FromResult(new DocumentText { Path = path, IsOpen = false });
 }
