@@ -43,6 +43,10 @@ public enum OutboundOutcome
 /// <param name="TimeToFirstToken">How long the first token took, when one arrived.</param>
 /// <param name="ContextItems">The number of items in the context report of an assembled chat request (pins, current file, rules, history, ...); 0 when the request was not assembled.</param>
 /// <param name="ContextTrimmed">How many of those items were truncated or dropped to fit the model's window.</param>
+/// <param name="ToolsOffered">The names of the tools the request declared to the model (work item 3.23); empty when none were sent.</param>
+/// <param name="ToolCalls">The names of the tool calls the model made, in order; empty when none.</param>
+/// <param name="ToolArgumentBytes">The UTF-8 size of the arguments of those calls, in total. Never their contents.</param>
+/// <param name="ToolResultBytes">The UTF-8 size of the tool results the request carried back to the model, after the 16 KB cap, in total.</param>
 public sealed record OutboundRecord(
     DateTimeOffset Timestamp,
     string RequestId,
@@ -60,7 +64,18 @@ public sealed record OutboundRecord(
     bool CacheHit = false,
     TimeSpan? TimeToFirstToken = null,
     int ContextItems = 0,
-    int ContextTrimmed = 0);
+    int ContextTrimmed = 0,
+    IReadOnlyList<string>? ToolsOffered = null,
+    IReadOnlyList<string>? ToolCalls = null,
+    int ToolArgumentBytes = 0,
+    int ToolResultBytes = 0)
+{
+    /// <summary>Gets the names of the tools declared to the model; empty when none were sent.</summary>
+    public IReadOnlyList<string> ToolsOffered { get; init; } = ToolsOffered ?? [];
+
+    /// <summary>Gets the names of the tool calls the model made; empty when none.</summary>
+    public IReadOnlyList<string> ToolCalls { get; init; } = ToolCalls ?? [];
+}
 
 /// <summary>The Outbound log: every request sent to a model provider, from every task class.</summary>
 public interface IOutboundLog
@@ -163,6 +178,12 @@ public sealed partial class InMemoryOutboundLog : IOutboundLog
             errorCode,
             record.ContextItems,
             record.ContextTrimmed);
+        if ((record.ToolsOffered.Count > 0 || record.ToolCalls.Count > 0 || record.ToolResultBytes > 0) && _logger.IsEnabled(LogLevel.Information))
+        {
+            var offered = string.Join(",", record.ToolsOffered);
+            var called = string.Join(",", record.ToolCalls);
+            LogTools(_logger, record.RequestId, record.ToolsOffered.Count, offered, record.ToolCalls.Count, called, record.ToolArgumentBytes, record.ToolResultBytes);
+        }
     }
 
     /// <inheritdoc/>
@@ -194,6 +215,9 @@ public sealed partial class InMemoryOutboundLog : IOutboundLog
 
     [LoggerMessage(EventId = 421, Level = LogLevel.Warning, Message = "Outbound sink {Sink} failed ({Error}); the record is in the in-memory log only.")]
     private static partial void LogSinkFailed(ILogger logger, string sink, string error);
+
+    [LoggerMessage(EventId = 422, Level = LogLevel.Information, Message = "Outbound {RequestId} tools: {ToolsOffered} offered ({ToolNames}), {ToolCalls} called ({CallNames}), arguments {ArgumentBytes} bytes, results {ResultBytes} bytes.")]
+    private static partial void LogTools(ILogger logger, string requestId, int toolsOffered, string toolNames, int toolCalls, string callNames, int argumentBytes, int resultBytes);
 
     [LoggerMessage(
         EventId = 420,

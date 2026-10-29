@@ -4,13 +4,15 @@ using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 using Pillion.Common.Settings;
 using Pillion.ModelGateway.Providers.OpenAICompatible;
+using Pillion.ModelGateway.Providers.Tools;
 using ChatMessage = Microsoft.Extensions.AI.ChatMessage;
 
 namespace Pillion.ModelGateway.Providers.Mistral;
 
 /// <summary>
 /// Chat over <c>POST /chat/completions</c> with <c>stream: true</c>. The body and the chunk parser are the
-/// OpenAI-compatible adapter's, except that <c>stream_options</c> is not sent (Mistral's reference does not document it;
+/// OpenAI-compatible adapter's, tools included (<c>tools</c>, streamed <c>tool_calls</c>, <c>tool</c> messages with
+/// <c>tool_call_id</c>), except that <c>stream_options</c> is not sent (Mistral's reference does not document it;
 /// the final chunk carries <c>usage</c> without it) and <c>max_tokens</c> is the parameter name.
 /// </summary>
 internal sealed class MistralChatClient : IChatClient
@@ -37,17 +39,24 @@ internal sealed class MistralChatClient : IChatClient
         var model = string.IsNullOrWhiteSpace(options?.ModelId) ? _modelId : options.ModelId;
         var body = BuildBody(model, messages, options);
         var responseId = Guid.NewGuid().ToString("N");
+        var calls = new StreamedToolCalls(_provider.DisplayName, responseId);
 
-        await foreach (var chunk in _provider.Http.PostStreamAsync("chat/completions", body, model, cancellationToken).ConfigureAwait(false))
+        var stream = ToolJson.GuardTools(_provider.Http.PostStreamAsync("chat/completions", body, model, cancellationToken), body.ContainsKey("tools"), model, cancellationToken);
+        await foreach (var chunk in stream.ConfigureAwait(false))
         {
             using (chunk)
             {
-                var update = OpenAIChatClient.ToUpdate(chunk.Data.RootElement, model, responseId);
+                var update = OpenAIChatClient.ToUpdate(chunk.Data.RootElement, model, responseId, calls);
                 if (update is not null)
                 {
                     yield return update;
                 }
             }
+        }
+
+        if (calls.HasCalls)
+        {
+            yield return OpenAIChatClient.CallsUpdate(calls, model, responseId);
         }
     }
 

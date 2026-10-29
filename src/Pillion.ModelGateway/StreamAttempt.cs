@@ -35,6 +35,12 @@ internal sealed record AttemptPolicy
 
     /// <summary>Gets the number of those items that were truncated or dropped.</summary>
     public int ContextTrimmed { get; init; }
+
+    /// <summary>Gets the names of the tools declared to the model (work item 3.23); empty when none.</summary>
+    public IReadOnlyList<string> ToolsOffered { get; init; } = [];
+
+    /// <summary>Gets the UTF-8 size of the tool results the request carries back, after the cap.</summary>
+    public int ToolResultBytes { get; init; }
 }
 
 /// <summary>Thrown when a cloud autocomplete request runs past its hard limit; the suggestion is dropped silently.</summary>
@@ -113,6 +119,12 @@ internal sealed class StreamAttempt<T> : IAsyncDisposable
 
     /// <summary>Gets or sets the number of characters generated, for the estimate.</summary>
     public long GeneratedCharacters { get; set; }
+
+    /// <summary>Gets the names of the tool calls the model made, for the Outbound record.</summary>
+    public List<string> ToolCalls { get; } = [];
+
+    /// <summary>Gets or sets the UTF-8 size of the arguments of those calls, in total.</summary>
+    public int ToolArgumentBytes { get; set; }
 
     /// <summary>
     /// Opens the stream and waits for the first item with content (or the end of the stream), retrying on 429 and 5xx.
@@ -252,7 +264,11 @@ internal sealed class StreamAttempt<T> : IAsyncDisposable
             CacheHit: false,
             TimeToFirstToken,
             _policy.ContextItems,
-            _policy.ContextTrimmed));
+            _policy.ContextTrimmed,
+            _policy.ToolsOffered,
+            ToolCalls.Count > 0 ? ToolCalls.ToList() : null,
+            ToolArgumentBytes,
+            _policy.ToolResultBytes));
     }
 
     public async ValueTask DisposeAsync()

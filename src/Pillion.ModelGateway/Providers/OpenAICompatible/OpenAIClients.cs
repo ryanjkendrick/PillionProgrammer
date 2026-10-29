@@ -3,15 +3,17 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 using Pillion.Common.Settings;
+using Pillion.ModelGateway.Providers.Tools;
 using ChatMessage = Microsoft.Extensions.AI.ChatMessage;
 using ChatRole = Microsoft.Extensions.AI.ChatRole;
 
 namespace Pillion.ModelGateway.Providers.OpenAICompatible;
 
 /// <summary>
-/// Chat over <c>POST /chat/completions</c> with <c>stream: true</c>, parsed from server-sent events. Tool calls are not
-/// sent or read in phase 0. Usage is read from the final chunk when the server honours
-/// <c>stream_options.include_usage</c>.
+/// Chat over <c>POST /chat/completions</c> with <c>stream: true</c>, parsed from server-sent events. Tools go as
+/// <c>tools[].function</c>, earlier calls as <c>assistant.tool_calls</c>, results as <c>tool</c> messages with
+/// <c>tool_call_id</c>; streamed <c>delta.tool_calls</c> argument pieces are assembled per <c>index</c> into complete calls
+/// (work item 3.23). Usage is read from the final chunk when the server honours <c>stream_options.include_usage</c>.
 /// </summary>
 internal sealed class OpenAIChatClient : IChatClient
 {
@@ -37,17 +39,25 @@ internal sealed class OpenAIChatClient : IChatClient
         var model = string.IsNullOrWhiteSpace(options?.ModelId) ? _modelId : options.ModelId;
         var body = BuildBody(_provider.Options.Kind, model, messages, options);
         var responseId = Guid.NewGuid().ToString("N");
+        var calls = new StreamedToolCalls(_provider.Http.DisplayName, responseId);
 
-        await foreach (var chunk in _provider.Http.PostStreamAsync("chat/completions", body, model, cancellationToken).ConfigureAwait(false))
+        var stream = ToolJson.GuardTools(_provider.Http.PostStreamAsync("chat/completions", body, model, cancellationToken), body.ContainsKey("tools"), model, cancellationToken);
+        await foreach (var chunk in stream.ConfigureAwait(false))
         {
             using (chunk)
             {
-                var update = ToUpdate(chunk.RootElement, model, responseId);
+                var update = ToUpdate(chunk.RootElement, model, responseId, calls);
                 if (update is not null)
                 {
                     yield return update;
                 }
             }
+        }
+
+        if (calls.HasCalls)
+        {
+            // The server ended the stream without a finish_reason; the calls it started are still complete.
+            yield return CallsUpdate(calls, model, responseId);
         }
     }
 
@@ -78,7 +88,7 @@ internal sealed class OpenAIChatClient : IChatClient
         var body = new JsonObject
         {
             ["model"] = model,
-            ["messages"] = new JsonArray(messages.Select(ToJson).ToArray<JsonNode?>()),
+            ["messages"] = new JsonArray(messages.SelectMany(ToJson).ToArray<JsonNode?>()),
             ["stream"] = true,
             ["stream_options"] = new JsonObject { ["include_usage"] = true },
         };
@@ -100,8 +110,37 @@ internal sealed class OpenAIChatClient : IChatClient
             body["stop"] = new JsonArray(stops.Take(4).Select(s => (JsonNode?)s).ToArray());
         }
 
+        var tools = ToolJson.Declarations(options);
+        if (tools.Count > 0)
+        {
+            body["tools"] = new JsonArray(tools.Select(t => (JsonNode?)new JsonObject
+            {
+                ["type"] = "function",
+                ["function"] = new JsonObject
+                {
+                    ["name"] = t.Name,
+                    ["description"] = t.Description,
+                    ["parameters"] = ToolJson.Schema(t),
+                },
+            }).ToArray());
+
+            if (ToolChoice(options?.ToolMode) is { } choice)
+            {
+                body["tool_choice"] = choice;
+            }
+        }
+
         return body;
     }
+
+    /// <summary>Maps the abstraction's tool mode to <c>tool_choice</c>; <see langword="null"/> leaves the server's default (<c>auto</c>).</summary>
+    internal static JsonNode? ToolChoice(ChatToolMode? mode) => mode switch
+    {
+        NoneChatToolMode => "none",
+        RequiredChatToolMode { RequiredFunctionName: { } name } => new JsonObject { ["type"] = "function", ["function"] = new JsonObject { ["name"] = name } },
+        RequiredChatToolMode => "required",
+        _ => null,
+    };
 
     /// <summary>
     /// Whether a model of the official API is a reasoning model, which rejects <c>temperature</c> and <c>stop</c>
@@ -114,20 +153,29 @@ internal sealed class OpenAIChatClient : IChatClient
         model.StartsWith("gpt-5", StringComparison.OrdinalIgnoreCase) ||
         model.StartsWith("gpt-6", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Turns one stream chunk (or one whole non-streamed completion) into an update; <see langword="null"/> when it carries nothing.</summary>
-    internal static ChatResponseUpdate? ToUpdate(JsonElement root, string model, string responseId)
+    /// <summary>
+    /// Turns one stream chunk (or one whole non-streamed completion) into an update; <see langword="null"/> when it carries
+    /// nothing. Tool-call pieces go to <paramref name="calls"/>; the chunk that carries a <c>finish_reason</c> yields them complete.
+    /// </summary>
+    internal static ChatResponseUpdate? ToUpdate(JsonElement root, string model, string responseId, StreamedToolCalls calls)
     {
         string? text = null;
         ChatFinishReason? finish = null;
+        List<FunctionCallContent>? completed = null;
         if (root.TryGetProperty("choices", out var choices) && choices.ValueKind == JsonValueKind.Array && choices.GetArrayLength() > 0)
         {
             var choice = choices[0];
-            if ((choice.TryGetProperty("delta", out var delta) || choice.TryGetProperty("message", out delta)) &&
-                delta.ValueKind == JsonValueKind.Object &&
-                delta.TryGetProperty("content", out var content) &&
-                content.ValueKind == JsonValueKind.String)
+            if ((choice.TryGetProperty("delta", out var delta) || choice.TryGetProperty("message", out delta)) && delta.ValueKind == JsonValueKind.Object)
             {
-                text = content.GetString();
+                if (delta.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String)
+                {
+                    text = content.GetString();
+                }
+
+                if (delta.TryGetProperty("tool_calls", out var toolCalls))
+                {
+                    calls.Add(toolCalls);
+                }
             }
 
             if (choice.TryGetProperty("finish_reason", out var reason) && reason.ValueKind == JsonValueKind.String)
@@ -139,6 +187,12 @@ internal sealed class OpenAIChatClient : IChatClient
                     "tool_calls" or "function_call" => ChatFinishReason.ToolCalls,
                     _ => ChatFinishReason.Stop,
                 };
+
+                if (calls.HasCalls)
+                {
+                    completed = calls.Complete();
+                    finish = ChatFinishReason.ToolCalls;
+                }
             }
         }
 
@@ -153,7 +207,7 @@ internal sealed class OpenAIChatClient : IChatClient
             };
         }
 
-        if (string.IsNullOrEmpty(text) && finish is null && usage is null)
+        if (string.IsNullOrEmpty(text) && finish is null && usage is null && completed is null)
         {
             return null;
         }
@@ -164,6 +218,14 @@ internal sealed class OpenAIChatClient : IChatClient
             update.Contents.Add(new TextContent(text));
         }
 
+        if (completed is not null)
+        {
+            foreach (var call in completed)
+            {
+                update.Contents.Add(call);
+            }
+        }
+
         if (usage is not null)
         {
             update.Contents.Add(new UsageContent(usage));
@@ -172,34 +234,78 @@ internal sealed class OpenAIChatClient : IChatClient
         return update;
     }
 
-    private static JsonObject ToJson(ChatMessage message)
+    /// <summary>An update carrying the calls a stream started but never finished with a <c>finish_reason</c>.</summary>
+    internal static ChatResponseUpdate CallsUpdate(StreamedToolCalls calls, string model, string responseId)
     {
-        // Tool calls are not used in phase 0, so a tool result is sent as a user message rather than as an invalid tool turn.
+        var update = new ChatResponseUpdate { Role = ChatRole.Assistant, ModelId = model, ResponseId = responseId, FinishReason = ChatFinishReason.ToolCalls };
+        foreach (var call in calls.Complete())
+        {
+            update.Contents.Add(call);
+        }
+
+        return update;
+    }
+
+    /// <summary>
+    /// Converts one message to its wire messages: one for text (with images and, for the assistant, its <c>tool_calls</c>),
+    /// and one <c>tool</c> message per <see cref="FunctionResultContent"/>.
+    /// </summary>
+    internal static IEnumerable<JsonObject> ToJson(ChatMessage message)
+    {
         var role = message.Role == ChatRole.System ? "system"
             : message.Role == ChatRole.Assistant ? "assistant"
             : "user";
         var images = message.Contents.OfType<DataContent>().Where(d => d.HasTopLevelMediaType("image")).ToList();
-        if (images.Count == 0)
-        {
-            return new JsonObject { ["role"] = role, ["content"] = message.Text };
-        }
+        var calls = message.Role == ChatRole.Assistant ? message.Contents.OfType<FunctionCallContent>().ToList() : [];
+        var results = message.Contents.OfType<FunctionResultContent>().ToList();
 
-        var parts = new JsonArray();
-        if (!string.IsNullOrEmpty(message.Text))
+        if (results.Count == 0 || !string.IsNullOrEmpty(message.Text) || images.Count > 0 || calls.Count > 0)
         {
-            parts.Add(new JsonObject { ["type"] = "text", ["text"] = message.Text });
-        }
-
-        foreach (var image in images)
-        {
-            parts.Add(new JsonObject
+            JsonObject json;
+            if (images.Count == 0)
             {
-                ["type"] = "image_url",
-                ["image_url"] = new JsonObject { ["url"] = $"data:{image.MediaType};base64,{Convert.ToBase64String(image.Data.Span)}" },
-            });
+                json = new JsonObject { ["role"] = role, ["content"] = calls.Count > 0 && string.IsNullOrEmpty(message.Text) ? null : message.Text };
+            }
+            else
+            {
+                var parts = new JsonArray();
+                if (!string.IsNullOrEmpty(message.Text))
+                {
+                    parts.Add(new JsonObject { ["type"] = "text", ["text"] = message.Text });
+                }
+
+                foreach (var image in images)
+                {
+                    parts.Add(new JsonObject
+                    {
+                        ["type"] = "image_url",
+                        ["image_url"] = new JsonObject { ["url"] = $"data:{image.MediaType};base64,{Convert.ToBase64String(image.Data.Span)}" },
+                    });
+                }
+
+                json = new JsonObject { ["role"] = role, ["content"] = parts };
+            }
+
+            if (calls.Count > 0)
+            {
+                json["tool_calls"] = new JsonArray(calls.Select(c => (JsonNode?)new JsonObject
+                {
+                    ["id"] = c.CallId,
+                    ["type"] = "function",
+                    ["function"] = new JsonObject { ["name"] = c.Name, ["arguments"] = ToolJson.ArgumentsJson(c) },
+                }).ToArray());
+            }
+
+            if (results.Count == 0 || !(json["content"] is null && calls.Count == 0))
+            {
+                yield return json;
+            }
         }
 
-        return new JsonObject { ["role"] = role, ["content"] = parts };
+        foreach (var result in results)
+        {
+            yield return new JsonObject { ["role"] = "tool", ["tool_call_id"] = result.CallId, ["content"] = ToolJson.ResultText(result) };
+        }
     }
 
     private static long? ReadLong(JsonElement root, string name) =>

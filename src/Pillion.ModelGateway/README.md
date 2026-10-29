@@ -623,6 +623,66 @@ Common to all four:
   token" without its message.
 - Test connection calls `GET /openai/models?api-version=`; a 404 or 405 means reachable but unverified.
 
+## Tool transport (`Tools/`, `Providers/Tools/`, `ModelGateway.Tools.cs`)
+
+Work item 3.23. The agent runtime (3.6) drives tool calling through the gateway; the gateway carries tool definitions
+to the provider and the model's calls back, and never invokes a tool itself (no `FunctionInvokingChatClient` is in the
+path: the runtime decides, under its permission tiers, whether a call runs).
+
+- **Entry point.** `IModelGateway.ChatWithToolsAsync(ToolChatRequest, ct)` streams `ToolChatUpdate`s: text deltas,
+  complete tool calls (`FunctionCallContent` with the call id, name and parsed arguments, each value a `JsonElement`), and
+  a final update with the finish reason (`ToolCalls` after calls), the token counts and any error. The request carries the
+  conversation as Microsoft.Extensions.AI messages (`TextContent`; the model's earlier `FunctionCallContent`s in an
+  assistant message; the runtime's `FunctionResultContent`s in a `tool`-role message), the tools as
+  `AIFunctionDeclaration`s (`ToolDeclarations.Create(name, description, schemaJson)` or
+  `AIFunctionFactory.CreateDeclaration`), the task class (`Agent`, `AgentPlanning` with contract 1.4; routing is by
+  `TaskClass` generically), a profile or an explicit model id, `MaxOutputTokens` and a `ChatToolMode`.
+  `IModelGateway.ResolveToolRoute(request)` says beforehand which model a turn would go to and whether it takes tools
+  natively, so the runtime can pick the native or the text-protocol prompt variant and pin the model it planned for.
+  Both members have default implementations on the interface that throw `NotImplemented`, so the stub gateways of other
+  test projects keep compiling.
+- **Routing and policy.** The same router as `ChatAsync`: Local-only, the per-task-class cloud switch (`Agent` and
+  `AgentPlanning` share `cloudSwitches.agent`), connectivity, capability, cost caps, explicit model id, fallbacks before
+  the first token. Redaction is the same `RedactingChatClient` as text, extended to tool arguments (sent back as history)
+  and tool results on the way out, and to the arguments of a call on the way back: a placeholder the model echoes into
+  a path or a snippet maps back to the original, exactly as it would in text. Argument JSON is serialised with relaxed
+  escaping so a `<redacted:...>` placeholder stays a placeholder.
+- **Descriptors.** Tool definitions are sent only when the model's `ModelCapabilityDescriptor.ToolCalling` says
+  `Native` (the provider's own word from `ListModelsAsync`, Ollama's `/api/show` capabilities or Mistral's
+  `function_calling`, else the catalog's). With `None`, nothing is sent and the update's `Transport` is `None`: the runtime
+  parses the text protocol. When a `Native` model's adapter or server refuses the tools (an OpenAI-compatible server
+  answering 400 to `tools`, Ollama's 400 "does not support tools", Mistral's "function calling is not enabled";
+  `ToolsNotSupportedException`), `ModelInventory.DowngradeToolCalling` marks the model `None` for the rest of the process
+  (surviving later listings; `ListModelsAsync` drops its `Tools` flag), the reason is logged (event 435), and the turn ends
+  with one final update whose `Transport` is `Downgraded` and whose error is retryable: the runtime sends the turn again
+  with the text protocol instead of the gateway falling back silently to another model.
+- **Results.** Every `FunctionResultContent` is turned into text (a string as it is, anything else as JSON) and capped by
+  `ToolResults.Cap` at `ToolResults.MaxBytes` (16 KB of UTF-8, the marker included; the cut never splits a surrogate pair)
+  before transport, so the Outbound log's `ToolResultBytes` is the size that was sent. The truncation marker names the
+  bytes shown and the total and points at `read_more`. The caller's messages are not changed.
+- **Per adapter.** Anthropic: `tools[].input_schema`, `tool_choice` (`auto`/`any`/`tool`/`none`), `tool_use` blocks whose
+  `input_json_delta` pieces are assembled per block index, earlier calls as `tool_use` blocks of the assistant turn and
+  results as `tool_result` blocks first in a user turn (consecutive result turns merge, as the API requires).
+  OpenAI-compatible, OpenAI, Azure OpenAI and Mistral: `tools[].function`, `tool_choice`, streamed `delta.tool_calls`
+  argument pieces assembled per `index` (or, index-less as Mistral sends them, under the id that started the call), the
+  calls yielded on the chunk that carries `finish_reason`, `assistant.tool_calls` and `tool` messages with `tool_call_id`;
+  a `reasoning_content` field (LM Studio's reasoning models) is tolerated and an empty `content` beside it is not a
+  reply, and a reply cut off by `max_tokens` while reasoning ends with `Length`, no text and no call, not an error.
+  Gemini: `tools[].functionDeclarations` with `$schema`, `$id`, `$comment` and `additionalProperties` scrubbed from the
+  schema, `toolConfig.functionCallingConfig`, whole `functionCall` parts (Gemini streams no argument deltas and no call id,
+  so one is made per response), `functionCall` parts in a `model` turn and `functionResponse` parts in a `user` turn named
+  after the call they answer. Ollama: `tools` on `/api/chat`, `message.tool_calls` with object arguments (an `id` on newer
+  servers, else one is made), the assistant's `tool_calls` and `tool` messages with `tool_name`; the tool definitions count
+  toward the resident context estimate. Ollama also gets `BareToolCalls`: while tools are offered, text that starts a JSON
+  object or a `<tool_call>` tag is held back until the reply ends and becomes calls when it is nothing but call objects
+  naming offered tools (Qwen2.5-Coder sometimes omits the tags its template asks for and Ollama then hands the JSON over as
+  content); any other text streams through at once.
+- **Errors.** Tool-call arguments that are not a JSON object are a `ProviderException` that is retryable and not a
+  provider fault (`ProviderException` gained an `isRetryable` override for failures without a status); mid-stream it ends
+  the turn with `Error` and `ErrorIsRetryable` on the final update.
+- **Outbound log.** `OutboundRecord` gained `ToolsOffered` (names), `ToolCalls` (names, in order), `ToolArgumentBytes`
+  and `ToolResultBytes`; the structured line 422 reports them. Contents are never recorded.
+
 ## Extension points for later work items
 
 | Interface | Default | Supplied by |
@@ -661,4 +721,6 @@ total latency percentiles for qwen2.5-coder:1.5b and :7b to the test output (`--
 Residency: `Ollama/OllamaResidencyTests` runs the adapter against a stateful fake server that, like Ollama, never starts a second runner of a model beside a resident one on a full GPU (reuse of the resident size, release and reload on 8 GB with the pin restored, the second instance on 16 GB, the load and unload timeouts, `ContextOverflow`, the 30 s `/api/ps` cache, the `models.residentContext` override); `Ollama/OllamaResidencyLiveTests` (Live) repeats the 8 GB scenarios against the real server and restores what was resident. It is skipped when another model is resident at discovery, and writes "NOT RUN" to the test output and returns when one appears afterwards: a 7B model cannot be reloaded beside another model on an 8 GB card, and the test does not evict other people's models.
 Context assembly: `Context/` covers truncation, the exclusion and secret-file rules, the assembler (budget maths, priority, caps, summary trigger and cache, stable leading sections, the phase 2 hooks), chat through the gateway with fake providers, a timing benchmark, and `ContextLiveTests` (Live: a pinned file answered by gemma4:e2b, the summariser on a long fake history).
 Embeddings: `Embeddings/` covers routing of the Embedding task class (Local-only, the cloud switch off and on, capability, the catalog's preferences, `routing.profiles`), normalisation and quantisation (round-trip error, recorded scale, ranking), the gateway (batch sizes and order, partial failures, skipping after repeated failures, fallback before the first success and none after, one Outbound record per batch, redaction, the feature flags, the concurrency limit, the circuit breaker, cancellation), the four HTTP adapters against recorded wire shapes (`Fixtures/<Name>/embed*.json`, `embeddings.json`, six-component vectors) and the Ollama residency rules against the stateful fake server (GPU free, shared, full, too-small instance, concurrent batches). `Embeddings/EmbeddingLiveTests` (Live) runs `qwen3-embedding:0.6b` on the local Ollama: dimensions against the catalog, near duplicates against unrelated sentences in float32 and int8, a batch through the gateway with the Outbound log, and a query finding its passage; it unloads only the embedding model afterwards.
+Tool transport (work item 3.23): `Tools/` covers the 16 KB cap, the shared pieces (streamed-argument assembly split mid-token and across indices, argument parsing, schema scrubbing, the tools-rejection rule, the bare-call detector) and the gateway entry point with scripted providers (text then call then final, the Outbound record, a model without native tools, routing by the agent cloud switch and Local-only, redaction of a secret inside tool arguments and results bound for a cloud model with the original restored in the call that comes back, the cap applied before transport with the log matching, the downgrade path, a reply cut off while reasoning, malformed arguments, `ChatAsync` unchanged); `Providers/<Name>/<Name>ToolTests` and `Ollama/OllamaToolTests` assert each adapter's request body against the provider's documented shape (tools, tool choice, the history with a call and a result) and decode the recorded fixtures (`Fixtures/<Name>/tool-*`): a single call with arguments split mid-token, parallel calls, text plus a call, malformed arguments, a server that rejects tools, LM Studio's `reasoning_content`. `Ollama/OllamaToolModelTests` (`Category=Model`) runs a `get_weather` round trip through the whole gateway against `qwen2.5-coder:7b` (`PILLION_TEST_OLLAMA_TOOL_MODEL` names another model; the 1.5B calls the tool but then repeats the call instead of answering); `Providers/Cloud/CloudToolLiveTests` (`Category=Live`) does the same against each cloud API with its key in the environment.
+
 Run only live tests with `dotnet test --filter Category=Live`, or exclude them with `--filter Category!=Live`.

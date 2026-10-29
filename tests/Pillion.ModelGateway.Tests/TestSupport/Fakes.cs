@@ -36,6 +36,12 @@ internal sealed class FakeProvider : IModelProvider
     public Func<IReadOnlyList<AiChatMessage>, ChatOptions?, CancellationToken, IAsyncEnumerable<string>> Chat { get; set; } =
         (messages, _, ct) => Pieces(ct, "Hello", " from ", "fake");
 
+    /// <summary>
+    /// Gets or sets a chat behaviour that streams whole updates (text, tool calls, usage, finish reason); when set it replaces
+    /// <see cref="Chat"/>, for the tool-transport tests.
+    /// </summary>
+    public Func<IReadOnlyList<AiChatMessage>, ChatOptions?, CancellationToken, IAsyncEnumerable<ChatResponseUpdate>>? ChatUpdates { get; set; }
+
     /// <summary>Gets or sets the FIM behaviour.</summary>
     public Func<FimRequest, CancellationToken, IAsyncEnumerable<string>> Fim { get; set; } =
         (_, ct) => Pieces(ct, "a + b");
@@ -91,6 +97,39 @@ internal sealed class FakeProvider : IModelProvider
         }
     }
 
+    public static async IAsyncEnumerable<ChatResponseUpdate> Updates([EnumeratorCancellation] CancellationToken ct, params ChatResponseUpdate[] updates)
+    {
+        foreach (var update in updates)
+        {
+            await Task.Yield();
+            ct.ThrowIfCancellationRequested();
+            yield return update;
+        }
+    }
+
+    /// <summary>An update carrying one complete tool call with the given arguments JSON.</summary>
+    public static ChatResponseUpdate CallUpdate(string callId, string name, string argumentsJson)
+    {
+        var arguments = new Dictionary<string, object?>(StringComparer.Ordinal);
+        using var document = System.Text.Json.JsonDocument.Parse(argumentsJson);
+        foreach (var property in document.RootElement.EnumerateObject())
+        {
+            arguments[property.Name] = property.Value.Clone();
+        }
+
+        var update = new ChatResponseUpdate { Role = AiChatRole.Assistant };
+        update.Contents.Add(new FunctionCallContent(callId, name, arguments) { RawRepresentation = argumentsJson });
+        return update;
+    }
+
+    /// <summary>A final update with the finish reason and usage.</summary>
+    public static ChatResponseUpdate FinalUpdate(ChatFinishReason finish, long prompt, long completion)
+    {
+        var update = new ChatResponseUpdate { Role = AiChatRole.Assistant, FinishReason = finish };
+        update.Contents.Add(new UsageContent(new UsageDetails { InputTokenCount = prompt, OutputTokenCount = completion, TotalTokenCount = prompt + completion }));
+        return update;
+    }
+
     public static ProviderException HttpError(int status) =>
         new(PillionErrorCode.ProviderUnavailable, $"HTTP {status}", (HttpStatusCode)status);
 
@@ -124,8 +163,8 @@ internal sealed class FakeProvider : IModelProvider
     {
     }
 
-    public ProviderModel Model(string modelId, bool fim = false, bool vision = false, int context = 32768, bool chat = true, bool embeddings = false) =>
-        new(Id, modelId, modelId, new ModelCapabilityDescriptor { Chat = chat, Fim = fim, Vision = vision, Embeddings = embeddings, ContextWindow = context, IsLocal = IsLocal });
+    public ProviderModel Model(string modelId, bool fim = false, bool vision = false, int context = 32768, bool chat = true, bool embeddings = false, ToolCallingSupport toolCalling = ToolCallingSupport.None) =>
+        new(Id, modelId, modelId, new ModelCapabilityDescriptor { Chat = chat, Fim = fim, Vision = vision, Embeddings = embeddings, ContextWindow = context, IsLocal = IsLocal, ToolCalling = toolCalling });
 
     private async IAsyncEnumerable<T> Track<T>(IAsyncEnumerable<T> source, [EnumeratorCancellation] CancellationToken ct)
     {
@@ -164,6 +203,17 @@ internal sealed class FakeProvider : IModelProvider
             var list = messages.ToList();
             owner.ReceivedChats.Enqueue(list);
             owner.ReceivedOptions.Enqueue(options);
+            if (owner.ChatUpdates is { } updates)
+            {
+                await foreach (var update in owner.Track(updates(list, options, cancellationToken), cancellationToken))
+                {
+                    update.ModelId ??= modelId;
+                    yield return update;
+                }
+
+                yield break;
+            }
+
             await foreach (var piece in owner.Track(owner.Chat(list, options, cancellationToken), cancellationToken))
             {
                 yield return new ChatResponseUpdate(AiChatRole.Assistant, piece) { ModelId = modelId };

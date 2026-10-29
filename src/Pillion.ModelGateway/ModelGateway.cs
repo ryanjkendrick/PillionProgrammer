@@ -62,6 +62,33 @@ public interface IModelGateway
     /// <param name="cancellationToken">A token that cancels the probe.</param>
     /// <returns>The result.</returns>
     Task<ProviderTestResult> TestProviderAsync(string providerId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Streams one turn of a tool-calling conversation for the agent runtime (work item 3.23): text deltas and complete tool
+    /// calls as they arrive, then a final update with the finish reason and the token counts. Routed by the request's task
+    /// class like <see cref="ChatAsync"/> (Local-only and the cloud switches apply), redacted like text (tool arguments and
+    /// results included), tool results capped at <see cref="ToolResults.MaxBytes"/> before transport, and recorded in the
+    /// Outbound log with the tool names offered, the calls made and the argument and result sizes. Tool definitions are sent
+    /// only when the model's capability descriptor says <see cref="ToolCallingSupport.Native"/>; a model that then refuses
+    /// them is downgraded for the rest of the process and the turn ends with <see cref="ToolTransport.Downgraded"/>. The
+    /// gateway never invokes a tool.
+    /// </summary>
+    /// <param name="request">The turn.</param>
+    /// <param name="cancellationToken">A token that cancels the stream.</param>
+    /// <returns>The updates; the last has <see cref="ToolChatUpdate.IsFinal"/> set.</returns>
+    /// <exception cref="PillionRpcException">No model could serve the request, or it failed before the turn started.</exception>
+    IAsyncEnumerable<ToolChatUpdate> ChatWithToolsAsync(ToolChatRequest request, CancellationToken cancellationToken) =>
+        throw new PillionRpcException(new PillionError { Code = PillionErrorCode.NotImplemented, Message = "This gateway does not implement tool calling." });
+
+    /// <summary>
+    /// Tells where a tool-calling turn would go and whether that model takes tools natively (after any run-time downgrade),
+    /// so the runtime can choose between the native and the text-protocol prompt before it sends the turn.
+    /// </summary>
+    /// <param name="request">The turn (its task class, profile, model id and messages decide the route).</param>
+    /// <returns>The route.</returns>
+    /// <exception cref="PillionRpcException">No model can serve the request.</exception>
+    ToolRoute ResolveToolRoute(ToolChatRequest request) =>
+        throw new PillionRpcException(new PillionError { Code = PillionErrorCode.NotImplemented, Message = "This gateway does not implement tool calling." });
 }
 
 /// <summary>The services a <see cref="StreamAttempt{T}"/> uses.</summary>
@@ -864,7 +891,7 @@ public sealed partial class ModelGateway : IModelGateway
                 timeout.CancelAfter(_services.Options.ListModelsTimeout);
                 var models = await provider.ListModelsAsync(timeout.Token).ConfigureAwait(false);
                 _inventory.Update(provider.Id, models);
-                return models.Select(m => m.ToDescriptor(usable)).ToList();
+                return models.Select(m => _inventory.ApplyDowngrades(m).ToDescriptor(usable)).ToList();
             }
             catch (Exception ex) when (ex is ProviderException or HttpRequestException || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
             {

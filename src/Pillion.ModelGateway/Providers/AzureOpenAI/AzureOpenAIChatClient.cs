@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 using Pillion.Common.Settings;
 using Pillion.ModelGateway.Providers.OpenAICompatible;
+using Pillion.ModelGateway.Providers.Tools;
 using ChatMessage = Microsoft.Extensions.AI.ChatMessage;
 
 namespace Pillion.ModelGateway.Providers.AzureOpenAI;
@@ -10,7 +11,8 @@ namespace Pillion.ModelGateway.Providers.AzureOpenAI;
 /// <summary>
 /// Chat over <c>POST /openai/deployments/{deployment}/chat/completions</c> with <c>stream: true</c>. The body and the
 /// chunk parser are the OpenAI adapter's (official-API rules: <c>max_completion_tokens</c>, no sampling parameters for
-/// reasoning models); the deployment is named in the URL, so the body carries no <c>model</c>. Azure's content-filter
+/// reasoning models; tools, streamed <c>tool_calls</c> and <c>tool</c> messages as there); the deployment is named in the
+/// URL, so the body carries no <c>model</c>. Azure's content-filter
 /// chunks (an empty <c>choices</c> array with filter results) carry no text and are skipped.
 /// </summary>
 internal sealed class AzureOpenAIChatClient : IChatClient
@@ -37,17 +39,24 @@ internal sealed class AzureOpenAIChatClient : IChatClient
         var deployment = string.IsNullOrWhiteSpace(options?.ModelId) ? _deployment : options.ModelId;
         var body = BuildBody(deployment, messages, options);
         var responseId = Guid.NewGuid().ToString("N");
+        var calls = new StreamedToolCalls(_provider.DisplayName, responseId);
 
-        await foreach (var chunk in _provider.Http.PostStreamAsync(_provider.ChatPath(deployment), body, deployment, cancellationToken).ConfigureAwait(false))
+        var stream = ToolJson.GuardTools(_provider.Http.PostStreamAsync(_provider.ChatPath(deployment), body, deployment, cancellationToken), body.ContainsKey("tools"), deployment, cancellationToken);
+        await foreach (var chunk in stream.ConfigureAwait(false))
         {
             using (chunk)
             {
-                var update = OpenAIChatClient.ToUpdate(chunk.Data.RootElement, deployment, responseId);
+                var update = OpenAIChatClient.ToUpdate(chunk.Data.RootElement, deployment, responseId, calls);
                 if (update is not null)
                 {
                     yield return update;
                 }
             }
+        }
+
+        if (calls.HasCalls)
+        {
+            yield return OpenAIChatClient.CallsUpdate(calls, deployment, responseId);
         }
     }
 

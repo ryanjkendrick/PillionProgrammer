@@ -1,0 +1,18 @@
+data: {"id":"chatcmpl-t2","object":"chat.completion.chunk","created":1767225600,"model":"gpt-6.1-sol-2026-01-01","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_first","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-t2","object":"chat.completion.chunk","created":1767225600,"model":"gpt-6.1-sol-2026-01-01","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"city\": \"Pa"}}]},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-t2","object":"chat.completion.chunk","created":1767225600,"model":"gpt-6.1-sol-2026-01-01","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_second","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-t2","object":"chat.completion.chunk","created":1767225600,"model":"gpt-6.1-sol-2026-01-01","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"{\"city\": \"Lon"}}]},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-t2","object":"chat.completion.chunk","created":1767225600,"model":"gpt-6.1-sol-2026-01-01","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ris\"}"}}]},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-t2","object":"chat.completion.chunk","created":1767225600,"model":"gpt-6.1-sol-2026-01-01","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"don\"}"}}]},"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-t2","object":"chat.completion.chunk","created":1767225600,"model":"gpt-6.1-sol-2026-01-01","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":null}
+
+data: {"id":"chatcmpl-t2","object":"chat.completion.chunk","created":1767225600,"model":"gpt-6.1-sol-2026-01-01","choices":[],"usage":{"prompt_tokens":130,"completion_tokens":30,"total_tokens":160}}
+
+data: [DONE]
+
