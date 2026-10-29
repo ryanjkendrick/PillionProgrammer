@@ -28,6 +28,8 @@ internal static class Program
           --no-download                   fail instead of downloading a missing bundled model
           --ollama <url>                  Ollama endpoint (default http://localhost:11434/)
           --directml                      let bundled models run on DirectML (the baseline is the CPU)
+          --embedding-token-cap <n>       index with indexing.embeddingTokenCap n (work item 3.4): the model sees the
+                                          breadcrumb and the first n tokens of a long chunk; 0 (the default) is off
           --index-timeout-min <n>         longest indexing may take (default 180)
           --keep-index                    keep the temporary corpus and index
           --work-dir <folder>             keep each set and model's corpus and index under this folder; running
@@ -159,6 +161,9 @@ internal sealed class CommandLine
     /// <summary>Gets the indexing timeout.</summary>
     public TimeSpan IndexTimeout { get; private set; } = TimeSpan.FromMinutes(180);
 
+    /// <summary>Gets the <c>indexing.embeddingTokenCap</c> the corpus is indexed with; 0 is off.</summary>
+    public int EmbeddingTokenCap { get; private set; }
+
     /// <summary>Parses the arguments.</summary>
     /// <param name="args">The arguments, command first.</param>
     /// <returns>The parsed command line.</returns>
@@ -202,6 +207,12 @@ internal sealed class CommandLine
                 case "--index-timeout-min":
                     result.IndexTimeout = TimeSpan.FromMinutes(PositiveNumber(arg, Value()));
                     break;
+                case "--embedding-token-cap":
+                    var cap = Value();
+                    result.EmbeddingTokenCap = int.TryParse(cap, NumberStyles.Integer, CultureInfo.InvariantCulture, out var tokens) && tokens >= 0
+                        ? tokens
+                        : throw new FormatException($"{arg} needs a whole number of tokens, 0 for off (got '{cap}').");
+                    break;
                 case "--ollama":
                     var endpoint = Value();
                     result.Ollama = endpoint.EndsWith('/') ? endpoint : endpoint + "/";
@@ -244,6 +255,7 @@ internal sealed class CommandLine
             IndexTimeout = IndexTimeout,
             Verbose = Flags.Contains("--verbose"),
             AllowMissingFiles = Flags.Contains("--allow-missing-files"),
+            EmbeddingTokenCap = EmbeddingTokenCap,
         };
     }
 

@@ -83,6 +83,7 @@ internal sealed class EvalEnvironment : IAsyncDisposable
 
         // The Embedding task class routes through LocalFast; a model named there wins over the catalog's default order.
         settings.Routing.Profiles[Profile.LocalFast] = model.QualifiedId;
+        settings.Indexing.EmbeddingTokenCap = options.EmbeddingTokenCap;
         var settingsSource = new StaticGatewaySettingsSource(settings);
 
         var services = new ServiceCollection();

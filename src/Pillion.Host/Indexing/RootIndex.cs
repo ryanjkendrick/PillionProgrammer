@@ -65,6 +65,12 @@ internal sealed class RootIndex : IAsyncDisposable
     public SymbolGraphBuilder Symbols { get; set; }
 
     /// <summary>
+    /// Gets or sets the embedding cap the last run of this session embedded with (<see cref="IndexPass.EmbeddingTokenCap"/>),
+    /// or -1 before the first run; a settings change to another value queues a run, which rebuilds the index.
+    /// </summary>
+    public int EmbeddingTokenCap { get; set; } = -1;
+
+    /// <summary>
     /// Gets or sets the symbol graph built at the pipeline's last refresh (immutable and thread-safe), for retrieval and the
     /// workspace queries' fallback; <see langword="null"/> before the first refresh of a session and on a reader.
     /// </summary>

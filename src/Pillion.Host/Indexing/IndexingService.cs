@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -692,16 +693,20 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     private void OnSettingsChanged(object? sender, EventArgs e)
     {
         ApplyPower();
-        var exclude = _settings.GetCurrent().Exclude;
+        var current = _settings.GetCurrent();
+        var exclude = current.Exclude;
+        var cap = current.Settings.Indexing.EmbeddingTokenCap;
         lock (_gate)
         {
             // The exclusions or the flag may have changed: look at the roots again.
             _workspaceVersion++;
 
-            // New exclusions: the watcher's filter follows, and a sweep applies them to what is stored.
+            // New exclusions: the watcher's filter follows, and a sweep applies them to what is stored. A new embedding cap:
+            // the next full run finds the recorded cap differs and rebuilds (work item 3.4).
             foreach (var root in _roots.Values)
             {
-                if (root.SetExclusions(exclude) && root.IsWriter)
+                var capChanged = root.EmbeddingTokenCap >= 0 && root.EmbeddingTokenCap != EmbeddingInput.EffectiveCap(cap, IndexPass.ChunkCapFor(root.Model, _options));
+                if ((root.SetExclusions(exclude) || capChanged) && root.IsWriter)
                 {
                     root.NeedsRun = true;
                 }
@@ -1106,7 +1111,8 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             }
 
             var token = _runCancellation.Token;
-            var pass = new IndexPass(root, _embedder, _options, _scheduler, _pause, _memory, _settings.GetCurrent().Exclude, Publish, _logger)
+            var current = _settings.GetCurrent();
+            var pass = new IndexPass(root, _embedder, _options, _scheduler, _pause, _memory, current.Exclude, Publish, _logger, current.Settings.Indexing.EmbeddingTokenCap)
             {
                 BeforeSweep = root.ClearPending,
                 PriorityPaths = OpenDocumentsUnder(root),
@@ -1114,6 +1120,14 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             Dictionary<string, long?>? pending = null;
             try
             {
+                // The vectors of an index come from one embedding cap, as from one model (work item 3.4): a full run over an
+                // index whose recorded cap differs from the setting starts from scratch.
+                if (!incremental && !rebuild && await EmbeddingCapChangedAsync(root, pass.EmbeddingTokenCap, token).ConfigureAwait(false))
+                {
+                    rebuild = true;
+                }
+
+                root.EmbeddingTokenCap = pass.EmbeddingTokenCap;
                 if (rebuild)
                 {
                     await WipeAsync(root, token).ConfigureAwait(false);
@@ -1333,6 +1347,37 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Whether the index holds vectors made with another embedding cap than the one configured now (work item 3.4). An index
+    /// without the <c>meta</c> row (built before the option existed) counts as cap 0, so existing indexes are not rebuilt by
+    /// the option's arrival; an index without chunks has nothing to rebuild and only records the cap when it runs.
+    /// </summary>
+    private async Task<bool> EmbeddingCapChangedAsync(RootIndex root, int configured, CancellationToken cancellationToken)
+    {
+        if (root.ChunkCount == 0)
+        {
+            return false;
+        }
+
+        var recorded = await root.Storage.Database.ReadAsync(
+            (connection, _) =>
+            {
+                using var command = connection.CreateCommand();
+                command.CommandText = "SELECT value FROM meta WHERE key = $key";
+                command.Parameters.AddWithValue("$key", IndexMetaKeysExtra.EmbeddingTokenCap);
+                return Task.FromResult(command.ExecuteScalar() as string);
+            },
+            cancellationToken).ConfigureAwait(false);
+        var recordedCap = int.TryParse(recorded, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : 0;
+        if (recordedCap == configured)
+        {
+            return false;
+        }
+
+        LogEmbeddingCapChanged(_logger, root.Store.Identity.Id, recorded ?? "none", configured);
+        return true;
+    }
+
     private async Task WipeAsync(RootIndex root, CancellationToken cancellationToken)
     {
         LogRebuild(_logger, root.Store.Identity.Id);
@@ -1525,6 +1570,9 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
 
     [LoggerMessage(EventId = 2913, Level = LogLevel.Information, Message = "Index {IndexId} is wiped for a rebuild.")]
     private static partial void LogRebuild(ILogger logger, string indexId);
+
+    [LoggerMessage(EventId = 2931, Level = LogLevel.Information, Message = "Index {IndexId}: its vectors were made with an embedding cap of {Recorded} tokens and the setting is {Configured}; the index is rebuilt.")]
+    private static partial void LogEmbeddingCapChanged(ILogger logger, string indexId, string recorded, int configured);
 
     [LoggerMessage(EventId = 2915, Level = LogLevel.Debug, Message = "Index {IndexId} is warmed for search ({Bytes} bytes of vectors in memory).")]
     private static partial void LogWarmed(ILogger logger, string indexId, long bytes);

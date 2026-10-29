@@ -50,6 +50,9 @@ internal sealed record RetrievalRunOptions
 
     /// <summary>Gets a value indicating whether a set whose expected files are not all in the corpus still runs.</summary>
     public bool AllowMissingFiles { get; init; }
+
+    /// <summary>Gets the <c>indexing.embeddingTokenCap</c> the corpus is indexed with (work item 3.4); 0 embeds every chunk whole.</summary>
+    public int EmbeddingTokenCap { get; init; }
 }
 
 /// <summary>The output of a run: one result per set and model, and where the files went.</summary>
@@ -84,6 +87,9 @@ internal sealed record SetModelResult
 
     /// <summary>Gets the embedding model as the gateway described it (dimensions, tokenizer, input limit).</summary>
     public string? EmbeddingModel { get; init; }
+
+    /// <summary>Gets the embedding cap the index was built with, as the pipeline applied it (work item 3.4); 0 when every chunk was embedded whole.</summary>
+    public int EmbeddingTokenCap { get; init; }
 
     /// <summary>Gets the index figures.</summary>
     public required IndexFigures Index { get; init; }
@@ -125,7 +131,17 @@ internal sealed record MachineInfo(string Name, string Os, string Cpu, int Logic
 /// <param name="Lines">Lines indexed.</param>
 /// <param name="Seconds">Wall time from setting the workspace to an idle, swept index.</param>
 /// <param name="EmbeddingSeconds">Time spent embedding (pipeline statistics).</param>
-internal sealed record IndexFigures(int CorpusFiles, long IndexedFiles, long Chunks, long EmbeddedChunks, long Lines, double Seconds, double EmbeddingSeconds);
+/// <param name="DatabaseBytes">The index database's size (page count times page size, the WAL left out), after indexing.</param>
+/// <param name="FolderBytes">The index folder on disk, WAL, key and state included, after indexing.</param>
+/// <param name="TruncatedChunks">Chunks whose model input was cut to the embedding cap (work item 3.4).</param>
+internal sealed record IndexFigures(int CorpusFiles, long IndexedFiles, long Chunks, long EmbeddedChunks, long Lines, double Seconds, double EmbeddingSeconds, long DatabaseBytes = 0, long FolderBytes = 0, long TruncatedChunks = 0)
+{
+    /// <summary>Gets the chunks indexed per second of wall time.</summary>
+    public double ChunksPerSecond => Seconds > 0 ? Chunks / Seconds : 0;
+
+    /// <summary>Gets the database bytes per chunk.</summary>
+    public double BytesPerChunk => Chunks > 0 ? DatabaseBytes / (double)Chunks : 0;
+}
 
 /// <summary>The search request settings.</summary>
 /// <param name="K">The cut-off and <c>MaxResults</c>.</param>

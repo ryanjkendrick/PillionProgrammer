@@ -220,6 +220,14 @@ public sealed class IndexingSettings : SettingsNode
     /// less turns the age rule off; an index whose repository folder no longer exists is deleted either way.
     /// </summary>
     public int RetentionDays { get; set; } = 30;
+
+    /// <summary>
+    /// Gets or sets the most tokens of a chunk handed to the embedding model (work item 3.4, issue #90): the breadcrumb first,
+    /// then the leading text that fits; the stored text, the lexical entry and the token count stay complete. Zero, the
+    /// default, embeds every chunk whole. The value in force is recorded in the index, and changing it re-embeds the index,
+    /// as a model change does. This is an experiment measured by the retrieval harness; it is not on by default.
+    /// </summary>
+    public int EmbeddingTokenCap { get; set; }
 }
 
 /// <summary>Chat mention settings (design section 7, Context pinning with @-mentions).</summary>

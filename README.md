@@ -473,6 +473,7 @@ the reason for each, every index folder on the machine, and **Pause** and **Resu
 | `indexing.maxMemoryMb` | 1,536 | Indexing pauses at this working set (256 to 65,536) |
 | `indexing.pauseOnBattery` | on | Pause while Windows battery saver is on |
 | `indexing.retentionDays` | 30 | An index unused for this many days, or whose folder no longer exists, may be deleted; 0 turns the age rule off |
+| `indexing.embeddingTokenCap` | 0 (off) | Experiment (work item 3.4, issue #90), settings file only: the embedding model sees the breadcrumb and the first N tokens of a long chunk; the stored text, the lexical index and the token count stay whole. Changing it re-embeds the index. Measured in [docs/eval-retrieval-baseline.md](docs/eval-retrieval-baseline.md); not on by default |
 
 **Retention.** The rule above is implemented, but the host does not run the sweep on a schedule yet: stale indexes are listed in
 the Index window (**Indexes** tab, "Root is gone") and deleted there on request, and **Delete** frees the disk at once. Disk use is

@@ -35,6 +35,9 @@ internal sealed class FakeEmbedder : IIndexEmbedder
 
     public int ChunksEmbedded => _batches.Sum();
 
+    /// <summary>Gets every text handed to the model, in the order embedded.</summary>
+    public ConcurrentQueue<string> Texts { get; } = new();
+
     public static EmbeddedVector Vector(string text)
     {
         var raw = new float[Dimensions];
@@ -69,6 +72,11 @@ internal sealed class FakeEmbedder : IIndexEmbedder
         }
 
         _batches.Enqueue(texts.Count);
+        foreach (var text in texts)
+        {
+            Texts.Enqueue(text);
+        }
+
         return [.. texts.Select(Vector)];
     }
 

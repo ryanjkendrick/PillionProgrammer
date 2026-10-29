@@ -101,7 +101,7 @@ public sealed class GoldenSetTests
     [Fact]
     public void TheCommandLine_ParsesTheRetrievalOptions()
     {
-        var parsed = CommandLine.Parse(["retrieval", "--set", "a", "--set", "b", "--model", "bundled/bge-small-en-v1.5", "--modes", "Hybrid,vector", "--no-int8-loss", "--budget-ms", "500", "--ollama", "http://box:11434"]);
+        var parsed = CommandLine.Parse(["retrieval", "--set", "a", "--set", "b", "--model", "bundled/bge-small-en-v1.5", "--modes", "Hybrid,vector", "--no-int8-loss", "--budget-ms", "500", "--ollama", "http://box:11434", "--embedding-token-cap", "256"]);
         var options = parsed.ToRetrievalOptions();
 
         Assert.Equal(["a", "b"], options.Sets);
@@ -111,7 +111,11 @@ public sealed class GoldenSetTests
         Assert.Equal(TimeSpan.FromMilliseconds(500), options.Budget);
         Assert.Equal("http://box:11434/", options.OllamaEndpoint);
         Assert.True(options.Download);
+        Assert.Equal(256, options.EmbeddingTokenCap);
+        Assert.Equal(0, CommandLine.Parse(["retrieval", "--set", "a", "--model", "bundled/bge-small-en-v1.5"]).ToRetrievalOptions().EmbeddingTokenCap);
 
+        Assert.Throws<FormatException>(() => CommandLine.Parse(["retrieval", "--embedding-token-cap", "-1"]));
+        Assert.Throws<FormatException>(() => CommandLine.Parse(["retrieval", "--embedding-token-cap", "many"]));
         Assert.Throws<FormatException>(() => CommandLine.Parse(["retrieval", "--modes", "fuzzy"]));
         Assert.Throws<FormatException>(() => CommandLine.Parse(["retrieval", "--set"]));
         Assert.Throws<FormatException>(() => CommandLine.Parse(["retrieval", "--frobnicate"]));
