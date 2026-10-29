@@ -94,7 +94,8 @@ public sealed class AutocompletePipelineTests(ITestOutputHelper output)
         Assert.False(attempt.IsCancelled);
         Assert.Equal(3, attempt.TypedThroughLength);
         Assert.Equal(9, attempt.TypedThroughVersion);
-        Assert.Null(session.CurrentFor(7, input.Caret)); // Not the attempt for exactly that text and caret any more.
+        Assert.Same(attempt, session.CurrentFor(9, input.Caret + 3)); // Still serves the caret after what was typed.
+        Assert.Null(session.CurrentFor(9, input.Caret)); // Not the caret it is for.
 
         session.TextChanged(10, [new TextEdit(input.Caret + 2, 1, 0)]); // Backspace: the prefix is not what it was made for.
         Assert.True(attempt.IsCancelled);

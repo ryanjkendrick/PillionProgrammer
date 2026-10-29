@@ -60,7 +60,10 @@ public sealed class AutocompleteSession : IDisposable
     /// <returns><see langword="true"/> when no newer attempt has started.</returns>
     public bool IsCurrent(long attempt) => Interlocked.Read(ref _latestAttempt) == attempt;
 
-    /// <summary>Gets the attempt in flight when it was started for exactly this text version and caret (nothing typed through since).</summary>
+    /// <summary>
+    /// Gets the attempt in flight when it serves this text version and caret: it was started for exactly them, or the
+    /// user has typed straight ahead since and the caret is right after what was typed (issue #52).
+    /// </summary>
     /// <param name="textVersion">The text version.</param>
     /// <param name="caret">The caret position.</param>
     /// <returns>The attempt, or <see langword="null"/>.</returns>
@@ -68,7 +71,10 @@ public sealed class AutocompleteSession : IDisposable
     {
         lock (_gate)
         {
-            return _current is not null && _currentInput is { } input && input.TextVersion == textVersion && input.Caret == caret && _currentVersion == textVersion ? _current : null;
+            return _current is not null && _currentInput is { } input
+                && ((input.TextVersion == textVersion && input.Caret == caret) || (_currentVersion == textVersion && _currentCaret == caret))
+                ? _current
+                : null;
         }
     }
 

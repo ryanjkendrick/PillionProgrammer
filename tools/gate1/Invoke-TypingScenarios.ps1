@@ -30,6 +30,8 @@
     A word for the run folder's name (for example before, after).
 .PARAMETER TestCaseFilter
     The vstest filter (combined with the version filter by Invoke-IdeTests.ps1).
+.PARAMETER WholeSuite
+    Runs the whole integration suite with the scenarios on (as a gate run does) instead of -TestCaseFilter.
 #>
 [CmdletBinding()]
 param(
@@ -41,10 +43,12 @@ param(
     [string]$FastModel = 'qwen2.5-coder:1.5b',
     [string]$OllamaEndpoint = 'http://localhost:11434',
     [int]$MetricsWindowSec = 30,
-    [int]$WaitForDevenvSec = 3600
+    [int]$WaitForDevenvSec = 3600,
+    [switch]$WholeSuite
 )
 
 $ErrorActionPreference = 'Stop'
+if ($WholeSuite) { $TestCaseFilter = '' }
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 Import-Module (Join-Path $repo 'tools\gate0\Gate0.Checks.psm1') -Force
 Import-Module (Join-Path $repo 'tools\gate1\Gate1.Scenarios.psm1') -Force
