@@ -165,6 +165,15 @@ internal sealed class PassStatistics
     /// <summary>Counts reused chunks (from several pipeline threads).</summary>
     /// <param name="count">The chunks.</param>
     public void AddChunksReused(int count) => Interlocked.Add(ref _chunksReused, count);
+
+    private long _chunksTruncated;
+
+    /// <summary>Gets the chunks whose model input was cut to the embedding cap (<c>indexing.embeddingTokenCap</c>, work item 3.4).</summary>
+    public long ChunksTruncatedForEmbedding => Interlocked.Read(ref _chunksTruncated);
+
+    /// <summary>Counts chunks cut to the embedding cap (from several pipeline threads).</summary>
+    /// <param name="count">The chunks.</param>
+    public void AddChunksTruncatedForEmbedding(int count) => Interlocked.Add(ref _chunksTruncated, count);
 }
 
 /// <summary>
@@ -208,6 +217,7 @@ internal sealed partial class IndexPass
     /// <param name="exclude">The effective <c>indexing.exclude</c> patterns.</param>
     /// <param name="changed">Called when the progress or phase changed (the status is published).</param>
     /// <param name="logger">The logger.</param>
+    /// <param name="embeddingTokenCap">The <c>indexing.embeddingTokenCap</c> setting (work item 3.4); 0 embeds every chunk whole.</param>
     public IndexPass(
         RootIndex root,
         IIndexEmbedder embedder,
@@ -217,7 +227,8 @@ internal sealed partial class IndexPass
         MemoryGovernor memory,
         IReadOnlyList<string> exclude,
         Action changed,
-        ILogger logger)
+        ILogger logger,
+        int embeddingTokenCap = 0)
     {
         _root = root;
         _embedder = embedder;
@@ -230,9 +241,27 @@ internal sealed partial class IndexPass
         _logger = logger;
         _chunkOptions = ChunkOptions.Default with
         {
-            MaxTokens = Math.Max(ChunkOptions.MinimumMaxTokens, Math.Min(root.Model.MaxTokens, options.MaxChunkTokens)),
+            MaxTokens = ChunkCapFor(root.Model, options),
             TokenCounter = root.Model.TokenCounter,
         };
+        EmbeddingTokenCap = EmbeddingInput.EffectiveCap(embeddingTokenCap, _chunkOptions.MaxTokens);
+    }
+
+    /// <summary>
+    /// Gets the cap on the text handed to the embedding model, in the model's tokens, after <see cref="EmbeddingInput.EffectiveCap"/>;
+    /// 0 when every chunk is embedded whole. It is recorded in the index <c>meta</c> as <see cref="IndexMetaKeysExtra.EmbeddingTokenCap"/>.
+    /// </summary>
+    public int EmbeddingTokenCap { get; }
+
+    /// <summary>The chunk cap of an index: the model's input size, but never more than <see cref="IndexingOptions.MaxChunkTokens"/>.</summary>
+    /// <param name="model">The embedding model.</param>
+    /// <param name="options">The tunables.</param>
+    /// <returns>The cap in the model's tokens.</returns>
+    public static int ChunkCapFor(IndexEmbeddingModel model, IndexingOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(options);
+        return Math.Max(ChunkOptions.MinimumMaxTokens, Math.Min(model.MaxTokens, options.MaxChunkTokens));
     }
 
     /// <summary>Gets the progress of the run.</summary>
@@ -259,6 +288,10 @@ internal sealed partial class IndexPass
         await _pause.WaitWhilePausedAsync(cancellationToken).ConfigureAwait(false);
         BeforeSweep?.Invoke();
         Advance(IndexPhase.Discovering);
+
+        // The embedding cap is recorded before the first vector is written, so an interrupted run leaves an index that
+        // says what its vectors were made with (the service wipes an index whose recorded cap differs from the setting).
+        await RecordEmbeddingTokenCapAsync(cancellationToken).ConfigureAwait(false);
 
         // 1 and 2. Discover and hash (one walk: unchanged files are neither opened nor hashed).
         var stored = await _root.Store.Files.GetAllAsync(cancellationToken).ConfigureAwait(false);
@@ -628,6 +661,22 @@ internal sealed partial class IndexPass
             Statistics.AddChunksReused(reused);
         }
 
+        if (EmbeddingTokenCap > 0)
+        {
+            // The model's view of a long chunk is cut here, on the pipeline threads, so the embedding thread only batches.
+            var truncated = 0;
+            for (var i = 0; i < chunks.Count; i++)
+            {
+                if (file.Vectors[i] is null && chunks[i].TokenCount > EmbeddingTokenCap)
+                {
+                    file.Inputs[i] = EmbeddingInput.For(chunks[i], EmbeddingTokenCap, _root.Model.TokenCounter);
+                    truncated++;
+                }
+            }
+
+            Statistics.AddChunksTruncatedForEmbedding(truncated);
+        }
+
         return file;
     }
 
@@ -702,8 +751,10 @@ internal sealed partial class IndexPass
 
     private async Task EmbedAsync(List<(PreparedFile File, int Index)> window, CancellationToken cancellationToken)
     {
-        // Chunks of similar length go in the same request: the model pads every text of a batch to the longest one.
-        var batch = window.OrderBy(item => item.File.Chunks[item.Index].TokenCount).ToList();
+        // Chunks of similar length go in the same request: the model pads every text of a batch to the longest one (a
+        // chunk over the embedding cap is as long as the cap).
+        var cap = EmbeddingTokenCap;
+        var batch = window.OrderBy(item => cap > 0 ? Math.Min(cap, item.File.Chunks[item.Index].TokenCount) : item.File.Chunks[item.Index].TokenCount).ToList();
         var offset = 0;
         while (offset < batch.Count)
         {
@@ -712,7 +763,7 @@ internal sealed partial class IndexPass
             await _pause.WaitWhilePausedAsync(cancellationToken).ConfigureAwait(false);
             var size = Math.Min(_memory.BatchSize, batch.Count - offset);
             var slice = batch.GetRange(offset, size);
-            var texts = slice.Select(item => item.File.Chunks[item.Index].EmbeddingText).ToList();
+            var texts = slice.Select(item => item.File.InputOf(item.Index)).ToList();
 
             Progress.MarkEmbeddingStarted(Stopwatch.GetTimestamp());
             Advance(IndexPhase.Embedding);
@@ -971,6 +1022,7 @@ internal sealed partial class IndexPass
                     session.WriteMeta(IndexMetaKeysExtra.EmbeddingTokenizer, model.TokenizerFamily);
                     session.WriteMeta(IndexMetaKeysExtra.EmbeddingMaxTokens, model.MaxTokens.ToString(CultureInfo.InvariantCulture));
                     session.WriteMeta(IndexMetaKeysExtra.ChunkMaxTokens, _chunkOptions.MaxTokens.ToString(CultureInfo.InvariantCulture));
+                    session.WriteMeta(IndexMetaKeysExtra.EmbeddingTokenCap, EmbeddingTokenCap.ToString(CultureInfo.InvariantCulture));
                     if (!_symbolWritesFailed)
                     {
                         session.WriteMeta(IndexSymbolsSchema.MetaKeys.SymbolsVersion, ContextEngineVersions.SymbolsVersion);
@@ -992,6 +1044,25 @@ internal sealed partial class IndexPass
 
         // state.json: the last full sweep (only the owner writes it).
         _root.Store.RecordFullSweep();
+    }
+
+    /// <summary>Writes the embedding cap this run embeds with to the index <c>meta</c> (a tiny write, before any vector).</summary>
+    private async Task RecordEmbeddingTokenCapAsync(CancellationToken cancellationToken)
+    {
+        var cap = EmbeddingTokenCap.ToString(CultureInfo.InvariantCulture);
+        await _scheduler.RunAsync(
+            () => _root.Storage.WriteAsync(
+                (session, _) =>
+                {
+                    if (!string.Equals(session.ReadMeta(IndexMetaKeysExtra.EmbeddingTokenCap), cap, StringComparison.Ordinal))
+                    {
+                        session.WriteMeta(IndexMetaKeysExtra.EmbeddingTokenCap, cap);
+                    }
+
+                    return true;
+                },
+                cancellationToken),
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static void Sql(IndexWriteSession session, string sql)
@@ -1034,7 +1105,13 @@ internal sealed partial class IndexPass
 
         public EmbeddedVector?[] Vectors { get; } = new EmbeddedVector?[chunks.Count];
 
+        /// <summary>Gets the model input of each chunk the embedding cap cut; <see langword="null"/> where the chunk is embedded whole.</summary>
+        public string?[] Inputs { get; } = new string?[chunks.Count];
+
         public int Pending { get; set; } = chunks.Count;
+
+        /// <summary>The text handed to the embedding model for one chunk.</summary>
+        public string InputOf(int index) => Inputs[index] ?? Chunks[index].EmbeddingText;
     }
 
     /// <summary>Turns sweep progress into the Discovering and Hashing phases.</summary>
@@ -1061,4 +1138,11 @@ internal static class IndexMetaKeysExtra
 
     /// <summary>The chunk cap the chunks were made with, in the model's tokens.</summary>
     public const string ChunkMaxTokens = "chunk_max_tokens";
+
+    /// <summary>
+    /// The cap on the text handed to the embedding model when the vectors were made (<c>indexing.embeddingTokenCap</c>, work
+    /// item 3.4); 0 or absent when every chunk was embedded whole. A value that differs from the setting means the vectors
+    /// were made from other inputs, and the index is rebuilt.
+    /// </summary>
+    public const string EmbeddingTokenCap = "embedding_token_cap";
 }

@@ -349,6 +349,19 @@ background, so the first search pays for neither.
 - Pauses take effect at the next checkpoint: before each file is read and before each embedding batch. Reported in the
   order User, Memory, Build, Test, Debug, Battery when several hold.
 
+### Embedding cap (work item 3.4, an experiment, off by default)
+
+`indexing.embeddingTokenCap` (0 by default) caps the text handed to the embedding model at N tokens of the model's own
+tokenizer: `EmbeddingInput` keeps the breadcrumb whole, since it carries the symbol names, and then as much of the
+leading text as fits, cut at a white-space boundary. Only the model's input changes; the stored chunk, its lexical entry
+and `token_count` stay complete, and the reuse of vectors by embedding text (2.10) is unaffected because the cap is
+constant per index. A cap of zero or less is off, a cap at or above the chunk cap is off (nothing would be cut), and a
+small positive cap is raised to 16. The cap in force is recorded in the index `meta` as `embedding_token_cap` before
+the first vector of a run is written; a full run over an index whose recorded cap differs from the setting (an index
+without the row counts as 0, so indexes built before the option are left alone) wipes it and embeds everything again, as
+a model change would, and a settings change to another cap queues that run. The retrieval harness takes
+`--embedding-token-cap`; the figures and the recommendation are in `docs/eval-retrieval-baseline.md`.
+
 ### Watcher and incremental updates (work item 2.10)
 
 Design section 7 step 7 and section 10 (the writer runs the indexer and the watcher), behind `features.indexing` like the
