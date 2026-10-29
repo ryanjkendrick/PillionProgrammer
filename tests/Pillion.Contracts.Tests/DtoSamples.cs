@@ -604,6 +604,7 @@ internal static class DtoSamples
         EmbeddingModelId = "bge-small-en-v1.5",
         ChunkerVersion = "2",
         SchemaVersion = 2,
+        RedactedChunkCount = 12,
     };
 
     private static IndexProgress Progress() => new() { FilesDone = 20, FilesTotal = 50, ChunksDone = 1800, EstimatedRemainingSeconds = 95 };

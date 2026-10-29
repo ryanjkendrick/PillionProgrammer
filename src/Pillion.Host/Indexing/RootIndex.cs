@@ -107,6 +107,9 @@ internal sealed class RootIndex : IAsyncDisposable
     /// <summary>Gets or sets the chunks stored in the index.</summary>
     public long ChunkCount { get; set; }
 
+    /// <summary>Gets or sets the chunks whose text the secret scanner redacted before they were stored (work item 3.2, issue #103).</summary>
+    public long RedactedChunkCount { get; set; }
+
     /// <summary>Gets or sets when the index last changed.</summary>
     public DateTimeOffset? LastUpdatedUtc { get; set; }
 
@@ -205,13 +208,14 @@ internal sealed class RootIndex : IAsyncDisposable
         Graph = null;
     }
 
-    /// <summary>Counts the stored files and chunks again from the database.</summary>
+    /// <summary>Counts the stored files, chunks and redacted chunks again from the database.</summary>
     /// <param name="cancellationToken">Cancels the reads.</param>
     /// <returns>A task that completes when the counts are refreshed.</returns>
     public async Task RefreshCountsAsync(CancellationToken cancellationToken)
     {
         IndexedFileCount = await Store.Files.CountAsync(cancellationToken).ConfigureAwait(false);
         ChunkCount = await Storage.Chunks.CountChunksAsync(cancellationToken).ConfigureAwait(false);
+        RedactedChunkCount = await Storage.Chunks.CountRedactedChunksAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>

@@ -5,6 +5,7 @@ using System.IO.Hashing;
 using System.Threading.Channels;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
+using Pillion.Common.Redaction;
 using Pillion.ContextEngine;
 using Pillion.ContextEngine.Chunking;
 using Pillion.ContextEngine.Symbols;
@@ -108,6 +109,9 @@ internal sealed class PassStatistics
 
     /// <summary>Gets or sets the chunks stored.</summary>
     public long Chunks { get; set; }
+
+    /// <summary>Gets or sets how many of the stored chunks the secret scanner redacted before they were stored (work item 3.2).</summary>
+    public long ChunksRedacted { get; set; }
 
     /// <summary>Gets or sets the sum of the stored chunks' token counts (in the embedding model's tokenizer).</summary>
     public long Tokens { get; set; }
@@ -608,10 +612,13 @@ internal sealed partial class IndexPass
             return new PreparedFile(record, [], null, 0);
         }
 
-        var chunks = Chunker.Chunk(record.Path, text, _chunkOptions);
+        // The secret scanner runs on every chunk's full text here, before anything else is built from it: the embedding
+        // input, the vector-reuse lookup, the FTS rows and the stored row all see the redacted text (design section 12,
+        // work item 3.2, issue #103). The symbols come from the file text (names, not values).
+        var chunks = Redact(Chunker.Chunk(record.Path, text, _chunkOptions), out var redacted);
         var symbols = Extractor.Extract(record.Path, text);
         _options.OnFilePrepared?.Invoke(record.Path);
-        var file = new PreparedFile(record, chunks, symbols, CountLines(text));
+        var file = new PreparedFile(record, chunks, symbols, CountLines(text), redacted);
         if (reusable is { Count: > 0 })
         {
             var reused = 0;
@@ -629,6 +636,35 @@ internal sealed partial class IndexPass
         }
 
         return file;
+    }
+
+    /// <summary>
+    /// Runs the secret scanner over each chunk's text (work item 3.2, issue #103). A chunk with a secret gets a copy whose text
+    /// carries <c>&lt;redacted-index:kind&gt;</c> placeholders; its line range and token count (counted on the original, so
+    /// the chunk still fits the model's input) are kept. The placeholders never carry line breaks, so a redacted chunk still
+    /// spans the lines its row names, except a PEM block, whose lines collapse into one placeholder within the same range.
+    /// </summary>
+    /// <param name="chunks">The chunks as the chunker produced them.</param>
+    /// <param name="redacted">Per chunk, whether anything was replaced.</param>
+    /// <returns>The same list when nothing was redacted, else a list with the redacted chunks replaced.</returns>
+    private static IReadOnlyList<Chunk> Redact(IReadOnlyList<Chunk> chunks, out bool[] redacted)
+    {
+        redacted = new bool[chunks.Count];
+        Chunk[]? copy = null;
+        for (var i = 0; i < chunks.Count; i++)
+        {
+            var result = IndexRedactor.Redact(chunks[i].Text);
+            if (!result.IsRedacted)
+            {
+                continue;
+            }
+
+            copy ??= [.. chunks];
+            copy[i] = chunks[i] with { Text = result.Text };
+            redacted[i] = true;
+        }
+
+        return copy ?? chunks;
     }
 
     /// <summary>
@@ -789,15 +825,18 @@ internal sealed partial class IndexPass
         var chunks = new NewChunk[file.Chunks.Count];
         long tokens = 0;
         var complete = true;
+        var redacted = 0;
         for (var i = 0; i < chunks.Length; i++)
         {
             var chunk = file.Chunks[i];
             tokens += chunk.TokenCount;
             var vector = file.Vectors[i];
             complete &= vector is not null;
+            redacted += file.Redacted[i] ? 1 : 0;
             chunks[i] = new NewChunk(chunk.StartLine, chunk.EndLine, KindName(chunk.Kind), chunk.Breadcrumb, chunk.Text, chunk.TokenCount)
             {
                 Embedding = vector is null ? ReadOnlyMemory<sbyte>.Empty : vector.Quantized,
+                IsRedacted = file.Redacted[i],
             };
         }
 
@@ -830,6 +869,7 @@ internal sealed partial class IndexPass
         Statistics.Lines += file.Lines;
         Statistics.Chunks += chunks.Length;
         Statistics.Tokens += tokens;
+        Statistics.ChunksRedacted += redacted;
         Progress.ChunksDone += chunks.Length;
         return (row, ids);
     }
@@ -1021,7 +1061,7 @@ internal sealed partial class IndexPass
     private static partial void LogUnreadable(ILogger logger, Exception exception);
 
     /// <summary>A file read, chunked and extracted, waiting for its vectors.</summary>
-    private sealed class PreparedFile(FileRecord record, IReadOnlyList<Chunk> chunks, SymbolExtraction? symbols, int lines)
+    private sealed class PreparedFile(FileRecord record, IReadOnlyList<Chunk> chunks, SymbolExtraction? symbols, int lines, bool[]? redacted = null)
     {
         public FileRecord Record { get; } = record;
 
@@ -1033,6 +1073,9 @@ internal sealed partial class IndexPass
         public int Lines { get; } = lines;
 
         public EmbeddedVector?[] Vectors { get; } = new EmbeddedVector?[chunks.Count];
+
+        /// <summary>Gets, per chunk, whether the secret scanner replaced something in its text (stored as <c>chunks.redacted</c>).</summary>
+        public bool[] Redacted { get; } = redacted ?? new bool[chunks.Count];
 
         public int Pending { get; set; } = chunks.Count;
     }

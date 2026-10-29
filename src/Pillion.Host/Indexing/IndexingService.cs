@@ -1481,6 +1481,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
                 ExcludedFileCount = r.Excluded.Count,
                 SecretFileCount = r.SecretFileCount,
                 ChunkCount = r.ChunkCount,
+                RedactedChunkCount = r.RedactedChunkCount,
                 DiskBytes = withDiskUse ? r.Store.Folder.GetDiskUsageBytes() : 0,
                 LastFullSweepUtc = r.Store.State.LastFullSweepUtc?.UtcDateTime,
                 EmbeddingModelId = r.Model.ModelId,

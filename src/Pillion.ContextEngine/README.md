@@ -10,8 +10,9 @@ keeps only its own runtime's).
 
 ## Versions
 
-`ContextEngineVersions` holds two versions, each a string holding an integer (both now `"1"`). Bump one to the next integer in
-the same pull request as the change that needs it.
+`ContextEngineVersions` holds two versions, each a string holding an integer (`ChunkerVersion` is `"2"`: work item 3.2 runs the secret
+scanner over chunk text before it is stored, which changes the text of a chunk that held a secret; `SymbolsVersion` is `"1"`).
+Bump one to the next integer in the same pull request as the change that needs it.
 
 `ChunkerVersion` is part of the index identity (design section 10: an index is keyed by repository root, embedding
 model and chunker version) and is written to the index `meta` table as `chunker_version` by repository discovery (work
