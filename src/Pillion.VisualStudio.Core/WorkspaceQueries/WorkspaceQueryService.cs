@@ -109,6 +109,11 @@ public sealed class WorkspaceQueryService : IWorkspaceQueryService
     public WorkspaceQueryStatistics Statistics { get; } = new();
 
     /// <inheritdoc/>
+    /// <remarks>Contract 1.4; answered by Roslyn's renamer in work item 3.24. Until then it fails with <see cref="PillionErrorCode.NotImplemented"/>.</remarks>
+    public Task<RenamePlan> PlanRenameAsync(RenameSymbolRequest request, CancellationToken cancellationToken) =>
+        _others.PlanRenameAsync(request, cancellationToken);
+
+    /// <inheritdoc/>
     public Task<FindReferencesResponse> FindReferencesAsync(FindReferencesRequest request, CancellationToken cancellationToken)
     {
         if (request?.Location is not { } location || string.IsNullOrWhiteSpace(location.FilePath) || location.Line < 0)

@@ -23,4 +23,11 @@ public enum TaskClass
 
     /// <summary>Compressing conversation history into a rolling summary (context assembly); routed to Fast online and Local-fast offline.</summary>
     Summarise,
+
+    /// <summary>
+    /// An agent session's planning turn (the plan, re-planning after a failure), routed to Frontier online and Local-strong
+    /// offline; <see cref="Agent"/> keeps its meaning of an agent step (Balanced). Appended in contract 1.4 (work item 3.5) so every
+    /// earlier wire value is kept.
+    /// </summary>
+    AgentPlanning,
 }

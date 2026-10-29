@@ -8,6 +8,7 @@ editor, approval and workspace operations.
 Program.cs                          Parses the command line, composes the host, returns the exit code
 PillionHostBuilderExtensions.cs     AddPillionHost: logging + lifecycle + RPC server (used by Program and tests)
 Lifecycle/                          HostStateMachine, HostShutdown (exit code), ParentProcessWatcher
+Agents/                             Contract 1.4 stubs for IAgentService, ITerminalService and IJournalService (work item 3.5)
 Context/                            ContextRpcService (IContextService): @file, @folder, @selection, @clipboard, @errors;
                                     IndexStatusNotifier (indexStatusChanged, contract 1.3)
 Conversations/                      ConversationRpcService (IConversationService, contract 1.3), ConversationRecorder (saves chat turns),
@@ -177,6 +178,23 @@ method that is not yet implemented answers honestly with a stub:
 
 `RpcErrors.NotImplemented(feature, workItem)` builds that error; a work item that implements a method removes its stub and
 its row here.
+
+### Contract 1.4 stubs
+
+Work item 3.5 put the phase 3 services on the contract before the items that implement them; `Agents/NotImplementedAgentServices.cs`
+serves each as a stub whose error names the work item in `Details` (`work item 3.6`), so a 1.4 extension gets a typed
+`NotImplemented` rather than method-not-found. The work item that implements a service replaces its registration in
+`PillionHostBuilderExtensions` and removes its row here.
+
+| Service | Stub | Implemented by |
+| --- | --- | --- |
+| `IAgentService` (all eleven methods, the five of 1.0 included; nothing served it before 1.4) | `NotImplementedAgentService` | 3.6 (the Agent Runtime) |
+| `ITerminalService` | `NotImplementedTerminalService` | 3.11 (the Command Runner) |
+| `IJournalService` | `NotImplementedJournalService` | 3.8 (checkpoints and the apply journal) |
+
+The handshake's Visual Studio installation path and version (contract 1.4) are kept on `IVsixConnection.Client` for the
+Command Runner's Developer PowerShell environment; a 1.3 extension sends none and `Client` reads empty strings. The
+host-to-VSIX `ITrustService` proxy is `IVsixConnection.GetTrustService()`; a 1.3 extension answers it with method-not-found.
 
 ## Retrieval (`Context/Retrieval/`)
 

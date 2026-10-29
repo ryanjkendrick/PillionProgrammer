@@ -39,6 +39,21 @@ internal sealed class HostRpcSession : IHostSession
     /// </summary>
     public const string IndexStatusChangedMethod = "indexStatusChanged";
 
+    /// <summary>The JSON-RPC notification the host sends with a session's ledger (<see cref="AgentSessionState"/>) whenever it changes (contract 1.4).</summary>
+    public const string AgentSessionChangedMethod = "agentSessionChanged";
+
+    /// <summary>The JSON-RPC notification the host sends with a tool call (<see cref="AgentToolCallRecord"/>) when it starts and when it ends (contract 1.4).</summary>
+    public const string AgentToolCallMethod = "agentToolCall";
+
+    /// <summary>The JSON-RPC notification the host sends with a changeset for the user (<see cref="AgentChangesetReady"/>) (contract 1.4).</summary>
+    public const string AgentChangesetReadyMethod = "agentChangesetReady";
+
+    /// <summary>The JSON-RPC notification the host sends with a terminal's rendered screen (<see cref="TerminalScreen"/>) (contract 1.4).</summary>
+    public const string TerminalScreenChangedMethod = "terminalScreenChanged";
+
+    /// <summary>The JSON-RPC notification the host sends with a background process whose state changed (<see cref="BackgroundProcessInfo"/>) (contract 1.4).</summary>
+    public const string BackgroundProcessChangedMethod = "backgroundProcessChanged";
+
     private static readonly TimeSpan ExitCodeGrace = TimeSpan.FromMilliseconds(500);
 
     private readonly HostProcess _process;
@@ -73,12 +88,20 @@ internal sealed class HostRpcSession : IHostSession
         _rpc.AddLocalRpcTarget<IEditorService>(localTargets.Editor, options: null);
         _rpc.AddLocalRpcTarget<IApprovalService>(localTargets.Approval, options: null);
         _rpc.AddLocalRpcTarget<IWorkspaceQueryService>(localTargets.WorkspaceQuery, options: null);
+        _rpc.AddLocalRpcTarget<ITrustService>(localTargets.Trust, options: null);
         _rpc.AddLocalRpcMethod(HostStateChangedMethod, new Action<HostState>(OnHostStateChanged));
 
         // Registered before the handshake: the host may send it before the handshake response arrives.
         _rpc.AddLocalRpcMethod(ConnectivityChangedMethod, new Action<ConnectivityState>(OnConnectivityChanged));
         _rpc.AddLocalRpcMethod(SettingsChangedMethod, new Action<string[]>(OnSettingsChanged));
         _rpc.AddLocalRpcMethod(IndexStatusChangedMethod, new Action<IndexStatus>(OnIndexStatusChanged));
+
+        // Contract 1.4: the agent and terminal notifications. Nothing in the extension subscribes yet (work items 3.14 and 3.15).
+        _rpc.AddLocalRpcMethod(AgentSessionChangedMethod, new Action<AgentSessionState>(s => AgentSessionChanged?.Invoke(this, new HostAgentSessionChangedEventArgs(s))));
+        _rpc.AddLocalRpcMethod(AgentToolCallMethod, new Action<AgentToolCallRecord>(r => AgentToolCall?.Invoke(this, new HostAgentToolCallEventArgs(r))));
+        _rpc.AddLocalRpcMethod(AgentChangesetReadyMethod, new Action<AgentChangesetReady>(c => AgentChangesetReady?.Invoke(this, new HostAgentChangesetReadyEventArgs(c))));
+        _rpc.AddLocalRpcMethod(TerminalScreenChangedMethod, new Action<TerminalScreen>(s => TerminalScreenChanged?.Invoke(this, new HostTerminalScreenChangedEventArgs(s))));
+        _rpc.AddLocalRpcMethod(BackgroundProcessChangedMethod, new Action<BackgroundProcessInfo>(p => BackgroundProcessChanged?.Invoke(this, new HostBackgroundProcessChangedEventArgs(p))));
         _rpc.Disconnected += OnDisconnected;
 
         _ = _process.Exited.ContinueWith(
@@ -102,6 +125,21 @@ internal sealed class HostRpcSession : IHostSession
 
     /// <inheritdoc/>
     public event EventHandler<HostIndexStatusChangedEventArgs>? IndexStatusChanged;
+
+    /// <inheritdoc/>
+    public event EventHandler<HostAgentSessionChangedEventArgs>? AgentSessionChanged;
+
+    /// <inheritdoc/>
+    public event EventHandler<HostAgentToolCallEventArgs>? AgentToolCall;
+
+    /// <inheritdoc/>
+    public event EventHandler<HostAgentChangesetReadyEventArgs>? AgentChangesetReady;
+
+    /// <inheritdoc/>
+    public event EventHandler<HostTerminalScreenChangedEventArgs>? TerminalScreenChanged;
+
+    /// <inheritdoc/>
+    public event EventHandler<HostBackgroundProcessChangedEventArgs>? BackgroundProcessChanged;
 
     /// <summary>Creates the wire framing and serializer shared with Pillion Host.</summary>
     /// <param name="pipe">The connected pipe.</param>
@@ -173,9 +211,10 @@ internal sealed class HostRpcSession : IHostSession
     /// <param name="processId">The devenv.exe process id to report.</param>
     /// <param name="timeout">How long to wait for the host to answer.</param>
     /// <param name="cancellationToken">A token that cancels the handshake.</param>
+    /// <param name="visualStudio">The launching Visual Studio, reported for the Developer PowerShell environment (contract 1.4); <see langword="null"/> reports none.</param>
     /// <returns>The host's handshake response (already checked for acceptance and compatibility).</returns>
     /// <exception cref="HostLaunchException">The host rejected the handshake, is incompatible or did not answer.</exception>
-    public async Task<HandshakeResponse> HandshakeAsync(int processId, TimeSpan timeout, CancellationToken cancellationToken)
+    public async Task<HandshakeResponse> HandshakeAsync(int processId, TimeSpan timeout, CancellationToken cancellationToken, VisualStudioInstallation? visualStudio = null)
     {
         var lifecycle = GetProxy<IHostLifecycleService>();
         var request = new HandshakeRequest
@@ -184,6 +223,8 @@ internal sealed class HostRpcSession : IHostSession
             ContractMinor = ContractVersion.Minor,
             ClientProcessId = processId,
             ProtocolToken = _token,
+            VisualStudioInstallationPath = visualStudio?.InstallationPath ?? string.Empty,
+            VisualStudioVersion = visualStudio?.Version ?? string.Empty,
         };
 
         HandshakeResponse response;

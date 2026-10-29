@@ -84,9 +84,9 @@ public class DtoRoundTripTests
     [Fact]
     public void Dto_IsSerializedAsArrayKeyedByOrder()
     {
-        var bytes = MessagePackSerializer.Serialize(new PreviewDecision { ChangesetId = "cs-1", IsAccepted = true }, Options);
+        var bytes = MessagePackSerializer.Serialize(new ApplyBeginResponse { CheckpointId = "cp-1", JournalId = "j-1" }, Options);
 
-        Assert.Equal("[\"cs-1\",true]", MessagePackSerializer.ConvertToJson(bytes, Options));
+        Assert.Equal("[\"cp-1\",\"j-1\"]", MessagePackSerializer.ConvertToJson(bytes, Options));
     }
 
     private static object Sample(string name) => DtoSamples.All.Single(s => s.GetType().Name == name);

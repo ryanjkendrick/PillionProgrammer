@@ -103,7 +103,7 @@ public sealed class RetrievalComponentTests : IAsyncLifetime, IDisposable
         var index = await StorageRetrievalIndex.CreateAsync(FixtureIndex.IndexId, _temp.Path, _storage, graph, CancellationToken.None);
         var retriever = new HybridRetriever(_embedder);
         return await retriever.SearchAsync(
-            new RetrievalQuery { Text = question, IncludeText = includeText, Languages = languages ?? [], TimeBudget = TimeSpan.FromSeconds(10) },
+            new RetrievalQuery { Text = question, IncludeText = includeText, Languages = languages ?? [], TimeBudget = TimeSpan.FromSeconds(60) }, // not a budget test: a cold CI runner missed 10 s (PR 110's run), as HybridRetrieverTests did before PR 108
             [index],
             CancellationToken.None);
     }

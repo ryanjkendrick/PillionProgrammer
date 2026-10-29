@@ -49,6 +49,12 @@ public sealed class HostLauncherOptions
     public TimeSpan HandshakeTimeout { get; set; } = TimeSpan.FromSeconds(10);
 
     /// <summary>
+    /// Gets or sets the launching Visual Studio, reported in the handshake (contract 1.4) for the Developer PowerShell
+    /// environment; defaults to <see cref="VisualStudioInstallation.Unknown"/>, which reports none.
+    /// </summary>
+    public VisualStudioInstallation VisualStudio { get; set; } = VisualStudioInstallation.Unknown;
+
+    /// <summary>
     /// Gets the extension's host location: <c>&lt;directory of the extension assembly&gt;\Host\Pillion.Host.exe</c>.
     /// </summary>
     /// <param name="extensionAssemblyPath">The extension assembly path.</param>
@@ -148,7 +154,7 @@ public sealed class HostProcessLauncher : IHostLauncher
             pipe = await ConnectAsync(pipeName, process, cancellationToken).ConfigureAwait(false);
             session = new HostRpcSession(process, job, pipe, _options.LocalTargets, _log, token);
 
-            var response = await session.HandshakeAsync(_options.ClientProcessId, _options.HandshakeTimeout, cancellationToken).ConfigureAwait(false);
+            var response = await session.HandshakeAsync(_options.ClientProcessId, _options.HandshakeTimeout, cancellationToken, _options.VisualStudio).ConfigureAwait(false);
             _log.Info(
                 "host.handshake.accepted",
                 "Pillion Host accepted the handshake.",
