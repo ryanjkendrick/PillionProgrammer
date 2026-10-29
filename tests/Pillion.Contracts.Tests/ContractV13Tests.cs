@@ -21,13 +21,18 @@ public class ContractV13Tests
     [
         typeof(IHostLifecycleService), typeof(IModelService), typeof(IInlineEditService), typeof(IContextService), typeof(IAgentService),
         typeof(ISettingsService), typeof(IDiagnosticsService), typeof(IConversationService),
+        typeof(ITerminalService), typeof(IJournalService), // 1.4
     ];
 
     /// <summary>The host-to-VSIX services: the VSIX registers them all on one JsonRpc under their CLR method names.</summary>
-    private static readonly Type[] HostToVsix = [typeof(IEditorService), typeof(IApprovalService), typeof(IWorkspaceQueryService)];
+    private static readonly Type[] HostToVsix = [typeof(IEditorService), typeof(IApprovalService), typeof(IWorkspaceQueryService), typeof(ITrustService)];
 
     /// <summary>The notifications the host sends to the VSIX (method names on the VSIX's JsonRpc).</summary>
-    private static readonly string[] Notifications = ["hostStateChanged", "connectivityChanged", "settingsChanged", "indexStatusChanged"];
+    private static readonly string[] Notifications =
+    [
+        "hostStateChanged", "connectivityChanged", "settingsChanged", "indexStatusChanged",
+        "agentSessionChanged", "agentToolCall", "agentChangesetReady", "terminalScreenChanged", "backgroundProcessChanged", // 1.4
+    ];
 
     /// <summary>The notifications the VSIX sends to the host (method names on the host's JsonRpc).</summary>
     private static readonly string[] ClientNotifications = ["ideActivityChanged", "documentSaved", "openDocumentsChanged"];
@@ -90,11 +95,11 @@ public class ContractV13Tests
     };
 
     [Fact]
-    public void Version_IsOnePointThree()
+    public void Version_IsAtLeastOnePointThree()
     {
+        // The version itself is pinned by the newest ContractV*Tests class (ContractV14Tests); 1.3 only needs to still be covered.
         Assert.Equal(1, ContractVersion.Major);
-        Assert.Equal(3, ContractVersion.Minor);
-        Assert.Equal("1.3", ContractVersion.Text);
+        Assert.True(ContractVersion.Minor >= 3);
     }
 
     [Theory]
@@ -185,7 +190,7 @@ public class ContractV13Tests
     {
         Assert.Equal(
             [("ProviderUnavailable", 0), ("ModelNotInstalled", 1), ("ContextOverflow", 2), ("PolicyDenied", 3), ("ApprovalDenied", 4), ("HostRestarting", 5), ("Cancelled", 6), ("StorageUnavailable", 7), ("NotImplemented", 8)],
-            Enum.GetValues<PillionErrorCode>().Select(c => (c.ToString(), (int)c)));
+            Enum.GetValues<PillionErrorCode>().Take(9).Select(c => (c.ToString(), (int)c)));
     }
 
     [Fact]
@@ -201,7 +206,7 @@ public class ContractV13Tests
     {
         var values = typeof(MentionKinds).GetFields(BindingFlags.Public | BindingFlags.Static).Select(f => (string)f.GetRawConstantValue()!).ToArray();
 
-        Assert.Equal(["file", "folder", "selection", "errors", "clipboard", "symbol", "docs", "solution", "git", "output", "build", "tests"], values);
+        Assert.Equal(["file", "folder", "selection", "errors", "clipboard", "symbol", "docs", "solution", "git", "output", "build", "tests"], values.Take(12));
     }
 
     [Fact]

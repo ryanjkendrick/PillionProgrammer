@@ -380,6 +380,7 @@ public sealed class PillionPackage : AsyncPackage
         var options = new HostLauncherOptions(HostLauncherOptions.DefaultHostPath(extensionAssembly), extensionAssembly, targets)
         {
             LogDirectory = PillionLog.DefaultDirectory,
+            VisualStudio = VisualStudioInstallation.FromCurrentProcess(), // Contract 1.4: the host loads this installation's Developer PowerShell environment (3.11).
         };
 
         return new HostSupervisor(new HostLauncherSelector(options, log), JoinableTaskFactory, log); // The selector lets the IDE tests swap in the fake host.

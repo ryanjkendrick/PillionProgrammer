@@ -47,6 +47,28 @@ public interface IHostConnection
     event EventHandler<HostIndexStatusChangedEventArgs>? IndexStatusChanged;
 
     /// <summary>
+    /// Raised on a background thread when the host reports a session's ledger (its <c>agentSessionChanged</c> notification,
+    /// contract 1.4). Not replayed; call <see cref="IAgentService.GetSessionAsync"/> when a window opens. A 1.3 host never raises it.
+    /// </summary>
+    event EventHandler<HostAgentSessionChangedEventArgs>? AgentSessionChanged;
+
+    /// <summary>Raised on a background thread when the host reports a tool call starting or ending (its <c>agentToolCall</c> notification, contract 1.4).</summary>
+    event EventHandler<HostAgentToolCallEventArgs>? AgentToolCall;
+
+    /// <summary>Raised on a background thread when the host has a changeset for the user (its <c>agentChangesetReady</c> notification, contract 1.4).</summary>
+    event EventHandler<HostAgentChangesetReadyEventArgs>? AgentChangesetReady;
+
+    /// <summary>
+    /// Raised on a background thread when the host reports a terminal's rendered screen (its <c>terminalScreenChanged</c>
+    /// notification, contract 1.4), at most 30 times a second per terminal. Not replayed; call
+    /// <see cref="ITerminalService.GetScreenAsync"/> when a window opens.
+    /// </summary>
+    event EventHandler<HostTerminalScreenChangedEventArgs>? TerminalScreenChanged;
+
+    /// <summary>Raised on a background thread when the host reports a background process whose state changed (its <c>backgroundProcessChanged</c> notification, contract 1.4).</summary>
+    event EventHandler<HostBackgroundProcessChangedEventArgs>? BackgroundProcessChanged;
+
+    /// <summary>
     /// Gets the RPC proxy for a host service interface (for example <see cref="IModelService"/>) on the live connection.
     /// </summary>
     /// <typeparam name="T">A host service interface from Pillion.Contracts.</typeparam>
