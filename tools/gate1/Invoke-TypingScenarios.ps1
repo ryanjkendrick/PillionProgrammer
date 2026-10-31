@@ -30,6 +30,11 @@
     A word for the run folder's name (for example before, after).
 .PARAMETER TestCaseFilter
     The vstest filter (combined with the version filter by Invoke-IdeTests.ps1).
+.PARAMETER Reinstall
+    Uninstalls and installs this build into the driven Visual Studio's Experimental Instance with that version's own
+    VSIXInstaller before the run, whatever is deployed there. Needed after the other version's installer deployed the
+    VSIX into this hive (it targets both versions): that copy's files match the build, so the deployment check would keep
+    it, but 17.14's extension manager does not know it and never loads the package.
 .PARAMETER WholeSuite
     Runs the whole integration suite with the scenarios on (as a gate run does) instead of -TestCaseFilter.
 #>
@@ -44,7 +49,8 @@ param(
     [string]$OllamaEndpoint = 'http://localhost:11434',
     [int]$MetricsWindowSec = 30,
     [int]$WaitForDevenvSec = 3600,
-    [switch]$WholeSuite
+    [switch]$WholeSuite,
+    [switch]$Reinstall
 )
 
 $ErrorActionPreference = 'Stop'
@@ -98,6 +104,12 @@ try {
     # typing pass's model to the CPU, which the first run of this script found (the 1.5B with 0 MB of VRAM, no suggestion in a pass).
     $unloaded = @(Clear-OllamaResidentModels -Endpoint $OllamaEndpoint)
     Write-Gate0Log "Ollama models unloaded before the run: $(if ($unloaded.Count -gt 0) { $unloaded -join ', ' } else { 'none were resident' })"
+
+    if ($Reinstall) {
+        $vsix = Join-Path $repo 'src\Pillion.VisualStudio\bin\Release\net48\Pillion.VisualStudio.vsix'
+        $r = Install-VsixToExp -VisualStudio $vs -VsixPath $vsix -RootSuffix 'Exp'
+        Write-Gate0Log "Reinstalled into the Experimental Instance: $($r.method)"
+    }
 
     # The driven Visual Studio's cached pkgdef configuration must know the deployed copy: one version's VSIXInstaller installs
     # into the other version's Experimental hive as well (the VSIX targets both), without that version's /updateconfiguration,
