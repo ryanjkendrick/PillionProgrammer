@@ -99,6 +99,12 @@ try {
     $unloaded = @(Clear-OllamaResidentModels -Endpoint $OllamaEndpoint)
     Write-Gate0Log "Ollama models unloaded before the run: $(if ($unloaded.Count -gt 0) { $unloaded -join ', ' } else { 'none were resident' })"
 
+    # The driven Visual Studio's cached pkgdef configuration must know the deployed copy: one version's VSIXInstaller installs
+    # into the other version's Experimental hive as well (the VSIX targets both), without that version's /updateconfiguration,
+    # and 17.14 then never loads the package (the Gate 1 incident; every test times out waiting for the package).
+    $cfg = Start-Process -FilePath $vs.DevEnv -ArgumentList @('/rootsuffix', 'Exp', '/updateconfiguration') -PassThru -Wait
+    Write-Gate0Log "devenv /rootsuffix Exp /updateconfiguration ($($vs.DisplayName)) exit $($cfg.ExitCode)"
+
     $envVars = @{ PILLION_METRICS_WINDOW_SECONDS = "$MetricsWindowSec"; PILLION_GATE_PROVIDER = $ProviderId; PILLION_GATE_STRONG_MODEL = $StrongModel; PILLION_GATE_FAST_MODEL = $FastModel }
     $result = Invoke-GateIdeRun -RepoRoot $repo -VisualStudio $vs -RunDir $runDir -ScenarioEnvironment $envVars -TestCaseFilter $TestCaseFilter -WaitForDevenvSec $WaitForDevenvSec
 }
