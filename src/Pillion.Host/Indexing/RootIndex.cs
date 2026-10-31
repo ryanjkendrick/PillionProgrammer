@@ -58,8 +58,15 @@ internal sealed class RootIndex : IAsyncDisposable
     /// <summary>Gets a value indicating whether this host owns the index.</summary>
     public bool IsWriter => Store.Role == IndexRole.Writer;
 
-    /// <summary>Gets the role as the contract names it.</summary>
-    public Contracts.IndexRole ContractRole => IsWriter ? Contracts.IndexRole.Writer : Contracts.IndexRole.Reader;
+    /// <summary>
+    /// Gets or sets a value indicating whether this is a root's previous index (issue #104, work item 3.2): its embedding
+    /// model or chunker version is no longer the configured one, so it is never indexed or watched again, only searched,
+    /// until the root's new index completes its first full sweep. Reported to the extension as a reader.
+    /// </summary>
+    public bool IsRetiring { get; set; }
+
+    /// <summary>Gets the role as the contract names it: a previous index is read-only, whoever holds its lock.</summary>
+    public Contracts.IndexRole ContractRole => IsWriter && !IsRetiring ? Contracts.IndexRole.Writer : Contracts.IndexRole.Reader;
 
     /// <summary>Gets or sets the builder holding every stored file's latest symbol extraction (pipeline thread only).</summary>
     public SymbolGraphBuilder Symbols { get; set; }

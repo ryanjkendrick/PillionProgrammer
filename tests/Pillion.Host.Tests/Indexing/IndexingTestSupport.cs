@@ -23,7 +23,7 @@ internal sealed class FakeEmbedder : IIndexEmbedder
 
     private readonly ConcurrentQueue<int> _batches = new();
 
-    public string ModelId { get; init; } = "fake/hashed-words";
+    public string ModelId { get; set; } = "fake/hashed-words";
 
     /// <summary>Gets or sets a delay per batch (status tests slow the run down so several notifications are sent).</summary>
     public TimeSpan Delay { get; set; }

@@ -70,11 +70,13 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     private readonly SemaphoreSlim _wake = new(0, int.MaxValue);
     private readonly Lock _gate = new();
     private readonly Dictionary<string, RootIndex> _roots = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, RootIndex> _retiring = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _rebuild = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _suppressed = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _stopping = new();
     private WorkspaceDescription? _workspace;
     private string[] _workspaceRoots = [];
+    private string? _currentModelId;
     private int _workspaceVersion;
     private int _appliedWorkspaceVersion = -1;
     private Task _loop = Task.CompletedTask;
@@ -195,7 +197,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     /// <summary>Gets the memory governor (tests).</summary>
     internal MemoryGovernor Memory => _memory;
 
-    /// <summary>Gets the roots open now (tests search their storage directly).</summary>
+    /// <summary>Gets the roots open now under the configured embedding model and chunker version (tests search their storage directly).</summary>
     internal IReadOnlyList<RootIndex> OpenRoots
     {
         get
@@ -206,6 +208,55 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             }
         }
     }
+
+    /// <summary>
+    /// Gets the previous indexes still open read-only (issue #104, work item 3.2): when a root's embedding model or chunker
+    /// version changes, its previous index stays open, is not indexed or watched, and serves searches until the new index's
+    /// first full sweep completes; then it is closed and retention retires it.
+    /// </summary>
+    internal IReadOnlyList<RootIndex> RetiringRoots
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. _retiring.Values];
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets, per root, the index that searches and mentions read now: the previous index while the new one has no completed
+    /// full sweep, the new one from then on (and a root with no previous index as it is).
+    /// </summary>
+    internal IReadOnlyList<RootIndex> ServingRoots
+    {
+        get
+        {
+            lock (_gate)
+            {
+                var serving = new List<RootIndex>(_roots.Count + _retiring.Count);
+                foreach (var (key, root) in _roots)
+                {
+                    serving.Add(_retiring.TryGetValue(key, out var previous) && !IsComplete(root) ? previous : root);
+                }
+
+                // A previous index whose root has no current index open (the new one failed to open): it still serves.
+                foreach (var (key, previous) in _retiring)
+                {
+                    if (!_roots.ContainsKey(key))
+                    {
+                        serving.Add(previous);
+                    }
+                }
+
+                return serving;
+            }
+        }
+    }
+
+    /// <summary>Whether an index has ever completed a full sweep (it was built to the end, now or in an earlier session).</summary>
+    private static bool IsComplete(RootIndex root) => root.Store.State.LastFullSweepUtc is not null;
 
     /// <summary>
     /// Gets the repository roots of the solution or folder open in Visual Studio (full paths, as <see cref="SetWorkspace"/>
@@ -319,8 +370,9 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         List<RootIndex> roots;
         lock (_gate)
         {
-            roots = [.. _roots.Values];
+            roots = [.. _roots.Values, .. _retiring.Values];
             _roots.Clear();
+            _retiring.Clear();
         }
 
         foreach (var root in roots)
@@ -516,6 +568,20 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
                     break;
                 }
             }
+
+            // A root's previous index (issue #104) can be deleted before the switch completes: searches then read the new one.
+            if (open is null)
+            {
+                foreach (var (key, previous) in _retiring)
+                {
+                    if (string.Equals(previous.Store.Identity.Id, indexId, StringComparison.Ordinal))
+                    {
+                        open = previous;
+                        _retiring.Remove(key);
+                        break;
+                    }
+                }
+            }
         }
 
         if (open is not null)
@@ -549,7 +615,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         HashSet<string> open;
         lock (_gate)
         {
-            open = [.. _roots.Values.Select(r => r.Store.Identity.Id)];
+            open = [.. _roots.Values.Select(r => r.Store.Identity.Id), .. _retiring.Values.Select(r => r.Store.Identity.Id)];
         }
 
         return [.. _retention.GetUsage()
@@ -693,9 +759,10 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     {
         ApplyPower();
         var exclude = _settings.GetCurrent().Exclude;
+        var modelChanged = EmbeddingModelChanged();
         lock (_gate)
         {
-            // The exclusions or the flag may have changed: look at the roots again.
+            // The exclusions, the model or the flag may have changed: look at the roots again.
             _workspaceVersion++;
 
             // New exclusions: the watcher's filter follows, and a sweep applies them to what is stored.
@@ -706,9 +773,40 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
                     root.NeedsRun = true;
                 }
             }
+
+            // A model switch takes effect now rather than when the current run ends (issue #104): the run of an index that is
+            // about to become the root's previous one is cancelled; the files it stored are kept.
+            if (modelChanged)
+            {
+                _runCancellation?.Cancel();
+            }
         }
 
         Wake();
+    }
+
+    /// <summary>Whether the configured embedding model differs from the one the open indexes were resolved for.</summary>
+    private bool EmbeddingModelChanged()
+    {
+        string? current;
+        lock (_gate)
+        {
+            current = _currentModelId;
+        }
+
+        if (current is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return !string.Equals(_embedder.ResolveModel().ModelId, current, StringComparison.Ordinal);
+        }
+        catch (PillionRpcException)
+        {
+            return false;
+        }
     }
 
     private void OnVsixConnectionChanged(object? sender, EventArgs e)
@@ -812,15 +910,16 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             wanted.AddRange(RepositoryRoots.Resolve(WorkspacePaths(workspace)).Where(r => Directory.Exists(r.Path)));
         }
 
-        // Close what is no longer wanted.
+        // Close what is no longer wanted (a root's previous index goes with it).
         List<RootIndex> closing;
         lock (_gate)
         {
             var keep = wanted.Select(r => Key(r.Path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            closing = [.. _roots.Where(kv => !keep.Contains(kv.Key)).Select(kv => kv.Value)];
+            closing = [.. _roots.Where(kv => !keep.Contains(kv.Key)).Select(kv => kv.Value), .. _retiring.Where(kv => !keep.Contains(kv.Key)).Select(kv => kv.Value)];
             foreach (var root in closing)
             {
                 _roots.Remove(Key(root.Path));
+                _retiring.Remove(Key(root.Path));
             }
         }
 
@@ -848,27 +947,49 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             return;
         }
 
+        lock (_gate)
+        {
+            _currentModelId = model.ModelId;
+        }
+
         var projects = Projects(workspace!);
         foreach (var repository in wanted)
         {
             stopping.ThrowIfCancellationRequested();
             var key = Key(repository.Path);
+            var identity = new IndexIdentity(repository.Path, model.ModelId, ContextEngineVersions.ChunkerVersion);
+            RootIndex? retire = null;
+            RootIndex? reinstate = null;
+            closing = [];
             lock (_gate)
             {
                 if (_roots.TryGetValue(key, out var existing))
                 {
-                    if (string.Equals(existing.Model.ModelId, model.ModelId, StringComparison.Ordinal))
+                    if (string.Equals(existing.Store.Identity.Id, identity.Id, StringComparison.Ordinal))
                     {
                         continue;
                     }
 
-                    // The embedding model changed: the index is a different one (design section 10).
+                    // The embedding model (or the chunker version) changed: the index is a different one (design section 10).
+                    // The one open now becomes the root's previous index: it stays open read-only and serves searches until
+                    // the new index's first full sweep completes (issue #104). A root keeps one previous index at most.
                     _roots.Remove(key);
-                    closing = [existing];
+                    retire = existing;
                 }
-                else
+
+                if (_retiring.TryGetValue(key, out var previous))
                 {
-                    closing = [];
+                    if (string.Equals(previous.Store.Identity.Id, identity.Id, StringComparison.Ordinal))
+                    {
+                        // Switched back to the previous index's model while it was still open: it is the current index again.
+                        _retiring.Remove(key);
+                        reinstate = previous;
+                    }
+                    else if (retire is not null)
+                    {
+                        _retiring.Remove(key);
+                        closing.Add(previous);
+                    }
                 }
             }
 
@@ -877,7 +998,18 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
                 await old.DisposeAsync().ConfigureAwait(false);
             }
 
-            var identity = new IndexIdentity(repository.Path, model.ModelId, ContextEngineVersions.ChunkerVersion);
+            if (retire is not null)
+            {
+                await RetireAsync(key, retire, stopping).ConfigureAwait(false);
+            }
+
+            if (reinstate is not null)
+            {
+                Reinstate(key, reinstate);
+                await CloseRetiredAsync(key, stopping).ConfigureAwait(false);
+                continue;
+            }
+
             lock (_gate)
             {
                 if (_suppressed.Contains(identity.Id))
@@ -887,12 +1019,26 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             }
 
             var opened = await OpenAsync(repository, model, projects, stopping).ConfigureAwait(false);
-            if (opened is not null)
+            if (opened is null)
             {
-                lock (_gate)
-                {
-                    _roots[key] = opened;
-                }
+                continue;
+            }
+
+            lock (_gate)
+            {
+                _roots[key] = opened;
+            }
+
+            if (IsComplete(opened))
+            {
+                // Built to the end in an earlier session: nothing to wait for.
+                await CloseRetiredAsync(key, stopping).ConfigureAwait(false);
+            }
+            else if (retire is null)
+            {
+                // A host restart in the middle of a switch: the previous index is on disk, complete and unused; serve it
+                // read-only until this one's first full sweep completes, as if the switch had happened in this session.
+                await AdoptPreviousAsync(key, repository, model, projects, stopping).ConfigureAwait(false);
             }
         }
 
@@ -900,11 +1046,143 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     }
 
     /// <summary>
+    /// Turns the root's current index into its previous one (issue #104): its run is stopped, its watcher closed and its
+    /// queued changes dropped; it is never indexed again, only searched, until <see cref="CloseRetiredAsync"/> closes it.
+    /// </summary>
+    private async Task RetireAsync(string key, RootIndex root, CancellationToken stopping)
+    {
+        lock (_gate)
+        {
+            if (ReferenceEquals(_currentRoot, root))
+            {
+                _runCancellation?.Cancel();
+            }
+        }
+
+        await WaitForRunToStopAsync(root, stopping).ConfigureAwait(false);
+        root.Watcher?.Dispose();
+        root.Watcher = null;
+        root.ClearPending();
+        root.IsRetiring = true;
+        root.NeedsRun = false;
+        lock (_gate)
+        {
+            _retiring[key] = root;
+        }
+
+        LogRetiring(_logger, root.Store.Identity.Id, root.Path, root.Model.ModelId);
+    }
+
+    /// <summary>Makes a previous index the root's current index again (the model was switched back while it was still open).</summary>
+    private void Reinstate(string key, RootIndex root)
+    {
+        root.IsRetiring = false;
+        root.NeedsRun = true;
+        lock (_gate)
+        {
+            _roots[key] = root;
+        }
+
+        if (root.IsWriter && _options.WatchFileSystem)
+        {
+            StartWatcher(root);
+        }
+
+        LogReinstated(_logger, root.Store.Identity.Id, root.Path, root.Model.ModelId);
+    }
+
+    /// <summary>
+    /// Closes the root's previous index once the current one has completed a full sweep. From then on retention retires the
+    /// previous index's folder by the age rule (it is no longer protected as an open index), or the Index window deletes it.
+    /// </summary>
+    private async Task CloseRetiredAsync(string key, CancellationToken stopping)
+    {
+        RootIndex? previous;
+        lock (_gate)
+        {
+            if (!_retiring.TryGetValue(key, out previous) || !_roots.TryGetValue(key, out var current) || !IsComplete(current))
+            {
+                return;
+            }
+
+            _retiring.Remove(key);
+        }
+
+        stopping.ThrowIfCancellationRequested();
+        await previous.DisposeAsync().ConfigureAwait(false);
+        LogRetired(_logger, previous.Store.Identity.Id, previous.Path, previous.Model.ModelId);
+        Publish();
+    }
+
+    /// <summary>
+    /// After a host restart in the middle of a switch: opens the most recently used complete index of the root under another
+    /// model or chunker version, if no live host holds it, as the root's previous index. Failing to is not an error: the new
+    /// index simply serves from its first stored batch, as before issue #104.
+    /// </summary>
+    private async Task AdoptPreviousAsync(string key, RepositoryRoot repository, IndexEmbeddingModel model, IReadOnlyList<IndexedProject> projects, CancellationToken stopping)
+    {
+        IndexUsage? candidate;
+        try
+        {
+            var normalized = IndexIdentity.NormalizeRoot(repository.Path);
+            candidate = _retention.GetUsage()
+                .Where(u => !u.InUse && !string.IsNullOrEmpty(u.EmbeddingModel) && !string.IsNullOrEmpty(u.ChunkerVersion) && !string.IsNullOrWhiteSpace(u.RootPath))
+                .Where(u => !(string.Equals(u.EmbeddingModel, model.ModelId, StringComparison.Ordinal) && string.Equals(u.ChunkerVersion, ContextEngineVersions.ChunkerVersion, StringComparison.Ordinal)))
+                .Where(u => SameRoot(u.RootPath!, normalized))
+                .Where(u => IndexStateFile.Read(Path.Combine(u.Directory, IndexFolder.StateFileName))?.LastFullSweepUtc is not null)
+                .OrderByDescending(u => u.LastUsedUtc)
+                .FirstOrDefault();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            LogPreviousNotAdopted(_logger, repository.Path, ex.Message);
+            return;
+        }
+
+        if (candidate is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var store = await _factory.OpenAsync(new IndexRequest(repository.Path, candidate.EmbeddingModel!, candidate.ChunkerVersion!, _pipeName), stopping).ConfigureAwait(false);
+            var previous = new RootIndex(repository, store, model with { ModelId = candidate.EmbeddingModel! }, projects) { IsRetiring = true, NeedsRun = false };
+            await previous.RefreshCountsAsync(stopping).ConfigureAwait(false);
+            lock (_gate)
+            {
+                _retiring[key] = previous;
+            }
+
+            _ = WarmAsync(previous, stopping);
+            LogPreviousAdopted(_logger, store.Identity.Id, repository.Path, candidate.EmbeddingModel!);
+        }
+        catch (Exception ex) when (ex is LocalStoreException or IOException or UnauthorizedAccessException)
+        {
+            LogPreviousNotAdopted(_logger, repository.Path, ex.Message);
+        }
+
+        static bool SameRoot(string rootPath, string normalized)
+        {
+            try
+            {
+                return string.Equals(IndexIdentity.NormalizeRoot(rootPath), normalized, StringComparison.Ordinal);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                return false;
+            }
+        }
+    }
+
+    /// <summary>
     /// The scheduled retention sweep (design section 10, issue #99): once the workspace the extension reported is applied (its
     /// indexes open), then every <see cref="IndexingOptions.RetentionSweepInterval"/>. Indexes whose root is gone, or unopened
     /// for <c>indexing.retentionDays</c>, are deleted; an index a live host holds is never deleted (<see cref="IndexRetention"/>
-    /// keeps it), nor one that belongs to a root of the open workspace (open here, or of another embedding model or chunker
-    /// version). Runs on the pipeline loop, so no root is opened while it deletes. Logs every index it deletes.
+    /// keeps it), nor one this host has open, nor the index a root of the open workspace would open now (see
+    /// <see cref="IsProtectedFromRetention"/>; a root's index under an older model or chunker version retires by the age rule
+    /// once its switch completed, issue #104). Runs on the pipeline loop, so no root is opened while it deletes. Logs every
+    /// index it deletes.
     /// </summary>
     private async Task SweepRetentionIfDueAsync(CancellationToken stopping)
     {
@@ -968,19 +1246,27 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         LogRetentionSwept(_logger, report.Items.Count, deleted, report.BytesReclaimed / 1048576.0, interval.TotalHours);
     }
 
-    /// <summary>Whether retention must keep an index: one this host has open, or one of a root of the open workspace.</summary>
+    /// <summary>
+    /// Whether retention must keep an index: one this host has open (a root's current or previous index), or the index a root
+    /// of the open workspace would open now (the configured model and this build's chunker version; it may be closed because
+    /// its open failed or it was just deleted). Another index of an open root, under an older model or chunker version, is
+    /// not protected once it is closed: that is how a previous index retires after a model switch (issue #104), by the age rule.
+    /// </summary>
     private bool IsProtectedFromRetention(IndexUsage usage)
     {
         HashSet<string> ids;
         HashSet<string> roots;
+        string? modelId;
         lock (_gate)
         {
-            ids = [.. _roots.Values.Select(r => r.Store.Identity.Id)];
+            ids = [.. _roots.Values.Select(r => r.Store.Identity.Id), .. _retiring.Values.Select(r => r.Store.Identity.Id)];
             roots = new HashSet<string>(_roots.Values.Select(r => r.Store.Identity.NormalizedRoot), StringComparer.Ordinal);
             foreach (var root in _workspaceRoots)
             {
                 roots.Add(IndexIdentity.NormalizeRoot(root));
             }
+
+            modelId = _currentModelId;
         }
 
         if (ids.Contains(usage.Id))
@@ -993,9 +1279,12 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             return false;
         }
 
+        // The model is unknown until the first reconcile resolved it; until then every index of an open root is kept.
+        var current = modelId is null
+            || (string.Equals(usage.EmbeddingModel, modelId, StringComparison.Ordinal) && string.Equals(usage.ChunkerVersion, ContextEngineVersions.ChunkerVersion, StringComparison.Ordinal));
         try
         {
-            return roots.Contains(IndexIdentity.NormalizeRoot(usage.RootPath));
+            return current && roots.Contains(IndexIdentity.NormalizeRoot(usage.RootPath));
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
@@ -1165,6 +1454,9 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
                     await pass.RunAsync(token).ConfigureAwait(false);
                     LastRunStatistics = pass.Statistics;
                     Interlocked.Increment(ref _fullRuns);
+
+                    // The first full sweep of a root's new index completed: its previous index has served its purpose.
+                    await CloseRetiredAsync(Key(root.Path), stopping).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested && !stopping.IsCancellationRequested)
@@ -1471,7 +1763,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
                     ? (pass!.Progress.Phase == IndexPhase.Idle ? IndexPhase.Discovering : pass.Progress.Phase)
                     : _failed ? IndexPhase.Failed : IndexPhase.Idle;
 
-            var roots = _roots.Values.OrderBy(r => r.Path, StringComparer.OrdinalIgnoreCase).Select(r => new IndexRootStatus
+            IndexRootStatus Status(RootIndex r) => new()
             {
                 RootPath = r.Path,
                 IndexId = r.Store.Identity.Id,
@@ -1487,20 +1779,29 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
                 EmbeddingModelId = r.Model.ModelId,
                 ChunkerVersion = r.Store.Identity.ChunkerVersion,
                 SchemaVersion = r.Store.Database.SchemaVersion,
-            }).ToArray();
+            };
+
+            // The current indexes carry the totals; a root's previous index (issue #104) is listed after its current one
+            // (as a reader) so the Index window shows both during the switch, without counting the root twice.
+            var current = _roots.Values.OrderBy(r => r.Path, StringComparer.OrdinalIgnoreCase).Select(Status).ToArray();
+            var roots = _roots.Values.Concat(_retiring.Values)
+                .OrderBy(r => r.Path, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(r => r.IsRetiring ? 1 : 0)
+                .Select(r => r.IsRetiring ? Status(r) : current.First(c => string.Equals(c.IndexId, r.Store.Identity.Id, StringComparison.Ordinal)))
+                .ToArray();
 
             var lastUpdated = _roots.Values.Select(r => r.LastUpdatedUtc).Where(t => t is not null).DefaultIfEmpty(null).Max();
             return new IndexStatus
             {
                 IsIndexing = running && !paused,
                 IsPaused = paused,
-                IndexedFileCount = roots.Sum(r => r.IndexedFileCount),
-                TotalFileCount = roots.Sum(r => r.TotalFileCount),
+                IndexedFileCount = current.Sum(r => r.IndexedFileCount),
+                TotalFileCount = current.Sum(r => r.TotalFileCount),
                 LastUpdatedUtc = lastUpdated?.UtcDateTime,
                 Phase = phase,
                 PauseReason = phase == IndexPhase.Paused ? _pause.Current : IndexPauseReason.None,
                 Roots = roots,
-                ExcludedSecretFileCount = roots.Sum(r => r.SecretFileCount),
+                ExcludedSecretFileCount = current.Sum(r => r.SecretFileCount),
                 LastError = phase == IndexPhase.Failed ? _lastError : null,
                 Progress = running
                     ? new IndexProgress
@@ -1556,6 +1857,21 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
 
     [LoggerMessage(EventId = 2973, Level = LogLevel.Warning, Message = "Index retention could not list the index folders ({ExceptionType}: {Reason}); it is tried again at the next sweep.")]
     private static partial void LogRetentionFailed(ILogger logger, string exceptionType, string reason);
+
+    [LoggerMessage(EventId = 2974, Level = LogLevel.Information, Message = "Index {IndexId} for {Root} (model {Model}) is now the root's previous index: read-only, serving searches until the new index's first full sweep completes.")]
+    private static partial void LogRetiring(ILogger logger, string indexId, string root, string model);
+
+    [LoggerMessage(EventId = 2975, Level = LogLevel.Information, Message = "Index {IndexId} for {Root} (model {Model}) is closed: the root's new index completed its first full sweep. Retention retires the folder by the age rule.")]
+    private static partial void LogRetired(ILogger logger, string indexId, string root, string model);
+
+    [LoggerMessage(EventId = 2976, Level = LogLevel.Information, Message = "Index {IndexId} for {Root} (model {Model}) is the root's current index again: the embedding model was switched back.")]
+    private static partial void LogReinstated(ILogger logger, string indexId, string root, string model);
+
+    [LoggerMessage(EventId = 2977, Level = LogLevel.Information, Message = "Index {IndexId} for {Root} (model {Model}), complete from an earlier session, serves searches read-only until the root's new index completes its first full sweep.")]
+    private static partial void LogPreviousAdopted(ILogger logger, string indexId, string root, string model);
+
+    [LoggerMessage(EventId = 2978, Level = LogLevel.Debug, Message = "No previous index of {Root} could be opened to serve searches during the switch: {Reason}. The new index serves from its first stored batch.")]
+    private static partial void LogPreviousNotAdopted(ILogger logger, string root, string reason);
 
     [LoggerMessage(EventId = 2914, Level = LogLevel.Debug, Message = "The battery saver state could not be read; indexing is not paused for it.")]
     private static partial void LogPowerFailed(ILogger logger, Exception exception);

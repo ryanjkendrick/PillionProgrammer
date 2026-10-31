@@ -41,7 +41,7 @@ internal sealed class LiveIndexCatalog : IIndexCatalog, ISymbolGraphProvider, IA
         // of the same database (kept open by the read-only catalog).
         if (fallback is ReadOnlyIndexCatalog readOnly)
         {
-            readOnly.SkipRoot = root => _indexing.OpenRoots.Any(r => string.Equals(r.Store.Identity.NormalizedRoot, root, StringComparison.Ordinal));
+            readOnly.SkipRoot = root => _indexing.OpenRoots.Concat(_indexing.RetiringRoots).Any(r => string.Equals(r.Store.Identity.NormalizedRoot, root, StringComparison.Ordinal));
         }
     }
 
@@ -68,7 +68,9 @@ internal sealed class LiveIndexCatalog : IIndexCatalog, ISymbolGraphProvider, IA
             return [];
         }
 
-        var open = _indexing.OpenRoots;
+        // Per root, the index that serves now: during a model switch the root's previous index, until the new one's first
+        // full sweep completes (issue #104, work item 3.2); otherwise the current one.
+        var open = _indexing.ServingRoots;
         var result = open
             .Where(r => wanted.Contains(r.Store.Identity.NormalizedRoot))
             .Select(r => new CatalogIndex(r.Store.Identity.Id, r.Path, r.Storage, r.Graph))
@@ -102,7 +104,7 @@ internal sealed class LiveIndexCatalog : IIndexCatalog, ISymbolGraphProvider, IA
         }
 
         var workspace = _indexing.WorkspaceRoots.Select(IndexIdentity.NormalizeRoot).ToHashSet(StringComparer.Ordinal);
-        IReadOnlyList<IndexedSymbolGraph> graphs = [.. _indexing.OpenRoots
+        IReadOnlyList<IndexedSymbolGraph> graphs = [.. _indexing.ServingRoots
             .Where(r => r.Graph is not null && workspace.Contains(r.Store.Identity.NormalizedRoot))
             .Select(r => new IndexedSymbolGraph(r.Path, r.Graph!))];
         return ValueTask.FromResult(graphs);

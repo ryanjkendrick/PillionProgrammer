@@ -101,7 +101,8 @@ public sealed class IndexRetentionScheduleTests : IDisposable
         Assert.Equal(2, harness.Service.RetentionSweeps);
         Assert.Contains(logs.Messages, m => m.Contains("Index retention deleted index " + later.Id, StringComparison.Ordinal));
 
-        // A month on: the index nobody opened goes; the open root's index (in use) and its older model's index (an open root) stay.
+        // A month on: the index nobody opened goes, and so does the open root's index under an older model (issue #104: once closed it
+        // retires by the age rule); the open root's current index (in use) stays.
         // A delete that fails once (something holding a file on a busy machine) is tried again at the next daily sweep, as in
         // production; on this clock the test brings that day. A timeout says what the last sweep decided (CI run 40054730288
         // timed out here after 60 s with no reason recorded).
@@ -110,13 +111,13 @@ public sealed class IndexRetentionScheduleTests : IDisposable
         var month = harness.Service.LastRetentionReport!;
         Assert.Equal(RetentionDecision.DeleteUnused, Item(month, stale.Id).Decision);
         Assert.Equal(RetentionDecision.KeepInUse, Item(month, open).Decision);
-        Assert.Equal(RetentionDecision.KeepProtected, Item(month, olderModel.Id).Decision);
-        Assert.False(Item(month, olderModel.Id).Deleted);
+        Assert.Equal(RetentionDecision.DeleteUnused, Item(month, olderModel.Id).Decision); // issue #104: an open root's index under another model retires by the age rule
+        Assert.True(Item(month, olderModel.Id).Deleted);
         Assert.False(Directory.Exists(stale.Directory));
-        Assert.True(Directory.Exists(olderModel.Directory));
+        Assert.False(Directory.Exists(olderModel.Directory));
         Assert.True(Directory.Exists(harness.Root.Store.Folder.Directory));
         Assert.Contains(logs.Messages, m => m.Contains("Index retention deleted index " + stale.Id, StringComparison.Ordinal) && m.Contains("not opened for more than 30 days", StringComparison.Ordinal));
-        Assert.DoesNotContain(logs.Messages, m => m.Contains("Index retention deleted index " + olderModel.Id, StringComparison.Ordinal) || m.Contains("Index retention deleted index " + open, StringComparison.Ordinal));
+        Assert.DoesNotContain(logs.Messages, m => m.Contains("Index retention deleted index " + open, StringComparison.Ordinal));
     }
 
     [Fact]
