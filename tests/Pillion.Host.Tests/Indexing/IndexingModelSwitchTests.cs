@@ -117,16 +117,17 @@ public sealed class IndexingModelSwitchTests : IDisposable
         harness.Settings.Update(new PillionSettings());
         await harness.WaitForAsync(s => s.Roots.Length == 1 && s.Roots[0].EmbeddingModelId == FirstModel, what: "the first model's index alone");
         harness.Service.SetUserPause(false);
-        var status = await harness.WaitForIdleAsync();
 
+        // The reinstated index is swept once (it was complete already, so the sweep finds nothing to do) and is idle again.
+        var status = await harness.WaitForAsync(s => s.Phase == IndexPhase.Idle && harness.Service.FullRuns >= runs + 1 && s.Roots.Length == 1, what: "the reinstated index's sweep");
         Assert.Same(original, harness.Root);
         Assert.False(original.IsRetiring);
         Assert.NotNull(original.Watcher);
         Assert.Empty(harness.Service.RetiringRoots);
         Assert.Equal(original.Store.Identity.Id, Assert.Single(status.Roots).IndexId);
         Assert.Equal(IndexRole.Writer, status.Roots[0].Role);
+        Assert.NotNull(status.Roots[0].LastFullSweepUtc);
         Assert.Equal(embedded, embedder.ChunksEmbedded); // nothing was embedded again: the reinstated index was complete
-        Assert.True(harness.Service.FullRuns >= runs + 1, "the reinstated index is swept once, which finds nothing to do");
         Assert.False(incomplete.Store.HoldsWriterLock(), "the half-built index was closed");
     }
 
