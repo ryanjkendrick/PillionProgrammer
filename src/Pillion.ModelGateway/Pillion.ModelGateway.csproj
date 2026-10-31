@@ -8,8 +8,12 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>Pillion.ModelGateway</RootNamespace>
-    <!-- directml (default): ONNX Runtime with the CPU and DirectML execution providers; cpu: the CPU-only package. See Directory.Packages.props. -->
-    <PillionOnnxRuntimeFlavor Condition="'$(PillionOnnxRuntimeFlavor)' == ''">directml</PillionOnnxRuntimeFlavor>
+    <!--
+      cpu (default since work item 3.2, issue #78): the CPU-only ONNX Runtime package, no DirectML.dll; directml: ONNX Runtime
+      with the CPU and DirectML execution providers, for a future GPU item (-p:PillionOnnxRuntimeFlavor=directml). See
+      Directory.Packages.props.
+    -->
+    <PillionOnnxRuntimeFlavor Condition="'$(PillionOnnxRuntimeFlavor)' == ''">cpu</PillionOnnxRuntimeFlavor>
   </PropertyGroup>
 
   <ItemGroup>
@@ -25,10 +29,11 @@
 
   <!--
     ONNX Runtime for the bundled embedding model (work item 2.7). The native onnxruntime.dll flows to the host and the tests
-    through the package's runtimes\win-x64\native assets. DirectML.dll does not: Microsoft.AI.DirectML copies it only from
-    its build targets, only for an x64 PlatformTarget and only into the project that references it, together with a debug
-    layer that must not ship. So the package's own copy is switched off and DirectML.dll is added here as content, which
-    reaches the output of every referencing project and the host's publish folder.
+    through the package's runtimes\win-x64\native assets. The directml flavour (opt-in since work item 3.2) adds DirectML.dll,
+    which does not flow that way: Microsoft.AI.DirectML copies it only from its build targets, only for an x64 PlatformTarget
+    and only into the project that references it, together with a debug layer that must not ship. So the package's own copy
+    is switched off and DirectML.dll is added here as content, which reaches the output of every referencing project and the
+    host's publish folder.
   -->
   <PropertyGroup Condition="'$(PillionOnnxRuntimeFlavor)' == 'directml'">
     <Microsoft_AI_DirectML_SkipLibraryCopy>true</Microsoft_AI_DirectML_SkipLibraryCopy>

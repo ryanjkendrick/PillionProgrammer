@@ -281,6 +281,12 @@ Work item 2.9, design sections 7, 10 and 13, behind `features.indexing` (an inde
      model's tokenizer, breadcrumb included) and their symbols extracted (`FileSymbolExtractor`) on the pipeline threads.
      On the first run of a session the unchanged files are read for their symbols only (the symbol graph needs every
      file); when the stored `symbols_version` differs, their symbols are stored again (no re-chunking, no re-embedding).
+     Right after chunking, the secret scanner runs on every chunk's full text (`IndexRedactor`, work item 3.2, issue
+     #103, design section 12): a secret becomes `<redacted-index:kind>` before the embedding input, the vector-reuse
+     lookup, the FTS5 rows or the stored row are built from the text, so nothing a scanner pattern matches reaches
+     `index.db` or the embedder. The chunk keeps its line range and token count; `chunks.redacted` marks it (schema 4),
+     the root counts such chunks, and the placeholder is never restored by a request's `RedactionSession` (its shape is
+     `<redacted:` only) nor counted again at the model boundary (the allow-list skips it).
    - *Embedding*: chunks go to `IModelGateway.EmbedAsync` in batches of 32 (`EmbeddingPurpose.Document`, the model pinned by
      id so an index never mixes models; Local-only and the cloud switch are the gateway's rules). A failed batch is
      retried three times (1, 2, 4 s); then the run stops as `Failed` with the error, keeping every file already stored.
@@ -296,8 +302,10 @@ Work item 2.9, design sections 7, 10 and 13, behind `features.indexing` (an inde
 3. **Status.** `GetIndexStatusAsync` and `indexStatusChanged`: the phase only moves forward within a run (Discovering,
    Hashing, Chunking, Embedding, Storing, then Idle; `Paused` with its reason on top, `Failed` with `LastError`), files
    done of total, chunks stored, and an estimate from the bytes done since embedding started. Each root reports its id,
-   role, files indexed and found, excluded and secret-bearing counts, chunks, disk use (from `GetIndexStatusAsync`; the
-   notification leaves it 0 to stay cheap), last full sweep, model, chunker and schema versions.
+   role, files indexed and found, excluded and secret-bearing counts, chunks, redacted chunks (`RedactedChunkCount`,
+   contract 1.4), disk use (from `GetIndexStatusAsync`; the notification leaves it 0 to stay cheap), last full sweep,
+   model, chunker and schema versions. During a model switch (below) a root has two entries: its new index, and its
+   previous index as a reader; the totals count the root once, by its new index.
 4. **Controls.** `PauseIndexingAsync` (pause reason `User`); `RebuildIndexAsync(root)` cancels a run on that root, deletes
    every `files` row (cascading to everything else), clears `symbols_version` and `vector_dimensions`, vacuums and runs
    again (for a workspace root whose index was deleted it opens a new one); `DeleteIndexAsync(id)` closes the index if
@@ -308,9 +316,22 @@ Work item 2.9, design sections 7, 10 and 13, behind `features.indexing` (an inde
 5. **Retention** (issue #99). The pipeline loop runs `IndexRetention.SweepAsync` once the workspace the extension reported
    is applied (its indexes open), then every `IndexingOptions.RetentionSweepInterval` (a day, on the host's `TimeProvider`),
    with the current `indexing.retentionDays`. It deletes the indexes whose root is gone or that were not opened for that
-   many days, never one a live host holds (`writer.lock`) and never one of a root of the open workspace (open here, or of
-   another model or chunker version: `RetentionDecision.KeepProtected`). Each deletion is logged (event ids 2970-2973);
-   the last report is `IndexingService.LastRetentionReport`.
+   many days, never one a live host holds (`writer.lock`), never one this host has open (a root's current or previous
+   index), and never the index a root of the open workspace would open now (the configured model and this build's chunker
+   version: `RetentionDecision.KeepProtected`). An open root's index under another model or chunker version is not
+   protected once it is closed, so a previous index retires by the age rule after a switch (below). Each deletion is
+   logged (event ids 2970-2973); the last report is `IndexingService.LastRetentionReport`.
+6. **Switching the embedding model** (issue #104, work item 3.2, design section 7). The model id and the chunker version
+   are part of the index identity, so a change opens a different index. The one open until then becomes the root's
+   *previous index* (`RootIndex.IsRetiring`, `IndexingService.RetiringRoots`): a run in progress on it is cancelled (the
+   files it stored are kept), its watcher is closed, its queued changes dropped, and it is never indexed again; it stays
+   open and serves searches, mentions, the repo map and the symbol-graph fallback (`IndexingService.ServingRoots`, read by
+   `LiveIndexCatalog`) until the new index records its first full sweep, then it is closed (event ids 2974-2978) and the
+   Index window's Indexes tab or the age rule retires its folder. The status lists both meanwhile. Switching back while
+   the previous index is still open reinstates it without a rebuild and closes the half-built one; a host restart in the
+   middle of a switch adopts the most recently used complete, unused index of the root under another model as the
+   previous index; deleting the previous index from the Index window ends the hand-over early. An index that was
+   already complete from an earlier session needs no hand-over.
 
 ### Serving search and the workspace queries
 
