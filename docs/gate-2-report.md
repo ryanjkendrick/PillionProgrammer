@@ -308,3 +308,107 @@ Phase 2: before the adapters go down, create the Gate 2 generated solution and i
 To reproduce the runs: `pwsh tools/gate2/Invoke-Gate2.ps1 -KeepIndexes` on Visual Studio 2026, then
 `pwsh tools/gate2/Invoke-Gate2.ps1 -DevEnvPath "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe" -SkipBenchmarks -SkipIndexing -SkipTwoInstances`
 (about 3 hours and 45 minutes in all, from an idle machine with no Visual Studio open).
+
+## After work item 3.1
+
+Work item 3.1 (phase 3) carried out the product owner's decisions of 2026-10-24 on the autocomplete and signal rows of this
+report and of the Gate 1 report, and re-ran the Gate 1 typing scenarios on both Visual Studio versions with retrieval on, as
+the gate run above had them. What changed:
+
+- **Issue #49, lazy Error List and Output panes.** The Error List is connected by the first diagnostics query
+  (`GetDiagnosticsAsync`, so the first `@errors` or `/fix`) or by the explicit `IIdeSignals.EnsureDiagnosticsConnectedAsync`
+  that phase 3's self-healing (work item 3.16) calls before it subscribes to `DiagnosticsChanged`; the Output window is
+  connected by the first pane query (`@output`, `@build`, `@tests`). The Pillion Programmer Output pane is created by the
+  first line worth showing (a warning or above, or a notice the user asked for); routine lines wait in a buffer of 500.
+  `DiagnosticsChanged` fires only once something has asked for diagnostics, and `LastBuild.Output` is captured only once the
+  Output window is connected (`@build` reads the pane otherwise), as the decision accepted. `PackageLoad_UsesLittleUiThreadCpu`
+  now asserts that neither connection runs during the load or in the three seconds after Ready (on pull request 112's CI run
+  the 17.14 runner had spent 1,930 ms in the Error List connection before Ready).
+- **Issue #51, line-complete display.** The early-display code is gone (`ShowSingleLineEarly`, `DisplayUpdateInterval`, the
+  attempt's `Updated` event and `Latest`, the view's growing of a displayed proposal through `TryUpdateProposal`). A
+  single-line suggestion is shown when its line is complete; a multi-line one shows its first complete line, the whole
+  suggestion is remembered when it completes, and accepting the first line offers the rest at once.
+- **Issue #52, option 3.** The session cancels the attempt in flight only when a text change invalidates the prefix it was
+  made for: typing straight ahead at its caret keeps it alive, and the editor matches what was typed with the suggestion
+  when it arrives (the rest is offered at the moved caret; a suggestion the typing diverged from is dropped). A deletion,
+  an edit elsewhere, several edits at once or a caret move still cancel. Unit-tested in `AutocompletePipelineTests`.
+- **Issue #100, attribution.** Every piece of Pillion code the editor runs per keystroke (the proposal manager, the proposal
+  source's synchronous head, the command filter, the buffer and caret handlers, the suggestion events) is now timed by
+  `UiThreadTimings`, and the typing scenario charges the stretches that overlap each TypeChar to it, splits the keystrokes
+  by whose proposal was displayed before them and lists the ten slowest with their stretches (`typing.pillionUiThread`,
+  `typing.typeCharByProposalDisplayedBefore`, `typing.typeCharSlowest` in the scenario JSON). The finding is below.
+
+### Runs
+
+`tools/gate1/Invoke-TypingScenarios.ps1` (new: steps c and e of `Invoke-Gate2.ps1` for these rows only; it unloads every
+resident Ollama model first, writes the gate's settings with every phase 1 and phase 2 flag on, runs the integration tests
+through `Invoke-IdeTests.ps1` with `PILLION_GATE_SCENARIOS=1` and `PILLION_UI_THREAD_TIMINGS=1`, and restores `settings.json`
+byte for byte). Same machine and models as the gate run (Ollama 0.40.12 now). Run folders under `tools/gate1/out/` (git-ignored):
+
+| Run | Visual Studio | Code | Tests | Note |
+| --- | --- | --- | --- | --- |
+| `20261024-214800-before-vs18` | 18.11.1 | `a5bc1f8` (the instrumentation only, on `develop` at `36f2ce8`) | 5 / 0 (typing passes, package load) | The GPU was shared with a model another session had left pinned (`gemma4:e2b`): the 7B showed one suggestion in its pass and the 1.5B ran on the CPU. Its keystroke figures are an upper bound; its attribution and package-load figures stand |
+| `20261029-122238-after-vs18` | 18.11.1 | `3696646` | 24 / 2 / 13 skipped (the whole suite) | The two failures are the inline chat and chat scenarios: the 7B could not load within 120 s because `gemma4:e2b` had been pinned again mid-run by another process on the machine (the host's warning names it) and the 1.5B had 0 MB of VRAM in its pass. Not a product failure; repeated below |
+| `20261029-165657-after2-vs18` | 18.11.1 | `b315a30` | **7 / 0** (typing passes, package load, inline chat, chat) | Both qwen models resident in VRAM throughout; the 18.11 figures below |
+| `20261031-182549-after3-vs2022` | 17.14.42 | `b315a30` | **22 / 0 / 13 skipped** (the whole suite) | Visual Studio 2022 17.14.44 and Ollama 0.40.13 by then; after the build was reinstalled with 17.14's own VSIXInstaller (`-Reinstall`). Two earlier attempts (`20261029-170827-after-vs2022`, `20261031-175927-after2-vs2022`) never loaded the package: Visual Studio 2026's VSIXInstaller had deployed the VSIX into the 17.14 hive as well (the VSIX targets both versions), and 17.14's extension manager did not know that copy (`PkgDefMgmt.dll` errors in its Activity Log) although its files matched the build. Not a product failure; the script now reinstalls on request and always refreshes the driven version's configuration |
+
+### Figures, before and after
+
+"Before" is this report's Gate 2 run (2026-10-15) unless stated. Keystrokes are TypeChar on the UI thread, autocomplete on
+against off, p50 and p95; time to suggestion is the 7B and 1.5B passes' p50 and p95; prefix reuse is the host's
+prompt-prefix counter (issue #47); the package figure is Pillion's own UI-thread time from the folder open to Ready, with
+what it deferred into the three seconds after Ready.
+
+| Row | 18.11 before | 18.11 after | 17.14 before | 17.14 after |
+| --- | --- | --- | --- | --- |
+| Keystrokes on (7B) against off | +0.14 ms p50, **+4.17 ms p95** (on 8.20, off 4.03) | +0.21 ms p50, **+3.41 ms p95** (on 7.72, off 4.31) | +0.20 ms p50, +0.96 ms p95 | +1.54 ms p50, **+2.88 ms p95** (on 8.33, off 5.44) |
+| Keystrokes on (1.5B) against off | not quoted at Gate 2 | +0.23 ms p50, +4.01 ms p95 (on 8.32) | not quoted | +1.39 ms p50, +2.54 ms p95 (on 7.99) |
+| Time to suggestion, 7B | p50 217 ms, p95 521 ms | p50 **146 ms**, p95 444 ms (25 shown of 46 requests, 13 accepted) | p50 216 ms, p95 640 ms | p50 **153 ms**, p95 559 ms (31 shown of 52 requests, 9 accepted) |
+| Time to suggestion, 1.5B | p50 124 ms | p50 **107 ms**, p95 329 ms (22 shown of 32, 10 accepted) | p50 103 ms | p50 **82 ms**, p95 369 ms (30 shown of 43, 16 accepted) |
+| Prompt-prefix reuse, 7B / 1.5B | 59% (13 of 22) / 61% (11 of 18) | 61% (19 of 31) / 64% (16 of 25) | 62% / 79% | 44% (16 of 36) / 81% (30 of 37) |
+| Package UI-thread time to Ready; deferred after Ready | 8.6 ms; the Error List connection landed after Ready (70.6 ms of it in the 2026-10-24 baseline, 84.4 ms deferred in all) | **7.4 ms; 3.6 ms** deferred, no Error List or Output connection (11.0 ms in all) | 13.4 ms; 77 ms deferred (Error List 51 to 79 ms, Output pane 22 to 26 ms, Gate 1) | **13.3 ms; 6.1 ms** deferred, no Error List or Output connection (19.5 ms in all) |
+| Pillion's own UI-thread time inside a keystroke (new) | p50 0.029 ms, p95 0.094 ms, max 3.2 ms (the 2026-10-24 baseline) | p50 0.01 ms, **p95 0.026 ms**, max 0.36 ms (7B pass) | not measured | p95 0.054 ms, max 0.35 ms (7B pass) |
+| Keystrokes with a Pillion proposal displayed before them, against none (new) | not measured | p95 **12.3 ms** (84 of 617 keystrokes) against **4.4 ms** (533); 1.5B pass 13.6 ms (133 of 635) against 4.0 ms (502) | not measured | p95 **16.1 ms** (49 of 573) against **7.2 ms** (524); 1.5B pass 12.2 ms (50 of 599) against 7.4 ms (549). On 17.14 the keystrokes with no proposal on screen also cost more than with autocomplete off (p95 5.4 ms): IntelliCode's broker, which draws the ghost text on 17.x, does its own work per keystroke while a source is active |
+
+The Gate 1 behaviours held in the same runs: Tab, Esc and Pillion: Suggest (`ProposalSource_ShowsGhostText_WithTheCompetitorEnabled`),
+no proposal while a completion list item is selected, the inline difference view, 0 prose and 0 fenced proposals in every
+pass, and 8 to 14 proposals accepted per pass on 18.11.
+
+### Issue #100: what the attribution says
+
+The keystroke p95 with autocomplete on is still over the +2 ms budget on both versions (18.11: +3.41 ms after, +4.17 before; 17.14: +2.88 ms on 17.14.44, against the
++0.96 ms Gate 2 measured on 17.14.37806), and the
+attribution says where it is, with the slowest keystrokes listed per pass in each run's `summary.md`:
+
+- **Pillion's own code is not it.** Across the 617 keystrokes of the 7B pass Pillion's UI-thread work inside TypeChar was
+  11.4 ms in all: p95 0.026 ms a keystroke, 0.36 ms at most (the buffer-changed handler, the proposal manager and the
+  command filter). The slowest keystrokes carried 0.005 to 0.06 ms of it.
+- **Keystrokes typed while no proposal is on screen cost the same as with autocomplete off**: p95 4.39 ms (7B pass) and
+  4.01 ms (1.5B pass) against 4.31 ms off.
+- **The excess is the keystrokes typed while a ghost-text proposal is displayed**: p95 12.3 ms (84 keystrokes of the 7B
+  pass, 14%) and 13.6 ms (133 of the 1.5B pass, 21%). On each of them Visual Studio's suggestion service reconciles the
+  displayed proposal with the typed character (type-through) and redraws the ghost text; Pillion's handlers in those
+  keystrokes (`autocomplete.event.rejected`, `autocomplete.event.displayed`) took 0.01 to 0.03 ms.
+- The figure therefore moves with how often a good suggestion is on screen: the Gate 1 and Gate 2 fixes and this item
+  raised the shown and accepted counts (25 shown, 13 accepted in the 7B pass), and with them the share of keystrokes that
+  land on a displayed proposal. 17.14 (IntelliCode's broker): keystrokes with a proposal displayed p95 16.1 ms, with none 7.2 ms, autocomplete off 5.4 ms, so about +1.8 ms of its +2.9 ms is the broker's own per-keystroke work with a source active (Gate 2 had measured +0.96 ms on 17.14.37806; this run is 17.14.44) and the rest the displayed-proposal keystrokes; Pillion's own share is 0.054 ms at the p95.
+
+What was done off the UI thread: nothing of Pillion's was left on it to move (the typed-through match of issue #52, the
+remembering of a completed multi-line suggestion and the lazy connections all run on pool threads). What remains, exactly:
+about +3.4 ms at the p95 on 18.11, all of it in keystrokes typed through a displayed proposal, in the editor's own
+reconciliation and redraw of ghost text, which any proposal source pays and which Pillion cannot shorten short of
+withdrawing its proposal at the first typed character (which would end type-through and word accept). The per-keystroke
+attribution now in the scenario JSON (`typing.pillionUiThread`) is the measurement of Pillion's share; whether the budget
+row should judge that share or the editor's whole keystroke is for the product owner (issue #100 stays open with this
+evidence).
+
+### Still open
+
+- Prompt-prefix reuse stays at 61 to 64% on 18.11 (44% (16 of 36) / 81% (30 of 37) on 17.14) against the 70% the cache row asks for;
+  issue #47 is unchanged by this item.
+- `$/enumerator/abort failed unexpectedly` errors in the host log (StreamJsonRpc, "This remote object no longer exists")
+  when a completion stream is cancelled by typing: 78 in the 2026-10-24 baseline run and 86 in the 2026-10-29 run, so not
+  new to this item; noise in the log, no effect seen on the next request. Worth a small host fix (the late abort of an
+  enumerator that has already finished).
+- Another process on the machine pinned `gemma4:e2b` in Ollama (`keep_alive -1`) during two of the runs, which starved the
+  8 GB GPU; the typing script now unloads every resident model before a run, but cannot stop a later load.
