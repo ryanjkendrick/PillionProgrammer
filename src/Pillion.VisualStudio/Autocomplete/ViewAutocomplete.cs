@@ -99,6 +99,7 @@ internal sealed class ViewAutocomplete
     /// <returns><see langword="true"/> when Pillion's source should be asked.</returns>
     public bool WantsProposals(VirtualSnapshotPoint caret)
     {
+        using var timing = UiThreadTimings.Measure("autocomplete.manager");
         var feature = _host.Feature;
         if (feature is null
             || _closed
@@ -169,10 +170,11 @@ internal sealed class ViewAutocomplete
         {
             CoexistenceTrace.Write("source.explicit", "at=" + key + " answer=" + answer);
         }
-        var keptText = kept is null ? null : kept.Source?.Latest is { } latest ? ProposalFactory.ToDocumentLineBreaks(latest.Text, newLine) : kept.Text;
+        var keptText = kept?.Text;
         if (answer == SourceAnswer.FromKept && kept is not null && ProposalFactory.CreateInsertion(caret, keptText!, PillionProposalId.Create(kept.Attempt, 0)) is { } keptProposal)
         {
-            // The pushed suggestion may still be streaming: keep its attempt alive and let it grow.
+            // A pushed multi-line suggestion may still be streaming: keep its attempt alive, so the whole suggestion is
+            // remembered when it completes and the rest is offered after its first line is accepted.
             session.CancelPendingExcept(kept.Attempt);
             var keptShown = new Shown(kept.Attempt, caret, keptText!, isMultiLine: keptText!.IndexOf('\n') >= 0);
             lock (_gate)
@@ -182,7 +184,7 @@ internal sealed class ViewAutocomplete
 
             if (kept.Source is { } source && !source.Completed.IsCompleted)
             {
-                _ = FollowUpAsync(feature, session, source, keptShown, newLine);
+                _ = RememberWhenCompleteAsync(feature, session, source, keptShown, newLine);
             }
 
             CoexistenceTrace.Write("source.kept", "attempt=" + kept.Attempt + " at=" + key + " scenario=" + scenario);
@@ -232,7 +234,7 @@ internal sealed class ViewAutocomplete
         {
             // Competitor first: answer with nothing so the broker shows the competitor's proposal, and fill in later
             // only if nothing is displayed once the competitor had its chance.
-            _ = FollowAsync(feature, attempt, key, newLine, DateTimeOffset.UtcNow + CoexistencePolicy.CompetitorGrace);
+            _ = FollowAsync(feature, attempt, key, caret.VirtualSpaces, newLine, DateTimeOffset.UtcNow + CoexistencePolicy.CompetitorGrace);
             return null;
         }
 
@@ -251,6 +253,24 @@ internal sealed class ViewAutocomplete
         }
 
         var documentText = ProposalFactory.ToDocumentLineBreaks(result.Text, newLine);
+        var typedThrough = string.Empty;
+        if (attempt.TypedThroughLength > 0)
+        {
+            // Issue #52, option 3: the user typed straight ahead while the attempt was in flight. What they typed must be
+            // the start of the suggestion; the rest is offered at the caret as it is now.
+            if (!TryResolveTypedThrough(attempt, caret.Position.Position, caret.VirtualSpaces, documentText, out var moved, out var remainder))
+            {
+                feature.Log.Debug("autocomplete.request.diverged", "The user typed past the suggestion while it was in flight.", ("request", attempt.RequestId), ("typed", attempt.TypedThroughLength));
+                return null;
+            }
+
+            typedThrough = documentText.Substring(0, documentText.Length - remainder.Length);
+            caret = new VirtualSnapshotPoint(moved);
+            key = KeyOf(moved);
+            documentText = remainder;
+            feature.Log.Debug("autocomplete.typedthrough", "Offering the rest of a suggestion the user typed into.", ("request", attempt.RequestId), ("typed", typedThrough.Length), ("left", remainder.Length));
+        }
+
         var proposal = ProposalFactory.CreateInsertion(caret, documentText, PillionProposalId.Create(attempt.Id, 0));
         if (proposal is null)
         {
@@ -258,7 +278,7 @@ internal sealed class ViewAutocomplete
             return null;
         }
 
-        var shown = new Shown(attempt.Id, caret, documentText, result.IsMultiLine);
+        var shown = new Shown(attempt.Id, caret, documentText, result.IsMultiLine) { TypedThrough = typedThrough };
         lock (_gate)
         {
             _shown = shown;
@@ -282,11 +302,9 @@ internal sealed class ViewAutocomplete
         }
         else
         {
-            _ = FollowUpAsync(feature, session, attempt, shown, newLine);
-        }
-
-        if (!result.IsComplete)
-        {
+            // A multi-line suggestion shown at its first complete line: the rest streams on and is remembered when it
+            // completes, so accepting the first line offers the remaining lines at once (issue #51).
+            _ = RememberWhenCompleteAsync(feature, session, attempt, shown, newLine);
             return ProposalFactory.Collection(proposal);
         }
 
@@ -314,6 +332,7 @@ internal sealed class ViewAutocomplete
             return;
         }
 
+        using var timing = UiThreadTimings.Measure("autocomplete.event.displayed");
         _displayed = true;
         OnUiThread(() => Timeline.PillionShown(attempt));
         CoexistenceTrace.Write("pillion.shown", "attempt=" + attempt);
@@ -337,6 +356,7 @@ internal sealed class ViewAutocomplete
     /// <param name="reason">Why.</param>
     public void OnRejected(ProposalBase original, ProposalBase? final, ReasonForUpdate reason)
     {
+        using var timing = UiThreadTimings.Measure("autocomplete.event.rejected");
         if (((int)reason & (int)ReasonForUpdate.Diverged) != 0)
         {
             _displayed = false;
@@ -362,6 +382,7 @@ internal sealed class ViewAutocomplete
     /// <param name="reason">How.</param>
     public void OnAccepted(ProposalBase original, ReasonForAccept reason)
     {
+        using var timing = UiThreadTimings.Measure("autocomplete.event.accepted");
         _displayed = false;
         if (PillionProposalId.TryParse(original.ProposalId, out var attempt, out _))
         {
@@ -386,6 +407,7 @@ internal sealed class ViewAutocomplete
     /// <param name="reason">Why.</param>
     public void OnDismissed(ProposalBase original, ReasonForDismiss reason)
     {
+        using var timing = UiThreadTimings.Measure("autocomplete.event.dismissed");
         _displayed = false;
         if (reason != ReasonForDismiss.DismissedForRefinement && PillionProposalId.TryParse(original.ProposalId, out var attempt, out _))
         {
@@ -711,11 +733,11 @@ internal sealed class ViewAutocomplete
         }
 
         CoexistenceTrace.Write("pillion.request", "attempt=" + attempt.Id + " at=" + key + " immediate=" + immediate);
-        _ = FollowAsync(feature, attempt, key, NewLineAt(caret.Position), notBefore: null);
+        _ = FollowAsync(feature, attempt, key, caret.VirtualSpaces, NewLineAt(caret.Position), notBefore: null);
     }
 
     /// <summary>Waits for an attempt started outside the broker's wait and hands its suggestion to the timeline.</summary>
-    private async Task FollowAsync(AutocompleteFeature feature, CompletionAttempt attempt, CaretKey key, string newLine, DateTimeOffset? notBefore)
+    private async Task FollowAsync(AutocompleteFeature feature, CompletionAttempt attempt, CaretKey key, int virtualSpaces, string newLine, DateTimeOffset? notBefore)
     {
         try
         {
@@ -728,6 +750,20 @@ internal sealed class ViewAutocomplete
             }
 
             var documentText = result is null ? null : ProposalFactory.ToDocumentLineBreaks(result.Text, newLine);
+            if (documentText is not null && attempt.TypedThroughLength > 0)
+            {
+                // Issue #52: typed straight ahead meanwhile; the rest of a matching suggestion belongs at the moved caret.
+                if (TryResolveTypedThrough(attempt, key.Position, virtualSpaces, documentText, out var moved, out var remainder))
+                {
+                    key = KeyOf(moved);
+                    documentText = remainder;
+                }
+                else
+                {
+                    documentText = null;
+                }
+            }
+
             var current = _view.TextBuffer.CurrentSnapshot;
             if (result is { IsComplete: true } && _session is { } session && documentText is not null && current.Version.VersionNumber == key.Version)
             {
@@ -943,47 +979,15 @@ internal sealed class ViewAutocomplete
     }
 
     /// <summary>
-    /// Follows a suggestion that was shown at its first visible text (decision of 2026-10-11): while it streams, the
-    /// displayed proposal grows (the session sends at most one update per 50 ms, and they are coalesced onto the UI
-    /// thread); at the end the whole suggestion replaces it and is remembered for typing through. Nothing is updated once
-    /// the user has typed or the proposal is no longer Pillion's.
+    /// Follows a multi-line suggestion shown at its first complete line until it completes, then remembers the whole of it
+    /// for the view, so that accepting (or typing) the first line offers the remaining lines at once from the remembered
+    /// suggestion. The displayed ghost text is never changed: Visual Studio's <c>TryUpdateProposal</c> does not redraw it
+    /// (issue #51, decided 2026-10-24), so what was shown first is what Tab takes.
     /// </summary>
-    private async Task FollowUpAsync(AutocompleteFeature feature, AutocompleteSession session, CompletionAttempt attempt, Shown shown, string newLine)
+    private async Task RememberWhenCompleteAsync(AutocompleteFeature feature, AutocompleteSession session, CompletionAttempt attempt, Shown shown, string newLine)
     {
-        var queued = 0;
-        void OnUpdated(object? sender, CompletionResult update)
-        {
-            if (Interlocked.Exchange(ref queued, 1) == 1)
-            {
-                return; // An update is already on its way to the UI thread; it reads the latest text.
-            }
-
-            _host.JoinableTaskFactory.RunAsync(async () =>
-            {
-                await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
-                Interlocked.Exchange(ref queued, 0);
-                if (attempt.Completed.IsCompleted || attempt.Latest is not { } latest)
-                {
-                    return; // The final update follows.
-                }
-
-                var documentText = ProposalFactory.ToDocumentLineBreaks(latest.Text, newLine);
-                if (documentText != shown.Primary && Grow(attempt, shown, documentText))
-                {
-                    shown.SetPrimary(documentText);
-                    Remember(session, shown, documentText);
-                }
-            }).FileAndForget("pillion/autocomplete/grow");
-        }
-
-        attempt.Updated += OnUpdated;
         try
         {
-            if (attempt.Latest is { IsComplete: false } early && ProposalFactory.ToDocumentLineBreaks(early.Text, newLine) != shown.Primary)
-            {
-                OnUpdated(attempt, early);
-            }
-
             #pragma warning disable VSTHRD003 // The attempt's tasks are completed by thread-pool work and never need the UI thread.
             var final = await attempt.Completed.ConfigureAwait(false);
             #pragma warning restore VSTHRD003
@@ -993,60 +997,59 @@ internal sealed class ViewAutocomplete
             }
 
             var finalText = ProposalFactory.ToDocumentLineBreaks(final.Text, newLine);
-            shown.SetPrimary(finalText);
-            Remember(session, shown, finalText);
-
-            // The broker may not have displayed the first text yet when a short suggestion is already complete: wait a
-            // little for it, so the whole suggestion still replaces the first chunk.
-            for (var i = 0; i < 10; i++)
+            if (shown.TypedThrough.Length > 0)
             {
-                await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
-                if (_closed || _view.TextSnapshot != shown.Caret.Position.Snapshot)
+                // The suggestion was offered from a moved caret: remember the part after what was typed through.
+                if (!finalText.StartsWith(shown.TypedThrough, StringComparison.Ordinal))
                 {
-                    return; // The user typed: the remembered suggestion supplies the rest on the next request.
+                    return;
                 }
 
-                if (DisplayedPillionProposal() is not null)
-                {
-                    break;
-                }
-
-                await Task.Delay(AutocompleteEngine.DisplayUpdateInterval).ConfigureAwait(false);
+                finalText = finalText.Substring(shown.TypedThrough.Length);
             }
 
-            await _host.JoinableTaskFactory.SwitchToMainThreadAsync();
-            var updated = Grow(attempt, shown, finalText);
-            feature.Log.Debug("autocomplete.extended", "Completed a suggestion shown at its first text.", ("request", attempt.RequestId), ("updated", updated));
+            shown.SetPrimary(finalText);
+            Remember(session, shown, finalText);
+            feature.Log.Debug("autocomplete.completed.remembered", "Remembered the whole of a suggestion shown at its first line.", ("request", attempt.RequestId), ("chars", finalText.Length));
         }
-#pragma warning disable CA1031 // A follow-up failure only means the early part stays shown.
+#pragma warning disable CA1031 // A failed follow-up only means the first line stays the whole offer.
         catch (Exception ex)
 #pragma warning restore CA1031
         {
-            feature.Log.Debug("autocomplete.extend.failed", "Could not extend a suggestion.", ("error", ex.GetType().Name));
-        }
-        finally
-        {
-            attempt.Updated -= OnUpdated;
+            feature.Log.Debug("autocomplete.remember.failed", "Could not remember a completed suggestion.", ("error", ex.GetType().Name));
         }
     }
 
-    /// <summary>Replaces the displayed Pillion proposal of an attempt with longer text (UI thread); false when it is not displayed or the user typed.</summary>
-    private bool Grow(CompletionAttempt attempt, Shown shown, string documentText)
+    /// <summary>
+    /// Matches what the user typed at an attempt's caret while it was in flight with the suggestion that arrived (issue
+    /// #52): the text must be unchanged but for that typing (the session cancelled the attempt otherwise), the typed
+    /// characters must be the start of the suggestion, and the rest is offered at the moved caret.
+    /// </summary>
+    /// <param name="attempt">The attempt, with what was typed through.</param>
+    /// <param name="position">The caret position the attempt was made for.</param>
+    /// <param name="virtualSpaces">That caret's virtual spaces.</param>
+    /// <param name="documentText">The suggestion, in the document's line breaks.</param>
+    /// <param name="moved">The caret after the typed characters, on the current snapshot.</param>
+    /// <param name="remainder">The rest of the suggestion.</param>
+    /// <returns><see langword="true"/> when the typed text is the start of the suggestion and something is left to offer.</returns>
+    private bool TryResolveTypedThrough(CompletionAttempt attempt, int position, int virtualSpaces, string documentText, out SnapshotPoint moved, out string remainder)
     {
-        ThreadHelper.ThrowIfNotOnUIThread();
-        if (_closed || _view.TextSnapshot != shown.Caret.Position.Snapshot)
+        moved = default;
+        remainder = string.Empty;
+        var current = _view.TextBuffer.CurrentSnapshot;
+        var typed = attempt.TypedThroughLength;
+        if (current.Version.VersionNumber != attempt.TypedThroughVersion || typed <= 0 || position + typed > current.Length)
+        {
+            return false; // Something else changed the text since the last change the session saw.
+        }
+
+        if (!TypeThrough.TryGetRemainder(documentText, current.GetText(position, typed), virtualSpaces, out remainder))
         {
             return false;
         }
 
-        var id = PillionProposalId.Create(attempt.Id, 0);
-        if (DisplayedPillionProposal()?.ProposalId != id)
-        {
-            return false;
-        }
-
-        var proposal = ProposalFactory.CreateInsertion(shown.Caret, documentText, id);
-        return proposal is not null && _host.Suggestions?.TryUpdateProposal(_view, proposal) is not null;
+        moved = new SnapshotPoint(current, position + typed);
+        return true;
     }
 
     /// <summary>After a word accept, replaces the displayed suggestion with its rest at the new caret.</summary>
@@ -1073,7 +1076,15 @@ internal sealed class ViewAutocomplete
             return;
         }
 
-        session.CancelPendingUnless(e.After.Version.VersionNumber, caret: null);
+        using var timing = UiThreadTimings.Measure("autocomplete.textchanged");
+        var changes = e.Changes;
+        var edits = new TextEdit[changes.Count];
+        for (var i = 0; i < edits.Length; i++)
+        {
+            edits[i] = new TextEdit(changes[i].OldPosition, changes[i].OldLength, changes[i].NewLength);
+        }
+
+        session.TextChanged(e.After.Version.VersionNumber, edits);
         if (Timeline.CompetitorDisplayed && Interlocked.Exchange(ref _textChangePosted, 1) == 0)
         {
             // The caret settles after this event; while a competitor's proposal is typed through the broker asks no source.
@@ -1094,7 +1105,8 @@ internal sealed class ViewAutocomplete
 
     private void OnCaretMoved(object sender, CaretPositionChangedEventArgs e)
     {
-        _session?.CancelPendingUnless(e.NewPosition.BufferPosition.Snapshot.Version.VersionNumber, e.NewPosition.BufferPosition.Position);
+        using var timing = UiThreadTimings.Measure("autocomplete.caretmoved");
+        _session?.CaretMoved(e.NewPosition.BufferPosition.Snapshot.Version.VersionNumber, e.NewPosition.BufferPosition.Position);
 
         // Pillion's ghost text belongs at the caret. On Visual Studio 18, when the caret moves away without an edit
         // (arrow keys, a click), the editor keeps the proposal as a "go to suggestion" hint and asks no source for the
@@ -1129,7 +1141,7 @@ internal sealed class ViewAutocomplete
     /// <summary>A Pillion suggestion kept for the next request at exactly one caret (a push).</summary>
     private sealed class Kept(CaretKey key, string text, long attempt, DateTimeOffset until, CompletionAttempt? source)
     {
-        /// <summary>Gets the attempt that produced the suggestion, when it may still be streaming.</summary>
+        /// <summary>Gets the attempt that produced the suggestion, when it may still be streaming (its whole text is remembered when it completes).</summary>
         public CompletionAttempt? Source { get; } = source;
 
         public CaretKey Key { get; } = key;
@@ -1160,6 +1172,9 @@ internal sealed class ViewAutocomplete
         public VirtualSnapshotPoint Caret { get; }
 
         public bool IsMultiLine { get; }
+
+        /// <summary>Gets or sets the start of the suggestion the user had typed before it was shown (issue #52); empty otherwise.</summary>
+        public string TypedThrough { get; set; } = string.Empty;
 
         public string Primary
         {

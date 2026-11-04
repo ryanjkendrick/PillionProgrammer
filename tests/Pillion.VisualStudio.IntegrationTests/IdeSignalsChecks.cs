@@ -56,8 +56,8 @@ public sealed class SignalRecording : IDisposable
     }
 
     /// <summary>
-    /// Gets the <see cref="IIdeSignals"/> service, waits until the package has connected it to the Error List, and starts
-    /// recording.
+    /// Gets the <see cref="IIdeSignals"/> service, connects it to the Error List (lazily connected since issue #49: the
+    /// first diagnostics query or this explicit call makes the connection) and starts recording.
     /// </summary>
     /// <param name="timeout">How long to wait for the connection.</param>
     /// <param name="cancellationToken">Cancels the wait.</param>
@@ -77,16 +77,24 @@ public sealed class SignalRecording : IDisposable
                 + $"which does not implement the test's IIdeSignals from {typeof(IIdeSignals).Assembly.Location}.");
         }
 
-        // StartAsync runs after the package's initialization; the Error List is the last thing it connects.
+        // The signals start after the package's initialization, and the Error List is connected on first use (issue #49):
+        // wait for the connector to be in place, then connect explicitly, as a consumer that subscribes to DiagnosticsChanged does.
         var clock = Stopwatch.StartNew();
         while (signals.DiagnosticsNote.StartsWith("The Error List is not available yet.", StringComparison.Ordinal))
         {
             if (clock.Elapsed > timeout)
             {
-                throw new TimeoutException($"The IDE signals were not connected to the Error List after {timeout.TotalSeconds:0} s. Note: {signals.DiagnosticsNote}");
+                throw new TimeoutException($"The IDE signals did not start after {timeout.TotalSeconds:0} s. Note: {signals.DiagnosticsNote}");
             }
 
             await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+        }
+
+        var connecting = Stopwatch.StartNew();
+        await signals.EnsureDiagnosticsConnectedAsync(cancellationToken).ConfigureAwait(false);
+        if (!signals.DiagnosticsNote.StartsWith("Error List entries", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"The IDE signals could not connect the Error List (after {connecting.ElapsedMilliseconds} ms). Note: {signals.DiagnosticsNote}");
         }
 
         return new SignalRecording(signals);

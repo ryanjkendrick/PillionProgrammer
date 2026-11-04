@@ -118,8 +118,11 @@ folder, then check **View > Output > Pillion Programmer** and **Tools > Pillion:
 The extension launches Pillion Host when it loads and shows its state in the status bar ("Pillion: Ready",
 "Pillion: Restarting (2/3)", "Pillion: Failed, ..."). **Tools > Pillion: Retry** restarts it after a failure and
 **Tools > Pillion: Open Logs** opens `%LOCALAPPDATA%\PillionProgrammer\logs`, where the extension writes
-`vsix-YYYYMMDD.log`. Building the VSIX publishes the host self-contained (win-x64) with `dotnet publish` and packages
-it under `Host\` in the VSIX; that step is skipped when no host source has changed since the last publish.
+`vsix-YYYYMMDD.log`. The **Pillion Programmer** Output pane is created the first time there is something worth showing
+(a warning or a failure, or a notice you asked for, such as Show Status's autocomplete figures); until then routine
+lines wait in a buffer of the last 500 and appear with it, and the log file has everything. Building the VSIX publishes
+the host self-contained (win-x64) with `dotnet publish` and packages it under `Host\` in the VSIX; that step is skipped
+when no host source has changed since the last publish.
 
 **Tools > Pillion: Open Chat** (default shortcut Ctrl+Alt+Shift+P, then C; also **View > Other Windows > Pillion
 Chat**) opens the Chat window: pick a model (or **Auto**, which lets Pillion Host choose), type a message, Enter
@@ -293,8 +296,12 @@ opens a block, on an empty line inside a body, after a declaration signature, an
 of a line. **Tab** accepts, **Esc** dismisses, **Ctrl+Right** accepts the next word, and **Alt+]** and **Alt+[** ("Pillion:
 Next Suggestion" and "Pillion: Previous Suggestion", rebindable under Tools > Options > Keyboard) switch between the
 suggestion and its first line only (Visual Studio 2026; Visual Studio 2022 does not cycle between proposals). Accepting
-a suggestion asks for the next one at once. Requests wait 200 ms after the last keystroke; when the p95 latency over
-five minutes is above 1.5 s the wait rises to 350 ms and suggestions are single-line until it recovers.
+a suggestion asks for the next one at once. A single-line suggestion appears when its line is complete; a multi-line one
+shows its first complete line, and accepting that line offers the remaining lines at once. Requests wait 200 ms after
+the last keystroke; a request already on its way survives typing straight ahead at the caret, and when what you typed is
+the start of the suggestion the rest is offered where the caret now is (a deletion, an edit elsewhere or a caret move
+drops it). When the p95 latency over five minutes is above 1.5 s the wait rises to 350 ms and suggestions are
+single-line until it recovers.
 
 Autocomplete measures itself, on your machine only; nothing is sent anywhere. **Tools > Pillion: Show Status** has an
 "Autocomplete" section with the last five minutes (requests sent, suggestions shown and the show rate, accepted and the
@@ -551,6 +558,13 @@ Solution diagnostics are read from the Error List, so they are only the entries 
 Roslyn's compiler diagnostics for the open text, unsaved edits included; analyzer diagnostics come through the Error List.
 If Visual Studio's workspace cannot be reached, only the Error List is used and the note says why. **Tools > Pillion: Show
 Status** lists the build state and the last five signals (the service keeps the last 200 with time stamps).
+
+The Error List and the Output window are connected on first use, not when the extension loads (issue #49: Visual Studio
+creates the Error List's table control and initialises the Output window on first use, which cost 50 to 120 ms of
+UI-thread time, and 1.9 s on one CI runner). The first `GetDiagnosticsAsync` (so the first `@errors` or `/fix`) connects
+the Error List, and `DiagnosticsChanged` starts firing from then on; a consumer that wants the event before any query
+calls `EnsureDiagnosticsConnectedAsync` first. The first `GetOutputPaneTextAsync` (`@output`, `@build`, `@tests`) connects
+the Output window; `LastBuild.Output` is captured only once it is connected, and `@build` reads the pane otherwise.
 
 ## Local models and the GPU tier
 

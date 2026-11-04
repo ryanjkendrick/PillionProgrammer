@@ -127,6 +127,16 @@ public sealed partial class PillionPackageTests(ITestOutputHelper output) : Pill
         Assert.True(attach.Total < MaxStatusBarAttach, $"Attaching the status bar indexing item took {attach.Total.TotalMilliseconds:0.0} ms on the UI thread (budget {MaxStatusBarAttach.TotalMilliseconds:0} ms).");
         Assert.True(index.Total < MaxStatusBarIndexUpdates, $"The status bar indexing item's updates took {index.Total.TotalMilliseconds:0.0} ms on the UI thread in {index.Count} visits (budget {MaxStatusBarIndexUpdates.TotalMilliseconds:0} ms).");
 
+        // Issue #49 (decided 2026-10-24): the Error List and the Output window are connected on their first use, never at
+        // start-up (on the 18.x runner the Error List connection had landed before Ready at 117 ms; on 17.14 it cost 51 to
+        // 79 ms right after Ready). Nothing in this test asks for diagnostics or a pane, so neither connection may appear.
+        foreach (var name in new[] { "signals.connect.errorlist", "signals.connect.output" })
+        {
+            var stretch = Stretch(windows, name);
+            Output.WriteLine($"{name}: x{stretch.Count} {stretch.Total.TotalMilliseconds:0.0} ms (must be 0: connected lazily, on first use).");
+            Assert.True(stretch.Count == 0, $"{name} ran {stretch.Count} time(s) ({stretch.Total.TotalMilliseconds:0.0} ms) during the load or the {DeferredWindow.TotalSeconds:0} s after Ready; it must connect on first use only (issue #49).");
+        }
+
         // The UI thread's whole CPU time (printed above) is only an upper bound: it holds Visual Studio's own work on that
         // thread, which on a shared runner once reached 578 ms against the old 500 ms limit. It is not asserted.
     }

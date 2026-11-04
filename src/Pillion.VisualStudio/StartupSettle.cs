@@ -8,9 +8,10 @@ namespace Pillion.VisualStudio;
 
 /// <summary>
 /// Says when the package's start-up is over, for work that should not compete with it: the host has settled (Ready,
-/// Degraded or Failed), or a timeout passed, plus a short grace period. The Output pane and the Error List are created by
-/// Visual Studio on first use, which costs tens of milliseconds of UI-thread time (more on 17.x); asking for them after
-/// the load keeps that out of the folder-open critical path.
+/// Degraded or Failed), or a timeout passed, plus a short grace period. The Output pane is created by Visual Studio on
+/// first use, which costs tens of milliseconds of UI-thread time (more on 17.x); a line that must be shown during the
+/// load waits for this, so the creation stays out of the folder-open critical path. (The Error List and the Output
+/// window reader are connected on their first use instead, issue #49.)
 /// </summary>
 internal static class StartupSettle
 {

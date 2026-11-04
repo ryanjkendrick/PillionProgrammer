@@ -60,10 +60,11 @@ public sealed class PillionLog
     }
 
     /// <summary>
-    /// Gets or sets a callback that receives each formatted line at <see cref="PillionLogLevel.Info"/> or above,
-    /// on the calling thread. The Output pane sink uses a thread-safe write.
+    /// Gets or sets a callback that receives each formatted line at <see cref="PillionLogLevel.Info"/> or above, with its
+    /// level, on the calling thread. The Output pane sink uses a thread-safe write and creates the pane only for a
+    /// warning or above.
     /// </summary>
-    public Action<string>? Sink { get; set; }
+    public Action<PillionLogLevel, string>? Sink { get; set; }
 
     /// <summary>Gets the default log directory, <c>%LOCALAPPDATA%\PillionProgrammer\logs</c>.</summary>
     public static string DefaultDirectory => Path.Combine(
@@ -173,7 +174,7 @@ public sealed class PillionLog
 
             if (level >= PillionLogLevel.Info)
             {
-                Sink?.Invoke(line);
+                Sink?.Invoke(level, line);
             }
         }
 #pragma warning disable CA1031 // Logging must never take the extension down.

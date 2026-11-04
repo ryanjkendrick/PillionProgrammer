@@ -5,6 +5,7 @@ using Microsoft.VisualStudio.Language.Proposals;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Utilities;
+using Pillion.VisualStudio.Core;
 
 namespace Pillion.VisualStudio.Autocomplete;
 
@@ -56,8 +57,19 @@ internal sealed class PillionProposalSourceProvider : ProposalSourceProviderBase
             CompletionState? completionState,
             ProposalScenario scenario,
             char triggeringCharacter,
-            CancellationToken cancel) =>
-            state.RequestAsync(caret, completionState, scenario, cancel);
+            CancellationToken cancel)
+        {
+            // The part of the request that runs before its first await, on whichever thread the broker calls from.
+            var head = UiThreadTimings.Measure("autocomplete.request");
+            try
+            {
+                return state.RequestAsync(caret, completionState, scenario, cancel);
+            }
+            finally
+            {
+                head.Dispose();
+            }
+        }
     }
 }
 
