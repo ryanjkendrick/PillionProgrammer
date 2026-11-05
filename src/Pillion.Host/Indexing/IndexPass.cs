@@ -497,7 +497,7 @@ internal sealed partial class IndexPass
                 await _pause.WaitWhilePausedAsync(token).ConfigureAwait(false);
                 var record = files[index];
                 var text = ReadText(record);
-                extractions[index] = text is null ? null : Extract(record.Path, text);
+                extractions[index] = text is null ? null : Extract(record.Path, text, ScanFile(record.Path, text));
             }).ConfigureAwait(false);
 
         // Stored in groups (one transaction each) when the stored symbols were built by other rules; otherwise only held in memory.
@@ -616,10 +616,12 @@ internal sealed partial class IndexPass
 
         // The secret scanner runs here, before anything else is built from the text: the embedding input, the vector-reuse
         // lookup, the FTS rows, the stored row and the symbol signatures all see the redacted text (design section 12, work
-        // item 3.2, issue #103). Secrets are found over the whole file first, so one that the chunker split (a long PEM block)
-        // is redacted in every chunk it touches, then over each chunk's text for anything that shows only in chunk context.
-        var chunks = Redact(text, Chunker.Chunk(record.Path, text, _chunkOptions), out var redacted);
-        var symbols = Extract(record.Path, text);
+        // item 3.2, issue #103). Secrets are found once over the whole file, so one that the chunker split (a long PEM block)
+        // is redacted in every chunk it touches and in the source the symbol extractor reads; then each chunk's text is
+        // scanned again for anything that shows only in chunk context.
+        var spans = ScanFile(record.Path, text);
+        var chunks = Redact(text, spans, Chunker.Chunk(record.Path, text, _chunkOptions), out var redacted);
+        var symbols = Extract(record.Path, text, spans);
         _options.OnFilePrepared?.Invoke(record.Path);
         var file = new PreparedFile(record, chunks, symbols, CountLines(text), redacted);
         if (reusable is { Count: > 0 })
@@ -642,29 +644,58 @@ internal sealed partial class IndexPass
     }
 
     /// <summary>
-    /// Runs the secret scanner for a file's chunks (work item 3.2, issue #103): first over the whole file text, so a secret the
-    /// chunker split across chunks (a PEM block longer than the chunk cap, whose later chunks hold key material without the
-    /// header the pattern needs) is redacted in every chunk it overlaps, by character offset; then over each chunk's own text,
-    /// for anything that shows only in chunk context. A chunk with a secret gets a copy whose text carries
-    /// <c>&lt;redacted-index:kind&gt;</c> placeholders; its line range and token count (counted on the original, so the chunk
-    /// still fits the model's input) are kept. A whole-file scan that times out falls back to the per-chunk scans, which fail
-    /// closed on their own.
+    /// Runs the secret scanner over a whole file's text (work item 3.2, issue #103), so a secret the chunker splits across
+    /// chunks, or that a signature's normalization would cut, is found whole.
     /// </summary>
-    /// <param name="text">The file text the chunks were cut from.</param>
-    /// <param name="chunks">The chunks as the chunker produced them.</param>
-    /// <param name="redacted">Per chunk, whether anything was replaced.</param>
-    /// <returns>The same list when nothing was redacted, else a list with the redacted chunks replaced.</returns>
-    private static IReadOnlyList<Chunk> Redact(string text, IReadOnlyList<Chunk> chunks, out bool[] redacted)
+    /// <param name="path">The file's path, for the log.</param>
+    /// <param name="text">The file text.</param>
+    /// <returns>
+    /// The secret spans, by offset into <paramref name="text"/>; <see langword="null"/> when the scan timed out, in which case
+    /// the file is unverified and <see cref="Redact"/> and <see cref="Extract"/> fail closed (the file's chunks and signatures
+    /// are stored as <see cref="IndexRedactor.ScanFailedPlaceholder"/>, never as its text).
+    /// </returns>
+    private IReadOnlyList<SecretMatch>? ScanFile(string path, string text)
     {
-        redacted = new bool[chunks.Count];
-        IReadOnlyList<SecretMatch> spans;
         try
         {
-            spans = SecretScanner.Scan(text);
+            return (_options.SecretScan ?? SecretScanner.Scan)(text);
         }
         catch (RegexMatchTimeoutException)
         {
-            spans = [];
+            LogScanTimedOut(_logger, _root.Store.Identity.Id, path);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Redacts a file's chunks (work item 3.2, issue #103): first the spans found over the whole file text, so a secret the
+    /// chunker split across chunks (a PEM block longer than the chunk cap, whose later chunks hold key material without the
+    /// header the pattern needs) is redacted in every chunk it overlaps, by character offset; then each chunk's own text is
+    /// scanned, for anything that shows only in chunk context. A chunk with a secret gets a copy whose text carries
+    /// <c>&lt;redacted-index:kind&gt;</c> placeholders; its line range and token count (counted on the original, so the chunk
+    /// still fits the model's input) are kept. When the whole-file scan timed out (<paramref name="spans"/> is
+    /// <see langword="null"/>) the file is unverified and every chunk fails closed, as a chunk whose own scan times out does:
+    /// its text is <see cref="IndexRedactor.ScanFailedPlaceholder"/> and it is counted as redacted. The per-chunk scans are no
+    /// fallback: they miss the body of a split secret, which is what the whole-file scan is for.
+    /// </summary>
+    /// <param name="text">The file text the chunks were cut from.</param>
+    /// <param name="spans">The secret spans of <paramref name="text"/> from <see cref="ScanFile"/>, or <see langword="null"/> when that scan timed out.</param>
+    /// <param name="chunks">The chunks as the chunker produced them.</param>
+    /// <param name="redacted">Per chunk, whether anything was replaced.</param>
+    /// <returns>The same list when nothing was redacted, else a list with the redacted chunks replaced.</returns>
+    private static IReadOnlyList<Chunk> Redact(string text, IReadOnlyList<SecretMatch>? spans, IReadOnlyList<Chunk> chunks, out bool[] redacted)
+    {
+        redacted = new bool[chunks.Count];
+        if (spans is null)
+        {
+            var withheld = new Chunk[chunks.Count];
+            for (var i = 0; i < chunks.Count; i++)
+            {
+                withheld[i] = chunks[i] with { Text = IndexRedactor.ScanFailedPlaceholder };
+                redacted[i] = true;
+            }
+
+            return withheld;
         }
 
         var lineStarts = spans.Count > 0 ? LineStarts(text) : [];
@@ -708,7 +739,7 @@ internal sealed partial class IndexPass
                 }
             }
 
-            // Then the chunk's own text: what the per-file pass missed, or everything when the per-file scan timed out.
+            // Then the chunk's own text: what shows only in chunk context.
             var result = IndexRedactor.Redact(current);
             if (result.IsRedacted)
             {
@@ -752,18 +783,32 @@ internal sealed partial class IndexPass
 
     /// <summary>
     /// Extracts a file's symbols and redacts what can carry a value (work item 3.2, issue #103): a definition's signature (a
-    /// default parameter value or an attribute argument can hold a key), and its name and container should one ever do. A
-    /// reference holds identifiers only (a name, a qualifier, a container) and is stored as extracted. The definition's id
-    /// hashes path, container, name, kind and ordinal, so a redacted signature keeps the id and the edges other files hold.
+    /// default parameter value or an attribute argument can hold a key), and its name and container should one ever do. The
+    /// spans found over the whole file are redacted in the source before the extractor reads it (<see cref="RedactSource"/>),
+    /// because the extractor normalizes a signature (line breaks collapsed, cut to <see cref="SignatureText.MaxLength"/>
+    /// characters) as it builds it, after which a multi-line secret such as a PEM block in a default parameter value no longer
+    /// matches its pattern while its first lines are still there; each signature, name and container is then scanned once
+    /// more, for anything that shows only in that text. When the whole-file scan timed out (<paramref name="spans"/> is
+    /// <see langword="null"/>) the signatures are unverified and fail closed, as the chunks do: each is stored as
+    /// <see cref="IndexRedactor.ScanFailedPlaceholder"/>. A reference holds identifiers only (a name, a qualifier, a container)
+    /// and is stored as extracted. The definition's id hashes path, container, name, kind and ordinal, and the extractor
+    /// reads a source with the same line breaks, so a redacted definition keeps its id, its line range and the edges other
+    /// files hold to it.
     /// </summary>
-    private static SymbolExtraction Extract(string path, string text)
+    /// <param name="path">The file's path.</param>
+    /// <param name="text">The file text.</param>
+    /// <param name="spans">The secret spans of <paramref name="text"/> from <see cref="ScanFile"/>, or <see langword="null"/> when that scan timed out.</param>
+    /// <returns>The extraction, with its secret-bearing definitions replaced.</returns>
+    private static SymbolExtraction Extract(string path, string text, IReadOnlyList<SecretMatch>? spans)
     {
-        var extraction = Extractor.Extract(path, text);
+        var extraction = Extractor.Extract(path, spans is { Count: > 0 } ? RedactSource(text, spans) : text);
         SymbolDefinition[]? copy = null;
         for (var i = 0; i < extraction.Definitions.Count; i++)
         {
             var definition = extraction.Definitions[i];
-            var signature = IndexRedactor.Redact(definition.Signature);
+            var signature = spans is null && definition.Signature.Length > 0
+                ? new IndexRedaction(IndexRedactor.ScanFailedPlaceholder, 1)
+                : IndexRedactor.Redact(definition.Signature);
             var name = IndexRedactor.Redact(definition.Name);
             var container = IndexRedactor.Redact(definition.Container);
             if (!signature.IsRedacted && !name.IsRedacted && !container.IsRedacted)
@@ -786,6 +831,36 @@ internal sealed partial class IndexPass
         }
 
         return copy is null ? extraction : extraction with { Definitions = copy };
+    }
+
+    /// <summary>
+    /// The file text with each secret span replaced by its <c>&lt;redacted-index:kind&gt;</c> placeholder, followed by the
+    /// line breaks the span held, so every line of the result starts where the same line of the original does: the
+    /// extractor's line numbers (and so the definitions' ranges and ids) are those of the file.
+    /// </summary>
+    /// <param name="text">The file text.</param>
+    /// <param name="spans">The secret spans, in document order, non-overlapping.</param>
+    /// <returns>The redacted source.</returns>
+    private static string RedactSource(string text, IReadOnlyList<SecretMatch> spans)
+    {
+        var builder = new StringBuilder(text.Length);
+        var position = 0;
+        foreach (var span in spans)
+        {
+            builder.Append(text, position, span.Start - position).Append(IndexRedactor.PlaceholderPrefix).Append(span.KindId).Append('>');
+            for (var i = span.Start; i < span.End; i++)
+            {
+                var c = text[i];
+                if (c is '\r' or '\n' or (char)0x85 or (char)0x2028 or (char)0x2029)
+                {
+                    builder.Append(c);
+                }
+            }
+
+            position = span.End;
+        }
+
+        return builder.Append(text, position, text.Length - position).ToString();
     }
 
     /// <summary>
@@ -1180,6 +1255,9 @@ internal sealed partial class IndexPass
 
     [LoggerMessage(EventId = 2905, Level = LogLevel.Debug, Message = "A file could not be read for indexing; it is retried on the next run.")]
     private static partial void LogUnreadable(ILogger logger, Exception exception);
+
+    [LoggerMessage(EventId = 2908, Level = LogLevel.Warning, Message = "Index {IndexId}: the secret scan of {Path} timed out; the file could not be verified, so its chunks and symbol signatures are stored as scan-failed placeholders, not as its text.")]
+    private static partial void LogScanTimedOut(ILogger logger, string indexId, string path);
 
     /// <summary>A file read, chunked and extracted, waiting for its vectors.</summary>
     private sealed class PreparedFile(FileRecord record, IReadOnlyList<Chunk> chunks, SymbolExtraction? symbols, int lines, bool[]? redacted = null)

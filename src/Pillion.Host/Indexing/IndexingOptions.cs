@@ -1,3 +1,5 @@
+using Pillion.Common.Redaction;
+
 namespace Pillion.Host.Indexing;
 
 /// <summary>Tunables of the indexing pipeline (work item 2.9). The defaults follow design sections 7 and 13; tests shorten the intervals.</summary>
@@ -100,4 +102,11 @@ internal sealed class IndexingOptions
 
     /// <summary>Gets an optional hook called on the pipeline thread after each file is chunked (tests check the thread's priority).</summary>
     public Action<string>? OnFilePrepared { get; init; }
+
+    /// <summary>
+    /// Gets the scan that finds the secrets in a whole file's text before it is chunked and its symbols extracted (work item
+    /// 3.2, issue #103); <see langword="null"/> is <see cref="SecretScanner.Scan"/>. Tests inject a scan that times out, which
+    /// the production patterns do not do on their own.
+    /// </summary>
+    public Func<string, IReadOnlyList<SecretMatch>>? SecretScan { get; init; }
 }

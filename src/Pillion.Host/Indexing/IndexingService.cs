@@ -1053,15 +1053,23 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
                 _roots[key] = opened;
             }
 
+            bool hasPrevious;
+            lock (_gate)
+            {
+                hasPrevious = _retiring.ContainsKey(key);
+            }
+
             if (IsComplete(opened))
             {
                 // Built to the end in an earlier session: nothing to wait for.
                 await CloseRetiredAsync(key, stopping).ConfigureAwait(false);
             }
-            else if (retire is null)
+            else if (!hasPrevious)
             {
                 // A host restart in the middle of a switch: the previous index is on disk, complete and unused; serve it
-                // read-only until this one's first full sweep completes, as if the switch had happened in this session.
+                // read-only until this one's first full sweep completes, as if the switch had happened in this session. Not
+                // when the root already has a previous index open (one retired in this session, or kept when an incomplete
+                // newer index was discarded above): that one serves, and an older index on disk never replaces it.
                 await AdoptPreviousAsync(key, repository, model, projects, stopping).ConfigureAwait(false);
             }
         }
@@ -1147,10 +1155,20 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     /// <summary>
     /// After a host restart in the middle of a switch: opens the most recently used complete index of the root under another
     /// model or chunker version, if no live host holds it, as the root's previous index. Failing to is not an error: the new
-    /// index simply serves from its first stored batch, as before issue #104.
+    /// index simply serves from its first stored batch, as before issue #104. A previous index the root already has open is
+    /// never replaced (it would be left open and detached, holding its lock, while an older index served in its place): with
+    /// one present nothing is opened, and one that appears meanwhile keeps its place.
     /// </summary>
     private async Task AdoptPreviousAsync(string key, RepositoryRoot repository, IndexEmbeddingModel model, IReadOnlyList<IndexedProject> projects, CancellationToken stopping)
     {
+        lock (_gate)
+        {
+            if (_retiring.ContainsKey(key))
+            {
+                return;
+            }
+        }
+
         IndexUsage? candidate;
         try
         {
@@ -1179,9 +1197,16 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             var store = await _factory.OpenAsync(new IndexRequest(repository.Path, candidate.EmbeddingModel!, candidate.ChunkerVersion!, _pipeName), stopping).ConfigureAwait(false);
             var previous = new RootIndex(repository, store, model with { ModelId = candidate.EmbeddingModel! }, projects) { IsRetiring = true, NeedsRun = false };
             await previous.RefreshCountsAsync(stopping).ConfigureAwait(false);
+            bool adopted;
             lock (_gate)
             {
-                _retiring[key] = previous;
+                adopted = _retiring.TryAdd(key, previous);
+            }
+
+            if (!adopted)
+            {
+                await previous.DisposeAsync().ConfigureAwait(false);
+                return;
             }
 
             _ = WarmAsync(previous, stopping);

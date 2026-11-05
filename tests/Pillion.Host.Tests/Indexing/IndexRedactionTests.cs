@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Pillion.Common.Redaction;
 using Pillion.ContextEngine.Retrieval;
 using Pillion.Contracts;
@@ -123,11 +124,7 @@ public sealed class IndexRedactionTests : IDisposable
         // redacted by offset.
         Fixtures.Copy("shop", _workspace.Repository);
         var body = PemBody(lines: 120);
-        var file = "namespace Shop;\n\n/// <summary>A certificate a developer should not have committed.</summary>\npublic static class Certificates\n{\n"
-            + "    public const string Key = \"\"\"\n        -----BEGIN RSA PRIVATE KEY-----\n"
-            + string.Concat(body.Select(l => "        " + l + "\n"))
-            + "        -----END RSA PRIVATE KEY-----\n        \"\"\";\n\n    public static int Count => 1;\n}\n";
-        File.WriteAllText(_workspace.File("src/Certificates.cs"), file);
+        File.WriteAllText(_workspace.File("src/Certificates.cs"), CertificatesFile(body));
         var embedder = new FakeEmbedder();
         await using var harness = new IndexingHarness(_workspace.Data, embedder);
         await harness.StartAsync(_workspace.Repository);
@@ -143,6 +140,64 @@ public sealed class IndexRedactionTests : IDisposable
         Assert.DoesNotContain(embedder.Texts, t => body.Any(line => t.Contains(line, StringComparison.Ordinal)));
         Assert.Contains(embedder.Texts, t => t.Contains("<redacted-index:private-key-block>", StringComparison.Ordinal));
         Assert.Empty(await harness.Root.Storage.Chunks.SearchLexicalAsync(body[body.Count / 2], 5));
+
+        // No signature of the file holds any of the key either (a field's signature is its modifiers, type and name).
+        var symbols = await harness.Root.Storage.Symbols.GetSymbolsByFileAsync(record.Id);
+        Assert.Contains(symbols, s => s.Name == "Key");
+        Assert.All(symbols, s => Assert.All(body, line => Assert.DoesNotContain(line[..16], s.Signature ?? string.Empty, StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task WhenTheWholeFileScanTimesOut_TheFilesChunksAndSignaturesAreWithheld_NotScannedChunkByChunk()
+    {
+        // PR 121 review (second round): a whole-file scan that timed out fell back to the per-chunk scans, which miss the body
+        // chunks of a split PEM block, so the leak the first round fixed came back on that path. A file whose scan failed is
+        // unverified: every chunk and every signature is stored as the scan-failed placeholder, as the per-chunk path does for
+        // one chunk. The production patterns do not time out on this input, so the whole-file scan is injected; the per-chunk
+        // scans are the real ones.
+        Fixtures.Copy("shop", _workspace.Repository);
+        var body = PemBody(lines: 120);
+        File.WriteAllText(_workspace.File("src/Certificates.cs"), CertificatesFile(body));
+        var embedder = new FakeEmbedder();
+        var options = new IndexingOptions
+        {
+            MinimumRefreshInterval = TimeSpan.FromMilliseconds(200),
+            PowerPollInterval = TimeSpan.FromMilliseconds(100),
+            MemoryPollInterval = TimeSpan.FromMilliseconds(50),
+            ReaderPollInterval = TimeSpan.FromMilliseconds(200),
+            EmbeddingRetryDelay = TimeSpan.FromMilliseconds(10),
+            SecretScan = text => text.Contains("class Certificates", StringComparison.Ordinal)
+                ? throw new RegexMatchTimeoutException("injected: the whole-file scan timed out")
+                : SecretScanner.Scan(text),
+        };
+        await using var harness = new IndexingHarness(_workspace.Data, embedder, options);
+        await harness.StartAsync(_workspace.Repository);
+        var status = await harness.WaitForIdleAsync();
+
+        // Every chunk of the file is the placeholder, counted as redacted; nothing of the file reached the embedder or the FTS rows.
+        var record = (await harness.Root.Store.Files.GetAsync("src/Certificates.cs"))!;
+        var chunks = await harness.Root.Storage.Chunks.GetChunksByFileAsync(record.Id);
+        Assert.True(chunks.Count >= 2, $"{chunks.Count} chunks");
+        Assert.All(chunks, c => Assert.Equal(IndexRedactor.ScanFailedPlaceholder, c.Text));
+        Assert.True(status.Roots[0].RedactedChunkCount >= chunks.Count, $"{status.Roots[0].RedactedChunkCount} redacted chunks for {chunks.Count} withheld");
+        Assert.Equal(status.Roots[0].RedactedChunkCount, await harness.Root.Storage.Chunks.CountRedactedChunksAsync());
+        Assert.DoesNotContain(embedder.Texts, t => body.Any(line => t.Contains(line, StringComparison.Ordinal)));
+        Assert.DoesNotContain(embedder.Texts, t => t.Contains("BEGIN RSA PRIVATE KEY", StringComparison.Ordinal) || t.Contains("class Certificates", StringComparison.Ordinal));
+        Assert.Contains(embedder.Texts, t => t.Contains(IndexRedactor.ScanFailedPlaceholder, StringComparison.Ordinal));
+        Assert.Empty(await harness.Root.Storage.Chunks.SearchLexicalAsync(body[body.Count / 2], 5));
+
+        // Its signatures are withheld too; the names, kinds and lines are kept.
+        var symbols = await harness.Root.Storage.Symbols.GetSymbolsByFileAsync(record.Id);
+        Assert.Contains(symbols, s => s.Name == "Key");
+        Assert.Contains(symbols, s => s.Name == "Count");
+        Assert.All(symbols, s => Assert.Equal(IndexRedactor.ScanFailedPlaceholder, s.Signature));
+        Assert.All(harness.Root.Graph!.FindDefinitions("Certificates.Key"), d => Assert.Equal(IndexRedactor.ScanFailedPlaceholder, d.Signature));
+
+        // The other files were scanned as usual and stored with their text.
+        var other = (await harness.Root.Store.Files.GetAsync("src/Payments/PaymentGateway.cs"))!;
+        var otherChunks = await harness.Root.Storage.Chunks.GetChunksByFileAsync(other.Id);
+        Assert.NotEmpty(otherChunks);
+        Assert.All(otherChunks, c => Assert.DoesNotContain(IndexRedactor.PlaceholderPrefix, c.Text, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -177,6 +232,76 @@ public sealed class IndexRedactionTests : IDisposable
             Assert.Equal(0, ((FakeEmbedder)again.Embedder).ChunksEmbedded);
         }
     }
+
+    [Fact]
+    public async Task APrivateKeyAsADefaultParameterValue_IsRedactedInTheSignatureBeforeItIsNormalizedAndCut_OnBothExtractionPaths()
+    {
+        // PR 121 review (second round): the extractor normalizes a signature (line breaks collapsed, cut to 200 characters)
+        // before it was scanned, so a multi-line PEM block in a default parameter value lost the END marker its pattern needs
+        // and its first body lines were stored in symbols.signature and published to the graph, while the chunks were redacted.
+        Fixtures.Copy("shop", _workspace.Repository);
+        var body = PemBody(lines: 8); // 8 x 64 characters: longer than a signature
+        var file = "namespace Shop;\n\npublic static class Client\n{\n"
+            + "    public static int Connect(string key = \"\"\"\n        -----BEGIN RSA PRIVATE KEY-----\n"
+            + string.Concat(body.Select(l => "        " + l + "\n"))
+            + "        -----END RSA PRIVATE KEY-----\n        \"\"\", int retries = 3) => retries;\n\n"
+            + "    public static int Disconnect() => 0;\n}\n";
+        File.WriteAllText(_workspace.File("src/Client.cs"), file);
+        long storedId;
+        await using (var harness = new IndexingHarness(_workspace.Data))
+        {
+            await harness.StartAsync(_workspace.Repository);
+            await harness.WaitForIdleAsync();
+
+            var stored = Assert.Single(await harness.Root.Storage.Symbols.FindSymbolsByNameAsync("Connect"));
+            AssertRedactedPrivateKeySignature(stored.Signature, body);
+            Assert.Contains("Connect(string key =", stored.Signature, StringComparison.Ordinal); // the rest of the signature stays
+            Assert.Contains("int retries = 3", stored.Signature, StringComparison.Ordinal);
+            Assert.Equal(5, stored.StartLine);
+            Assert.Equal(5 + body.Count + 3, stored.EndLine); // the line numbers are the file's, not the redacted source's
+            storedId = stored.Id;
+            var inGraph = Assert.Single(harness.Root.Graph!.FindDefinitions("Connect"));
+            AssertRedactedPrivateKeySignature(inGraph.Signature, body);
+            Assert.Equal(storedId, inGraph.Id);
+            var sibling = Assert.Single(await harness.Root.Storage.Symbols.FindSymbolsByNameAsync("Disconnect"));
+            Assert.Contains("Disconnect()", sibling.Signature, StringComparison.Ordinal);
+            Assert.DoesNotContain(IndexRedactor.PlaceholderPrefix, sibling.Signature, StringComparison.Ordinal);
+
+            // The chunks were redacted as before.
+            var record = (await harness.Root.Store.Files.GetAsync("src/Client.cs"))!;
+            var chunks = await harness.Root.Storage.Chunks.GetChunksByFileAsync(record.Id);
+            Assert.All(chunks, c => Assert.DoesNotContain(body, line => c.Text.Contains(line, StringComparison.Ordinal)));
+        }
+
+        // A new session rebuilds the graph from the unchanged files through the symbols-only path.
+        await using (var again = new IndexingHarness(_workspace.Data))
+        {
+            await again.StartAsync(_workspace.Repository);
+            await again.WaitForIdleAsync();
+            await again.WaitForAsync(_ => again.Root.Graph is not null, what: "the symbol graph of the second session");
+
+            var inGraph = Assert.Single(again.Root.Graph!.FindDefinitions("Connect"));
+            AssertRedactedPrivateKeySignature(inGraph.Signature, body);
+            Assert.Equal(storedId, inGraph.Id);
+            Assert.Equal(0, ((FakeEmbedder)again.Embedder).ChunksEmbedded);
+        }
+    }
+
+    /// <summary>The signature carries the private-key placeholder and no line of the key's body, not even the start of one (a signature is cut to 200 characters).</summary>
+    private static void AssertRedactedPrivateKeySignature(string? signature, List<string> body)
+    {
+        Assert.NotNull(signature);
+        Assert.Contains("<redacted-index:private-key-block>", signature, StringComparison.Ordinal);
+        Assert.DoesNotContain("BEGIN RSA PRIVATE KEY", signature, StringComparison.Ordinal);
+        Assert.All(body, line => Assert.DoesNotContain(line[..16], signature, StringComparison.Ordinal));
+    }
+
+    /// <summary>A C# file with a PEM private key in a raw string constant: the key starts on line 7 and the body on line 8.</summary>
+    private static string CertificatesFile(List<string> body) =>
+        "namespace Shop;\n\n/// <summary>A certificate a developer should not have committed.</summary>\npublic static class Certificates\n{\n"
+        + "    public const string Key = \"\"\"\n        -----BEGIN RSA PRIVATE KEY-----\n"
+        + string.Concat(body.Select(l => "        " + l + "\n"))
+        + "        -----END RSA PRIVATE KEY-----\n        \"\"\";\n\n    public static int Count => 1;\n}\n";
 
     /// <summary>Deterministic base64-looking lines (64 characters each), shaped like a PEM body.</summary>
     private static List<string> PemBody(int lines)

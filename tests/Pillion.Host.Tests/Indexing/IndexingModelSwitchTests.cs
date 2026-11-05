@@ -243,6 +243,76 @@ public sealed class IndexingModelSwitchTests : IDisposable
     }
 
     [Fact]
+    public async Task SwitchingAgainBeforeTheNewIndexCompletes_KeepsTheOpenPreviousIndex_RatherThanAdoptingAnOlderOneFromDisk()
+    {
+        // PR 121 review (second round): with a still older complete index of the root on disk, discarding the incomplete index
+        // took the "no previous index" path and adopted the older index from disk over the complete one that was serving,
+        // which stayed open, detached, holding its lock. X complete, A complete (X closed, on disk), pause, A -> B -> C.
+        const string ThirdModel = "fake/third-model";
+        const string FourthModel = "fake/fourth-model";
+        Fixtures.Copy("shop", _workspace.Repository);
+        var embedder = new FakeEmbedder();
+        await using var harness = new IndexingHarness(_workspace.Data, embedder, Options());
+        await harness.StartAsync(_workspace.Repository);
+        await harness.WaitForIdleAsync();
+        var x = harness.Root;
+        var xId = x.Store.Identity.Id;
+
+        // X -> A with the pipeline running: A completes, X closes and stays on disk, complete and unused.
+        embedder.ModelId = SecondModel;
+        harness.Settings.Update(new PillionSettings());
+        await harness.WaitForAsync(s => s.Phase == IndexPhase.Idle && s.Roots.Length == 1 && s.Roots[0].EmbeddingModelId == SecondModel && s.Roots[0].LastFullSweepUtc is not null, what: "the second model's index complete and alone");
+        await harness.WaitForAsync(_ => !x.Store.HoldsWriterLock(), what: "the first index to be closed");
+        var a = harness.Root;
+        var aId = a.Store.Identity.Id;
+        Assert.NotEqual(xId, aId);
+        Assert.Empty(harness.Service.RetiringRoots);
+        Assert.Contains(harness.Service.ListIndexes(), i => i.IndexId == xId && !i.IsOpen && !i.IsInUse);
+
+        // A -> B -> C before B completes.
+        harness.Service.SetUserPause(true);
+        embedder.ModelId = ThirdModel;
+        harness.Settings.Update(new PillionSettings());
+        await harness.WaitForAsync(s => s.Roots.Length == 2 && s.Roots.Any(r => r.EmbeddingModelId == ThirdModel), what: "the third index beside the second");
+        var b = Assert.Single(harness.Service.OpenRoots);
+        var bId = b.Store.Identity.Id;
+        embedder.ModelId = FourthModel;
+        harness.Settings.Update(new PillionSettings());
+        var status = await harness.WaitForAsync(s => s.Roots.Length == 2 && s.Roots.Any(r => r.EmbeddingModelId == FourthModel), what: "the fourth index beside the complete second");
+
+        // A, complete and open, is still the previous index and serves; it keeps its lock; X is not opened; B is closed.
+        Assert.Same(a, Assert.Single(harness.Service.RetiringRoots));
+        Assert.Same(a, Assert.Single(harness.Service.ServingRoots));
+        Assert.True(a.Store.HoldsWriterLock(), "the serving previous index holds its lock until the new index completes");
+        Assert.Contains(status.Roots, r => r.IndexId == aId && r.Role == IndexRole.Reader && r.ChunkCount > 0);
+        Assert.DoesNotContain(status.Roots, r => r.IndexId == xId || r.IndexId == bId);
+        Assert.False(b.Store.HoldsWriterLock(), "the incomplete index was closed");
+        var indexes = harness.Service.ListIndexes();
+        Assert.Contains(indexes, i => i.IndexId == xId && !i.IsOpen && !i.IsInUse);
+        Assert.Contains(indexes, i => i.IndexId == bId && !i.IsOpen && !i.IsInUse);
+        Assert.Contains(indexes, i => i.IndexId == aId && i.IsOpen);
+        var catalog = new LiveIndexCatalog(harness.Service, harness.Flags);
+        var retrieval = new RetrievalService(catalog, harness.Flags, new FakeQueryEmbedder(), new RetrievalOptions { TimeBudget = TimeSpan.FromSeconds(30) });
+        var served = Assert.Single(await catalog.GetIndexesAsync([], CancellationToken.None));
+        Assert.Equal(aId, served.IndexId);
+        Assert.Same(a.Storage, served.Storage);
+        var response = await retrieval.SearchDetailedAsync(new SearchRequest { Query = "charge the card payment gateway", MaxResults = 5 }, CancellationToken.None);
+        Assert.Contains(response.Results, r => r.FilePath.EndsWith("PaymentGateway.cs", StringComparison.Ordinal));
+
+        // C completes: A closes and releases its lock; C serves alone; X, A and B are closed folders on disk.
+        harness.Service.SetUserPause(false);
+        status = await harness.WaitForIdleAsync();
+        var cId = Assert.Single(status.Roots).IndexId;
+        Assert.Equal(FourthModel, status.Roots[0].EmbeddingModelId);
+        Assert.Empty(harness.Service.RetiringRoots);
+        await harness.WaitForAsync(_ => !a.Store.HoldsWriterLock(), what: "the previous index's lock to be released");
+        Assert.Equal(cId, Assert.Single(await catalog.GetIndexesAsync([], CancellationToken.None)).IndexId);
+        indexes = harness.Service.ListIndexes();
+        Assert.All(new[] { xId, aId, bId }, id => Assert.Contains(indexes, i => i.IndexId == id && !i.IsOpen && !i.IsInUse));
+        Assert.Equal(cId, Assert.Single(indexes, i => i.IsOpen).IndexId);
+    }
+
+    [Fact]
     public async Task AHostThatOnlyReadsTheNewIndex_ClosesItsPreviousIndex_WhenTheOwnerCompletesTheFirstSweep()
     {
         // PR 121 review: a reader's in-memory state is the snapshot taken at open; the owner's completed sweep must be seen at
