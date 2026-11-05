@@ -65,6 +65,14 @@ internal sealed class RootIndex : IAsyncDisposable
     /// </summary>
     public bool IsRetiring { get; set; }
 
+    /// <summary>
+    /// Gets or sets when the owner of this index (another host; this one reads it) completed a full sweep after the index was
+    /// opened here, as read from its <c>state.json</c> at the reader poll; <see langword="null"/> until then. The open-time
+    /// snapshot in <see cref="IndexStore.State"/> does not change for a reader, so this is how the hand-over from the root's
+    /// previous index completes on a host that does not own the new index (issue #104).
+    /// </summary>
+    public DateTimeOffset? OwnerSweepUtc { get; set; }
+
     /// <summary>Gets the role as the contract names it: a previous index is read-only, whoever holds its lock.</summary>
     public Contracts.IndexRole ContractRole => IsWriter && !IsRetiring ? Contracts.IndexRole.Writer : Contracts.IndexRole.Reader;
 

@@ -2,6 +2,8 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO.Hashing;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Channels;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
@@ -495,7 +497,7 @@ internal sealed partial class IndexPass
                 await _pause.WaitWhilePausedAsync(token).ConfigureAwait(false);
                 var record = files[index];
                 var text = ReadText(record);
-                extractions[index] = text is null ? null : Extractor.Extract(record.Path, text);
+                extractions[index] = text is null ? null : Extract(record.Path, text);
             }).ConfigureAwait(false);
 
         // Stored in groups (one transaction each) when the stored symbols were built by other rules; otherwise only held in memory.
@@ -612,11 +614,12 @@ internal sealed partial class IndexPass
             return new PreparedFile(record, [], null, 0);
         }
 
-        // The secret scanner runs on every chunk's full text here, before anything else is built from it: the embedding
-        // input, the vector-reuse lookup, the FTS rows and the stored row all see the redacted text (design section 12,
-        // work item 3.2, issue #103). The symbols come from the file text (names, not values).
-        var chunks = Redact(Chunker.Chunk(record.Path, text, _chunkOptions), out var redacted);
-        var symbols = Extractor.Extract(record.Path, text);
+        // The secret scanner runs here, before anything else is built from the text: the embedding input, the vector-reuse
+        // lookup, the FTS rows, the stored row and the symbol signatures all see the redacted text (design section 12, work
+        // item 3.2, issue #103). Secrets are found over the whole file first, so one that the chunker split (a long PEM block)
+        // is redacted in every chunk it touches, then over each chunk's text for anything that shows only in chunk context.
+        var chunks = Redact(text, Chunker.Chunk(record.Path, text, _chunkOptions), out var redacted);
+        var symbols = Extract(record.Path, text);
         _options.OnFilePrepared?.Invoke(record.Path);
         var file = new PreparedFile(record, chunks, symbols, CountLines(text), redacted);
         if (reusable is { Count: > 0 })
@@ -639,32 +642,150 @@ internal sealed partial class IndexPass
     }
 
     /// <summary>
-    /// Runs the secret scanner over each chunk's text (work item 3.2, issue #103). A chunk with a secret gets a copy whose text
-    /// carries <c>&lt;redacted-index:kind&gt;</c> placeholders; its line range and token count (counted on the original, so
-    /// the chunk still fits the model's input) are kept. The placeholders never carry line breaks, so a redacted chunk still
-    /// spans the lines its row names, except a PEM block, whose lines collapse into one placeholder within the same range.
+    /// Runs the secret scanner for a file's chunks (work item 3.2, issue #103): first over the whole file text, so a secret the
+    /// chunker split across chunks (a PEM block longer than the chunk cap, whose later chunks hold key material without the
+    /// header the pattern needs) is redacted in every chunk it overlaps, by character offset; then over each chunk's own text,
+    /// for anything that shows only in chunk context. A chunk with a secret gets a copy whose text carries
+    /// <c>&lt;redacted-index:kind&gt;</c> placeholders; its line range and token count (counted on the original, so the chunk
+    /// still fits the model's input) are kept. A whole-file scan that times out falls back to the per-chunk scans, which fail
+    /// closed on their own.
     /// </summary>
+    /// <param name="text">The file text the chunks were cut from.</param>
     /// <param name="chunks">The chunks as the chunker produced them.</param>
     /// <param name="redacted">Per chunk, whether anything was replaced.</param>
     /// <returns>The same list when nothing was redacted, else a list with the redacted chunks replaced.</returns>
-    private static IReadOnlyList<Chunk> Redact(IReadOnlyList<Chunk> chunks, out bool[] redacted)
+    private static IReadOnlyList<Chunk> Redact(string text, IReadOnlyList<Chunk> chunks, out bool[] redacted)
     {
         redacted = new bool[chunks.Count];
+        IReadOnlyList<SecretMatch> spans;
+        try
+        {
+            spans = SecretScanner.Scan(text);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            spans = [];
+        }
+
+        var lineStarts = spans.Count > 0 ? LineStarts(text) : [];
         Chunk[]? copy = null;
         for (var i = 0; i < chunks.Count; i++)
         {
-            var result = IndexRedactor.Redact(chunks[i].Text);
-            if (!result.IsRedacted)
+            var chunk = chunks[i];
+            var current = chunk.Text;
+            var changed = false;
+
+            // Spans found over the whole file, mapped into this chunk by offset. The chunk's text is the file's text from the
+            // start of its first line (a prefix of it when truncated), which is checked before any offset is trusted.
+            if (spans.Count > 0 && chunk.StartLine >= 1 && chunk.StartLine <= lineStarts.Length)
+            {
+                var start = lineStarts[chunk.StartLine - 1];
+                var end = start + current.Length;
+                if (end <= text.Length && string.CompareOrdinal(text, start, current, 0, current.Length) == 0)
+                {
+                    StringBuilder? builder = null;
+                    var position = 0;
+                    foreach (var span in spans)
+                    {
+                        if (span.End <= start || span.Start >= end)
+                        {
+                            continue;
+                        }
+
+                        var from = Math.Max(span.Start, start) - start;
+                        var to = Math.Min(span.End, end) - start;
+                        builder ??= new StringBuilder(current.Length);
+                        builder.Append(current, position, from - position).Append(IndexRedactor.PlaceholderPrefix).Append(span.KindId).Append('>');
+                        position = to;
+                    }
+
+                    if (builder is not null)
+                    {
+                        builder.Append(current, position, current.Length - position);
+                        current = builder.ToString();
+                        changed = true;
+                    }
+                }
+            }
+
+            // Then the chunk's own text: what the per-file pass missed, or everything when the per-file scan timed out.
+            var result = IndexRedactor.Redact(current);
+            if (result.IsRedacted)
+            {
+                current = result.Text;
+                changed = true;
+            }
+
+            if (!changed)
             {
                 continue;
             }
 
             copy ??= [.. chunks];
-            copy[i] = chunks[i] with { Text = result.Text };
+            copy[i] = chunk with { Text = current };
             redacted[i] = true;
         }
 
         return copy ?? chunks;
+    }
+
+    /// <summary>The offset of the first character of each line, by the chunker's own rule (CR, LF, CRLF, NEL, LS and PS end a line).</summary>
+    private static int[] LineStarts(string text)
+    {
+        var starts = new List<int>(Math.Max(16, text.Length / 32)) { 0 };
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (c is '\r' or '\n' or (char)0x85 or (char)0x2028 or (char)0x2029)
+            {
+                if (c == '\r' && i + 1 < text.Length && text[i + 1] == '\n')
+                {
+                    i++;
+                }
+
+                starts.Add(i + 1);
+            }
+        }
+
+        return [.. starts];
+    }
+
+    /// <summary>
+    /// Extracts a file's symbols and redacts what can carry a value (work item 3.2, issue #103): a definition's signature (a
+    /// default parameter value or an attribute argument can hold a key), and its name and container should one ever do. A
+    /// reference holds identifiers only (a name, a qualifier, a container) and is stored as extracted. The definition's id
+    /// hashes path, container, name, kind and ordinal, so a redacted signature keeps the id and the edges other files hold.
+    /// </summary>
+    private static SymbolExtraction Extract(string path, string text)
+    {
+        var extraction = Extractor.Extract(path, text);
+        SymbolDefinition[]? copy = null;
+        for (var i = 0; i < extraction.Definitions.Count; i++)
+        {
+            var definition = extraction.Definitions[i];
+            var signature = IndexRedactor.Redact(definition.Signature);
+            var name = IndexRedactor.Redact(definition.Name);
+            var container = IndexRedactor.Redact(definition.Container);
+            if (!signature.IsRedacted && !name.IsRedacted && !container.IsRedacted)
+            {
+                continue;
+            }
+
+            copy ??= [.. extraction.Definitions];
+            copy[i] = new SymbolDefinition(
+                definition.FilePath,
+                name.Text,
+                definition.Kind,
+                container.Text,
+                definition.StartLine,
+                definition.EndLine,
+                signature.Text,
+                definition.Language,
+                definition.IsApproximate,
+                definition.Ordinal);
+        }
+
+        return copy is null ? extraction : extraction with { Definitions = copy };
     }
 
     /// <summary>

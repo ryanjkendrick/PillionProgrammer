@@ -255,8 +255,12 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         }
     }
 
-    /// <summary>Whether an index has ever completed a full sweep (it was built to the end, now or in an earlier session).</summary>
-    private static bool IsComplete(RootIndex root) => root.Store.State.LastFullSweepUtc is not null;
+    /// <summary>
+    /// Whether an index has ever completed a full sweep (it was built to the end, now or in an earlier session). For an index
+    /// another host owns, the in-memory state is the snapshot taken at open; <see cref="CheckReadersAsync"/> re-reads the
+    /// owner's <c>state.json</c> at every poll and sets <see cref="RootIndex.OwnerSweepUtc"/> when the owner has finished.
+    /// </summary>
+    private static bool IsComplete(RootIndex root) => root.Store.State.LastFullSweepUtc is not null || root.OwnerSweepUtc is not null;
 
     /// <summary>
     /// Gets the repository roots of the solution or folder open in Visual Studio (full paths, as <see cref="SetWorkspace"/>
@@ -959,6 +963,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             var key = Key(repository.Path);
             var identity = new IndexIdentity(repository.Path, model.ModelId, ContextEngineVersions.ChunkerVersion);
             RootIndex? retire = null;
+            RootIndex? discard = null;
             RootIndex? reinstate = null;
             closing = [];
             lock (_gate)
@@ -987,8 +992,19 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
                     }
                     else if (retire is not null)
                     {
-                        _retiring.Remove(key);
-                        closing.Add(previous);
+                        // A third model before the second index completed: the previous index that stays is the one that can
+                        // serve, the complete one, and the newer of the two when both are complete. A complete previous index
+                        // is never closed in favour of an incomplete one, which would leave the root with nothing to search.
+                        if (IsComplete(retire) || !IsComplete(previous))
+                        {
+                            _retiring.Remove(key);
+                            closing.Add(previous);
+                        }
+                        else
+                        {
+                            discard = retire;
+                            retire = null;
+                        }
                     }
                 }
             }
@@ -996,6 +1012,14 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             foreach (var old in closing)
             {
                 await old.DisposeAsync().ConfigureAwait(false);
+            }
+
+            if (discard is not null)
+            {
+                // The incomplete index gives way to the complete previous one: stop its run, then close it.
+                await StopRunAsync(discard, stopping).ConfigureAwait(false);
+                await discard.DisposeAsync().ConfigureAwait(false);
+                LogDiscarded(_logger, discard.Store.Identity.Id, discard.Path, discard.Model.ModelId);
             }
 
             if (retire is not null)
@@ -1045,11 +1069,8 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         _appliedWorkspaceVersion = version;
     }
 
-    /// <summary>
-    /// Turns the root's current index into its previous one (issue #104): its run is stopped, its watcher closed and its
-    /// queued changes dropped; it is never indexed again, only searched, until <see cref="CloseRetiredAsync"/> closes it.
-    /// </summary>
-    private async Task RetireAsync(string key, RootIndex root, CancellationToken stopping)
+    /// <summary>Cancels a run in progress on the root, if any, and waits for it to stop.</summary>
+    private async Task StopRunAsync(RootIndex root, CancellationToken stopping)
     {
         lock (_gate)
         {
@@ -1060,6 +1081,15 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
         }
 
         await WaitForRunToStopAsync(root, stopping).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Turns the root's current index into its previous one (issue #104): its run is stopped, its watcher closed and its
+    /// queued changes dropped; it is never indexed again, only searched, until <see cref="CloseRetiredAsync"/> closes it.
+    /// </summary>
+    private async Task RetireAsync(string key, RootIndex root, CancellationToken stopping)
+    {
+        await StopRunAsync(root, stopping).ConfigureAwait(false);
         root.Watcher?.Dispose();
         root.Watcher = null;
         root.ClearPending();
@@ -1659,13 +1689,29 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
 
         foreach (var reader in readers)
         {
+            var key = Key(reader.Path);
             if (reader.Store.GetLiveWriter() is not null)
             {
+                // The owner is alive. While this host serves the root's previous index (issue #104), the owner's progress on
+                // the new index is read from its state.json: the in-memory state is the snapshot taken at open, and the
+                // previous index must close here too once the owner has completed the first full sweep.
+                bool retiring;
+                lock (_gate)
+                {
+                    retiring = _retiring.ContainsKey(key);
+                }
+
+                if (retiring && !IsComplete(reader) && IndexStateFile.Read(reader.Store.Folder.StateFile)?.LastFullSweepUtc is { } swept)
+                {
+                    reader.OwnerSweepUtc = swept;
+                    LogOwnerCompleted(_logger, reader.Store.Identity.Id, reader.Path);
+                    await CloseRetiredAsync(key, stopping).ConfigureAwait(false);
+                }
+
                 continue;
             }
 
             // The owner is gone: open again, which reclaims the stale lock; this host becomes the writer and sweeps.
-            var key = Key(reader.Path);
             lock (_gate)
             {
                 _roots.Remove(key);
@@ -1686,6 +1732,8 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
                     _roots[key] = reopened;
                 }
 
+                // Reopened with the state the owner left behind: a completed sweep lets the previous index close now.
+                await CloseRetiredAsync(key, stopping).ConfigureAwait(false);
                 Wake();
             }
         }
@@ -1775,7 +1823,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
                 ChunkCount = r.ChunkCount,
                 RedactedChunkCount = r.RedactedChunkCount,
                 DiskBytes = withDiskUse ? r.Store.Folder.GetDiskUsageBytes() : 0,
-                LastFullSweepUtc = r.Store.State.LastFullSweepUtc?.UtcDateTime,
+                LastFullSweepUtc = (r.Store.State.LastFullSweepUtc ?? r.OwnerSweepUtc)?.UtcDateTime,
                 EmbeddingModelId = r.Model.ModelId,
                 ChunkerVersion = r.Store.Identity.ChunkerVersion,
                 SchemaVersion = r.Store.Database.SchemaVersion,
@@ -1872,6 +1920,12 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
 
     [LoggerMessage(EventId = 2978, Level = LogLevel.Debug, Message = "No previous index of {Root} could be opened to serve searches during the switch: {Reason}. The new index serves from its first stored batch.")]
     private static partial void LogPreviousNotAdopted(ILogger logger, string root, string reason);
+
+    [LoggerMessage(EventId = 2979, Level = LogLevel.Information, Message = "Index {IndexId} for {Root} (model {Model}) is closed without completing: the model changed again and the root's complete previous index keeps serving.")]
+    private static partial void LogDiscarded(ILogger logger, string indexId, string root, string model);
+
+    [LoggerMessage(EventId = 2980, Level = LogLevel.Information, Message = "The owner of index {IndexId} for {Root} completed its first full sweep; this host stops serving the root's previous index.")]
+    private static partial void LogOwnerCompleted(ILogger logger, string indexId, string root);
 
     [LoggerMessage(EventId = 2914, Level = LogLevel.Debug, Message = "The battery saver state could not be read; indexing is not paused for it.")]
     private static partial void LogPowerFailed(ILogger logger, Exception exception);

@@ -115,6 +115,89 @@ public sealed class IndexRedactionTests : IDisposable
         Assert.Equal(0L, await harness.Root.Storage.Chunks.CountRedactedChunksAsync());
     }
 
+    [Fact]
+    public async Task APrivateKeyLongerThanAChunk_IsRedactedInEveryChunkItSpans_IncludingTheOnesWithoutTheHeader()
+    {
+        // PR 121 review: the chunker splits a long PEM block before the per-chunk scan, so the later chunks hold key material
+        // without the BEGIN header the pattern needs. The scan over the whole file finds the span; every chunk it overlaps is
+        // redacted by offset.
+        Fixtures.Copy("shop", _workspace.Repository);
+        var body = PemBody(lines: 120);
+        var file = "namespace Shop;\n\n/// <summary>A certificate a developer should not have committed.</summary>\npublic static class Certificates\n{\n"
+            + "    public const string Key = \"\"\"\n        -----BEGIN RSA PRIVATE KEY-----\n"
+            + string.Concat(body.Select(l => "        " + l + "\n"))
+            + "        -----END RSA PRIVATE KEY-----\n        \"\"\";\n\n    public static int Count => 1;\n}\n";
+        File.WriteAllText(_workspace.File("src/Certificates.cs"), file);
+        var embedder = new FakeEmbedder();
+        await using var harness = new IndexingHarness(_workspace.Data, embedder);
+        await harness.StartAsync(_workspace.Repository);
+        var status = await harness.WaitForIdleAsync();
+
+        var record = (await harness.Root.Store.Files.GetAsync("src/Certificates.cs"))!;
+        var chunks = await harness.Root.Storage.Chunks.GetChunksByFileAsync(record.Id);
+        var keyChunks = chunks.Where(c => c.StartLine <= 7 + body.Count && c.EndLine >= 7).ToList();
+        Assert.True(keyChunks.Count >= 2, $"the key should span several chunks; it spans {keyChunks.Count} of {chunks.Count}");
+        Assert.All(chunks, c => Assert.DoesNotContain(body, line => c.Text.Contains(line, StringComparison.Ordinal)));
+        Assert.All(keyChunks, c => Assert.Contains("<redacted-index:private-key-block>", c.Text, StringComparison.Ordinal));
+        Assert.True(status.Roots[0].RedactedChunkCount >= keyChunks.Count, $"{status.Roots[0].RedactedChunkCount} redacted chunks");
+        Assert.DoesNotContain(embedder.Texts, t => body.Any(line => t.Contains(line, StringComparison.Ordinal)));
+        Assert.Contains(embedder.Texts, t => t.Contains("<redacted-index:private-key-block>", StringComparison.Ordinal));
+        Assert.Empty(await harness.Root.Storage.Chunks.SearchLexicalAsync(body[body.Count / 2], 5));
+    }
+
+    [Fact]
+    public async Task ASecretInADefaultParameterValue_IsRedactedInTheSymbolSignature_StoredAndInTheGraph_OnBothExtractionPaths()
+    {
+        // PR 121 review: the extractor saw the original text, so a default parameter value kept the key in symbols.signature.
+        Fixtures.Copy("shop", _workspace.Repository);
+        File.WriteAllText(_workspace.File("src/Client.cs"), "namespace Shop;\n\npublic static class Client\n{\n" + $"    public static int Connect(string key = \"{AwsKey}\", int retries = 3) => retries;\n" + "}\n");
+        await using (var harness = new IndexingHarness(_workspace.Data))
+        {
+            await harness.StartAsync(_workspace.Repository);
+            await harness.WaitForIdleAsync();
+
+            var stored = Assert.Single(await harness.Root.Storage.Symbols.FindSymbolsByNameAsync("Connect"));
+            Assert.Contains("<redacted-index:aws-access-key>", stored.Signature, StringComparison.Ordinal);
+            Assert.DoesNotContain(AwsKey, stored.Signature, StringComparison.Ordinal);
+            var inGraph = Assert.Single(harness.Root.Graph!.FindDefinitions("Connect"));
+            Assert.Contains("<redacted-index:aws-access-key>", inGraph.Signature, StringComparison.Ordinal);
+            Assert.DoesNotContain(AwsKey, inGraph.Signature, StringComparison.Ordinal);
+        }
+
+        // A new session rebuilds the graph from the unchanged files through the symbols-only path.
+        await using (var again = new IndexingHarness(_workspace.Data))
+        {
+            await again.StartAsync(_workspace.Repository);
+            await again.WaitForIdleAsync();
+            await again.WaitForAsync(_ => again.Root.Graph is not null, what: "the symbol graph of the second session");
+
+            var inGraph = Assert.Single(again.Root.Graph!.FindDefinitions("Connect"));
+            Assert.Contains("<redacted-index:aws-access-key>", inGraph.Signature, StringComparison.Ordinal);
+            Assert.DoesNotContain(AwsKey, inGraph.Signature, StringComparison.Ordinal);
+            Assert.Equal(0, ((FakeEmbedder)again.Embedder).ChunksEmbedded);
+        }
+    }
+
+    /// <summary>Deterministic base64-looking lines (64 characters each), shaped like a PEM body.</summary>
+    private static List<string> PemBody(int lines)
+    {
+        const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        var random = new Random(7);
+        var result = new List<string>(lines);
+        for (var i = 0; i < lines; i++)
+        {
+            var chars = new char[64];
+            for (var j = 0; j < chars.Length; j++)
+            {
+                chars[j] = alphabet[random.Next(alphabet.Length)];
+            }
+
+            result.Add(new string(chars));
+        }
+
+        return result;
+    }
+
     private static string SecretsFile(string awsKey, string token) =>
         "namespace Shop;\n\n" +
         "/// <summary>Credentials a developer should not have hard-coded.</summary>\n" +
