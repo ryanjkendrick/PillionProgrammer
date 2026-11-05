@@ -291,6 +291,63 @@ public sealed class IndexWindowTests : IDisposable
     }
 
     [Fact]
+    public async Task ARootRow_ShowsItsRedactedChunkCount_OrNone()
+    {
+        _host.Status = IndexData.Idle(IndexData.Root(IndexData.RootA), IndexData.Root(IndexData.RootB, redacted: 1234));
+        var vm = await StartAsync();
+
+        Assert.Equal("None", vm.Roots[0].RedactedText);
+        Assert.Equal(0, vm.Roots[0].RedactedChunkCount);
+        Assert.Equal("1,234", vm.Roots[1].RedactedText);
+
+        await RaiseAsync(IndexData.Idle(IndexData.Root(IndexData.RootA, redacted: 2), IndexData.Root(IndexData.RootB, redacted: 1234)));
+        await Wait.UntilAsync(() => vm.Roots[0].RedactedText == "2", "the redacted count of the first root");
+        Assert.Equal(2, vm.Roots[0].RedactedChunkCount);
+    }
+
+    [Fact]
+    public async Task DuringAModelSwitch_TheRootHasTwoRows_ThePreviousOneReadOnlyAndNotRebuildable_AndBothKeepTheirIdentity()
+    {
+        // Issue #104: the previous index serves searches read-only until the new index's first full sweep completes.
+        var previous = IndexData.Root(IndexData.RootA, id: "old-model-index", role: IndexRole.Reader, model: "bundled/bge-small-en-v1.5");
+        var current = IndexData.Root(IndexData.RootA, id: "new-model-index", chunks: 10, model: "ollama/qwen3-embedding:0.6b");
+        _host.Status = IndexData.Idle(previous, current);
+        var vm = await StartAsync();
+
+        Assert.Equal(2, vm.Roots.Count);
+        var old = Assert.Single(vm.Roots, r => r.IndexId == "old-model-index");
+        var fresh = Assert.Single(vm.Roots, r => r.IndexId == "new-model-index");
+        Assert.True(old.IsPrevious);
+        Assert.StartsWith("Previous index", old.RoleText, StringComparison.Ordinal);
+        Assert.False(old.RebuildCommand.CanExecute(null));
+        Assert.True(old.DeleteCommand.CanExecute(null));
+        Assert.False(fresh.IsPrevious);
+        Assert.StartsWith("Writer", fresh.RoleText, StringComparison.Ordinal);
+        Assert.True(fresh.RebuildCommand.CanExecute(null));
+        Assert.Contains("2 root(s)", vm.TotalsText, StringComparison.Ordinal);
+
+        // The new index grows: both rows are updated in place.
+        await RaiseAsync(IndexData.Idle(previous, IndexData.Root(IndexData.RootA, id: "new-model-index", chunks: 300, model: "ollama/qwen3-embedding:0.6b")));
+        await Wait.UntilAsync(() => fresh.ChunksText == "300", "the new index's chunk count");
+        Assert.Same(fresh, Assert.Single(vm.Roots, r => r.IndexId == "new-model-index"));
+        Assert.Same(old, Assert.Single(vm.Roots, r => r.IndexId == "old-model-index"));
+
+        // The switch completes: the previous row goes, the new one keeps its identity and is no longer beside a previous one.
+        await RaiseAsync(IndexData.Idle(IndexData.Root(IndexData.RootA, id: "new-model-index", chunks: 320, model: "ollama/qwen3-embedding:0.6b")));
+        await Wait.UntilAsync(() => vm.Roots.Count == 1, "one row");
+        Assert.Same(fresh, vm.Roots[0]);
+        Assert.False(fresh.IsPrevious);
+
+        // A root that was not open yet keeps its row when its index gets an id.
+        await RaiseAsync(IndexData.Idle(new IndexRootStatus { RootPath = IndexData.RootB, Role = IndexRole.Unknown }));
+        await Wait.UntilAsync(() => vm.Roots.Count == 1 && vm.Roots[0].RootPath == IndexData.RootB, "the other root");
+        var pending = vm.Roots[0];
+        await RaiseAsync(IndexData.Idle(IndexData.Root(IndexData.RootB)));
+        await Wait.UntilAsync(() => pending.IndexId.Length > 0, "the index id");
+        Assert.Same(pending, vm.Roots[0]);
+    }
+
+    [Fact]
     public async Task TheRootsAreReconciled_RowsKeepTheirIdentity_AndAddedOrRemovedRootsAppearOrGo()
     {
         _host.Status = IndexData.Idle(IndexData.Root(IndexData.RootA), IndexData.Root(IndexData.RootB));

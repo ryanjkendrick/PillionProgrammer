@@ -446,7 +446,7 @@ public sealed class IndexWindowViewModel : ObservableObject, IDisposable
         _disposal.Cancel(); // Not disposed: work still on its way reads the token, and a disposed source throws from Token.
     }
 
-    internal bool CanRebuild(IndexRootRowViewModel row) => CanAct && !IsIndexing && !string.IsNullOrEmpty(row.RootPath);
+    internal bool CanRebuild(IndexRootRowViewModel row) => CanAct && !IsIndexing && !string.IsNullOrEmpty(row.RootPath) && !row.IsPrevious;
 
     internal bool CanDelete(IndexRootRowViewModel row) => CanAct && !IsIndexing && !string.IsNullOrEmpty(row.IndexId);
 
@@ -711,30 +711,39 @@ public sealed class IndexWindowViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>
+    /// Updates the root rows in place. A root normally has one row; while its embedding model (or chunker version) changes it
+    /// has two (issue #104), the new index and the previous one, so rows are matched by root and index id: the same id, or the
+    /// row of that root whose index was not open yet (an empty id) when the index got its id.
+    /// </summary>
     private void ReconcileRoots(IndexRootStatus[] roots)
     {
-        var samePaths = roots.Length == Roots.Count;
-        for (var i = 0; samePaths && i < roots.Length; i++)
+        var sameRows = roots.Length == Roots.Count;
+        for (var i = 0; sameRows && i < roots.Length; i++)
         {
-            samePaths = string.Equals(roots[i].RootPath, Roots[i].RootPath, StringComparison.OrdinalIgnoreCase);
+            sameRows = Matches(Roots[i], roots[i]);
         }
 
-        if (samePaths)
+        if (sameRows)
         {
             for (var i = 0; i < roots.Length; i++)
             {
                 Roots[i].Update(roots[i]);
             }
 
+            MarkPreviousRows();
             return;
         }
 
-        var existing = Roots.ToDictionary(r => r.RootPath, StringComparer.OrdinalIgnoreCase);
+        var remaining = Roots.ToList();
         Roots.Clear();
         foreach (var root in roots)
         {
-            if (existing.TryGetValue(root.RootPath, out var row))
+            var row = remaining.FirstOrDefault(r => SameRoot(r, root) && string.Equals(r.IndexId, root.IndexId, StringComparison.Ordinal))
+                ?? remaining.FirstOrDefault(r => Matches(r, root));
+            if (row is not null)
             {
+                remaining.Remove(row);
                 row.Update(root);
             }
             else
@@ -743,6 +752,25 @@ public sealed class IndexWindowViewModel : ObservableObject, IDisposable
             }
 
             Roots.Add(row);
+        }
+
+        MarkPreviousRows();
+    }
+
+    private static bool SameRoot(IndexRootRowViewModel row, IndexRootStatus root) =>
+        string.Equals(row.RootPath, root.RootPath, StringComparison.OrdinalIgnoreCase);
+
+    private static bool Matches(IndexRootRowViewModel row, IndexRootStatus root) =>
+        SameRoot(row, root) && (string.Equals(row.IndexId, root.IndexId, StringComparison.Ordinal) || row.IndexId.Length == 0 || string.IsNullOrEmpty(root.IndexId));
+
+    /// <summary>The previous index of a root during a model switch is the read-only row beside the root's writer (or not yet open) row.</summary>
+    private void MarkPreviousRows()
+    {
+        foreach (var row in Roots)
+        {
+            var previous = row.Role == IndexRole.Reader
+                && Roots.Any(other => !ReferenceEquals(other, row) && string.Equals(other.RootPath, row.RootPath, StringComparison.OrdinalIgnoreCase) && other.Role != IndexRole.Reader);
+            row.SetPrevious(previous);
         }
     }
 

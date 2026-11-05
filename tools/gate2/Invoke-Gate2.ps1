@@ -56,7 +56,7 @@ param(
     [switch]$SkipTwoInstances,
     [switch]$Quick,
     [switch]$KeepIndexes,
-    [ValidateSet('auto', 'yes', 'no')][string]$DirectML = 'auto',
+    [ValidateSet('auto', 'yes', 'no')][string]$DirectML = 'auto', # 'yes' needs a build made with -p:PillionOnnxRuntimeFlavor=directml (work item 3.2); 'auto' and 'no' skip DirectML
     [string]$DevEnvPath,
     [string]$TestCaseFilter,
     [string]$ProviderId = 'ollama',
@@ -122,7 +122,9 @@ try { $run.versions['git commit'] = (& git -C $repo rev-parse HEAD 2>$null) + ' 
 try { $run.versions['.NET SDK'] = (& dotnet --version 2>$null) } catch { }
 $issue78Open = $false
 try { $issue78Open = ((& gh issue view 78 --repo ryanjkendrick/PillionProgrammer --json state 2>$null | ConvertFrom-Json).state -eq 'OPEN') } catch { }
-$runDirectML = switch ($DirectML) { 'yes' { $true } 'no' { $false } default { $issue78Open } }
+# DirectML left the default build with issue #78 (work item 3.2): the DirectML runs happen only on request (-DirectML yes) and need a
+# build made with -p:PillionOnnxRuntimeFlavor=directml; on the default (CPU-only) build the host loads the CPU provider whatever is asked.
+$runDirectML = switch ($DirectML) { 'yes' { $true } default { $false } }
 $data['issue78Open'] = $issue78Open
 
 # a. Build and versions.

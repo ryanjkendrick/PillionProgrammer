@@ -59,6 +59,11 @@ public interface IChunkRepository
     /// <returns>The chunk count.</returns>
     Task<long> CountChunksAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Counts the chunks whose text the secret scanner redacted before they were stored (<see cref="NewChunk.IsRedacted"/>).</summary>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns>The redacted chunk count.</returns>
+    Task<long> CountRedactedChunksAsync(CancellationToken cancellationToken = default);
+
     /// <summary>Lists the files that have chunks, with their chunk, token and vector counts, by path.</summary>
     /// <param name="cancellationToken">Cancels the call.</param>
     /// <returns>The files.</returns>

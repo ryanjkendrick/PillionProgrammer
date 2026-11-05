@@ -224,6 +224,7 @@
                                                         <RowDefinition Height="Auto" />
                                                         <RowDefinition Height="Auto" />
                                                         <RowDefinition Height="Auto" />
+                                                        <RowDefinition Height="Auto" />
                                                     </Grid.RowDefinitions>
                                                     <TextBlock Grid.Row="0" Grid.Column="0" Text="{x:Static core:IndexStrings.RoleLabel}" Style="{StaticResource FieldLabel}" />
                                                     <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding RoleText}" Style="{StaticResource FieldValue}" />
@@ -231,14 +232,16 @@
                                                     <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding FilesText}" Style="{StaticResource FieldValue}" />
                                                     <TextBlock Grid.Row="2" Grid.Column="0" Text="{x:Static core:IndexStrings.ChunksLabel}" Style="{StaticResource FieldLabel}" />
                                                     <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding ChunksText}" Style="{StaticResource FieldValue}" />
-                                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="{x:Static core:IndexStrings.DiskLabel}" Style="{StaticResource FieldLabel}" />
-                                                    <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding DiskText}" Style="{StaticResource FieldValue}" />
-                                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="{x:Static core:IndexStrings.ModelLabel}" Style="{StaticResource FieldLabel}" />
-                                                    <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding ModelText}" Style="{StaticResource FieldValue}" />
-                                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="{x:Static core:IndexStrings.LastSweepLabel}" Style="{StaticResource FieldLabel}" />
-                                                    <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding LastSweepText}" Style="{StaticResource FieldValue}" />
-                                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="{x:Static core:IndexStrings.ExcludedLabel}" Style="{StaticResource FieldLabel}" />
-                                                    <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding ExcludedText}" Style="{StaticResource FieldValue}" />
+                                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="{x:Static core:IndexStrings.RedactedLabel}" Style="{StaticResource FieldLabel}" />
+                                                    <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding RedactedText}" Style="{StaticResource FieldValue}" />
+                                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="{x:Static core:IndexStrings.DiskLabel}" Style="{StaticResource FieldLabel}" />
+                                                    <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding DiskText}" Style="{StaticResource FieldValue}" />
+                                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="{x:Static core:IndexStrings.ModelLabel}" Style="{StaticResource FieldLabel}" />
+                                                    <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding ModelText}" Style="{StaticResource FieldValue}" />
+                                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="{x:Static core:IndexStrings.LastSweepLabel}" Style="{StaticResource FieldLabel}" />
+                                                    <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding LastSweepText}" Style="{StaticResource FieldValue}" />
+                                                    <TextBlock Grid.Row="7" Grid.Column="0" Text="{x:Static core:IndexStrings.ExcludedLabel}" Style="{StaticResource FieldLabel}" />
+                                                    <TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding ExcludedText}" Style="{StaticResource FieldValue}" />
                                                 </Grid>
                                                 <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                                                     <Button Content="{x:Static core:IndexStrings.RebuildButton}" Command="{Binding RebuildCommand}" MinWidth="75"

@@ -147,10 +147,14 @@ a `providers` entry of kind `bundled` replaces the implicit one (to set `proxy` 
   the logical processors; idle intra-op threads do not spin. ONNX Runtime's memory pattern is off on the CPU (`CpuMemoryPattern`;
   it kept a plan per input shape and took the host past 2 GB while indexing); its arena stays on (`CpuMemoryArena`). Inference is serialised per model, and calls go through the
   gateway's Embedding lane. A session unused for `IdleUnloadAfter` (5 minutes) is released.
-- **DirectML.** With `ExecutionProvider` `Auto`, a model loads on DirectML when the GPU tier (`models.gpuTier`, else
-  detected) is not `cpu`: the FP16 graph when its optional file is present and verified, else the int8 graph. If DirectML
-  cannot start or a run fails, the failure is logged once and the models run on the CPU for the rest of the process.
-  `-p:PillionOnnxRuntimeFlavor=cpu` builds against the CPU-only package (no `DirectML.dll`).
+- **DirectML.** Not in the default build since work item 3.2 (issue #78: the product owner chose CPU-only, Gate 2 having
+  shown DirectML int8 slower than the CPU on real code in the pipeline): `PillionOnnxRuntimeFlavor` defaults to `cpu`, the
+  CPU-only package, with no `DirectML.dll` and no DirectML licence files in the host. `BundledModelRuntime` asks ONNX
+  Runtime whether the DirectML provider is in the build and never tries it otherwise. A build made with
+  `-p:PillionOnnxRuntimeFlavor=directml` keeps the phase 2 behaviour for a future GPU item: with `ExecutionProvider`
+  `Auto`, a model loads on DirectML when the GPU tier (`models.gpuTier`, else detected) is not `cpu`, the FP16 graph when
+  its optional file is present and verified (it stays an on-request download), else the int8 graph; if DirectML cannot
+  start or a run fails, the failure is logged once and the models run on the CPU for the rest of the process.
 - **Tokenizers.** `EmbeddingTokenizer` (with `IEmbeddingTokenCounter`, which `BundledModelRuntime.GetTokenCounter` and the
   generator's `GetService` hand to the chunker): WordPiece on Microsoft.ML.Tokenizers' `BertTokenizer` with the Python
   tokenizer's punctuation splitting (version 2.0.0 drops ASCII symbols such as `<=>` and keeps `_` inside words), XLM-R

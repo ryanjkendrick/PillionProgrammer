@@ -49,8 +49,12 @@ internal sealed class RootIndex : IAsyncDisposable
     /// <summary>Gets the chunk, vector and symbol storage over the index's database.</summary>
     public IndexStorage Storage { get; }
 
-    /// <summary>Gets the embedding model of the index.</summary>
-    public IndexEmbeddingModel Model { get; }
+    /// <summary>
+    /// Gets or sets the embedding model of the index: the descriptor it was opened with, replaced by the freshly resolved one
+    /// when a previous index is reinstated (an index adopted from disk after a restart knows its model id, not its token
+    /// counter, input size or tokenizer family; PR 121 review). Set on the pipeline loop only.
+    /// </summary>
+    public IndexEmbeddingModel Model { get; set; }
 
     /// <summary>Gets the partition of each file (the project, else the top-level folder).</summary>
     public PartitionResolver Partitions { get; }
@@ -58,8 +62,23 @@ internal sealed class RootIndex : IAsyncDisposable
     /// <summary>Gets a value indicating whether this host owns the index.</summary>
     public bool IsWriter => Store.Role == IndexRole.Writer;
 
-    /// <summary>Gets the role as the contract names it.</summary>
-    public Contracts.IndexRole ContractRole => IsWriter ? Contracts.IndexRole.Writer : Contracts.IndexRole.Reader;
+    /// <summary>
+    /// Gets or sets a value indicating whether this is a root's previous index (issue #104, work item 3.2): its embedding
+    /// model or chunker version is no longer the configured one, so it is never indexed or watched again, only searched,
+    /// until the root's new index completes its first full sweep. Reported to the extension as a reader.
+    /// </summary>
+    public bool IsRetiring { get; set; }
+
+    /// <summary>
+    /// Gets or sets when the owner of this index (another host; this one reads it) completed a full sweep after the index was
+    /// opened here, as read from its <c>state.json</c> at the reader poll; <see langword="null"/> until then. The open-time
+    /// snapshot in <see cref="IndexStore.State"/> does not change for a reader, so this is how the hand-over from the root's
+    /// previous index completes on a host that does not own the new index (issue #104).
+    /// </summary>
+    public DateTimeOffset? OwnerSweepUtc { get; set; }
+
+    /// <summary>Gets the role as the contract names it: a previous index is read-only, whoever holds its lock.</summary>
+    public Contracts.IndexRole ContractRole => IsWriter && !IsRetiring ? Contracts.IndexRole.Writer : Contracts.IndexRole.Reader;
 
     /// <summary>Gets or sets the builder holding every stored file's latest symbol extraction (pipeline thread only).</summary>
     public SymbolGraphBuilder Symbols { get; set; }
@@ -106,6 +125,9 @@ internal sealed class RootIndex : IAsyncDisposable
 
     /// <summary>Gets or sets the chunks stored in the index.</summary>
     public long ChunkCount { get; set; }
+
+    /// <summary>Gets or sets the chunks whose text the secret scanner redacted before they were stored (work item 3.2, issue #103).</summary>
+    public long RedactedChunkCount { get; set; }
 
     /// <summary>Gets or sets when the index last changed.</summary>
     public DateTimeOffset? LastUpdatedUtc { get; set; }
@@ -205,13 +227,14 @@ internal sealed class RootIndex : IAsyncDisposable
         Graph = null;
     }
 
-    /// <summary>Counts the stored files and chunks again from the database.</summary>
+    /// <summary>Counts the stored files, chunks and redacted chunks again from the database.</summary>
     /// <param name="cancellationToken">Cancels the reads.</param>
     /// <returns>A task that completes when the counts are refreshed.</returns>
     public async Task RefreshCountsAsync(CancellationToken cancellationToken)
     {
         IndexedFileCount = await Store.Files.CountAsync(cancellationToken).ConfigureAwait(false);
         ChunkCount = await Storage.Chunks.CountChunksAsync(cancellationToken).ConfigureAwait(false);
+        RedactedChunkCount = await Storage.Chunks.CountRedactedChunksAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>

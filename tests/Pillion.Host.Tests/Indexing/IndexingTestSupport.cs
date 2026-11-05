@@ -23,7 +23,13 @@ internal sealed class FakeEmbedder : IIndexEmbedder
 
     private readonly ConcurrentQueue<int> _batches = new();
 
-    public string ModelId { get; init; } = "fake/hashed-words";
+    public string ModelId { get; set; } = "fake/hashed-words";
+
+    /// <summary>Gets or sets the resolved model's input size (tests of a switch between models whose descriptors differ in more than the id).</summary>
+    public int MaxTokens { get; set; } = 512;
+
+    /// <summary>Gets or sets the resolved model's tokenizer family.</summary>
+    public string TokenizerFamily { get; set; } = "bert-wordpiece";
 
     /// <summary>Gets or sets a delay per batch (status tests slow the run down so several notifications are sent).</summary>
     public TimeSpan Delay { get; set; }
@@ -34,6 +40,9 @@ internal sealed class FakeEmbedder : IIndexEmbedder
     public IReadOnlyList<int> BatchSizes => [.. _batches];
 
     public int ChunksEmbedded => _batches.Sum();
+
+    /// <summary>Gets every text handed to the embedder, in order (what the model would see).</summary>
+    public ConcurrentQueue<string> Texts { get; } = new();
 
     public static EmbeddedVector Vector(string text)
     {
@@ -53,7 +62,7 @@ internal sealed class FakeEmbedder : IIndexEmbedder
 
     public void ReleaseMemory() => MemoryReleases++;
 
-    public IndexEmbeddingModel ResolveModel() => new(ModelId, TokenCounters.ApproximateWordPiece, 512, "bert-wordpiece");
+    public IndexEmbeddingModel ResolveModel() => new(ModelId, TokenCounters.ApproximateWordPiece, MaxTokens, TokenizerFamily);
 
     public async Task<IReadOnlyList<EmbeddedVector>> EmbedAsync(IndexEmbeddingModel model, IReadOnlyList<string> texts, CancellationToken cancellationToken)
     {
@@ -69,6 +78,11 @@ internal sealed class FakeEmbedder : IIndexEmbedder
         }
 
         _batches.Enqueue(texts.Count);
+        foreach (var text in texts)
+        {
+            Texts.Enqueue(text);
+        }
+
         return [.. texts.Select(Vector)];
     }
 

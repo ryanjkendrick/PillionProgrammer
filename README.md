@@ -410,10 +410,19 @@ are built. Precise answers for C# and VB come from the live Roslyn workspace in 
 vector and symbol results (Reciprocal Rank Fusion) and expands a hit to its whole member.
 
 **Embeddings stay on the machine.** The default model is `bge-small-en-v1.5`, bundled in the extension and run in Pillion Host with
-ONNX Runtime on the CPU (or DirectML when a GPU is present), so indexing works offline with nothing installed. Two more models
-download on request (`jina-embeddings-v2-base-code`, `multilingual-e5-small`), and Ollama or OpenAI-compatible embedding models
-can be routed to. Nothing is sent to a cloud provider for embedding unless you turn `cloudSwitches.embedding` on (off by default;
-Local-only always wins). The retrieval baseline is in [docs/eval-retrieval-baseline.md](docs/eval-retrieval-baseline.md).
+ONNX Runtime on the CPU, so indexing works offline with nothing installed (the DirectML execution provider left the default build
+with issue #78; a build made with `-p:PillionOnnxRuntimeFlavor=directml` still carries it). Two more models download on request
+(`jina-embeddings-v2-base-code`, `multilingual-e5-small`), and Ollama or OpenAI-compatible embedding models can be routed to.
+Nothing is sent to a cloud provider for embedding unless you turn `cloudSwitches.embedding` on (off by default; Local-only always
+wins). Changing the embedding model builds a new index in the background while the previous one keeps serving searches; the
+[Index window](docs/index-window.md) shows both until the new one completes. The retrieval baseline is in
+[docs/eval-retrieval-baseline.md](docs/eval-retrieval-baseline.md).
+
+**Secrets never reach the index.** Besides the secret-bearing files that are never opened (`.env`, `*.pfx`, `appsettings.*.json`
+and the rest), the secret scanner runs on every chunk's text before it is stored: an API key, token, connection-string password or
+private key that a scanner pattern matches in an ordinary source file is replaced by a placeholder such as
+`<redacted-index:aws-access-key>` in the index, in search results and in what a model sees, and nothing restores it. The Index
+window counts the redacted chunks per root.
 
 **Where the index lives.** `%LOCALAPPDATA%\PillionProgrammer\index\<index-id>\`, one folder per repository root, embedding model
 and chunker version: `index.db` (encrypted with SQLite3 Multiple Ciphers; the database key is DPAPI-protected for your Windows

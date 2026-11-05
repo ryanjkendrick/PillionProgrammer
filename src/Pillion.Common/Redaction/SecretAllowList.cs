@@ -55,8 +55,9 @@ internal static class SecretAllowList
             return true;
         }
 
-        // Anything that already looks like one of our placeholders.
-        if (value.StartsWith("<redacted:", StringComparison.Ordinal))
+        // Anything that already looks like one of our placeholders: a request's, or the index's (work item 3.2), so a chunk
+        // redacted at index time is not counted as a secret again when it is retrieved into a prompt.
+        if (value.StartsWith("<redacted:", StringComparison.Ordinal) || value.StartsWith(IndexRedactor.PlaceholderPrefix, StringComparison.Ordinal))
         {
             return true;
         }

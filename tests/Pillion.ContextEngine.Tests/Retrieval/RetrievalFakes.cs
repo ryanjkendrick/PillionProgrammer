@@ -155,6 +155,8 @@ internal sealed class FakeIndex : IRetrievalIndex, IRetrievalFileNameLookup
 
         public Task<long> CountChunksAsync(CancellationToken cancellationToken = default) => Task.FromResult((long)owner.ChunkList.Count);
 
+        public Task<long> CountRedactedChunksAsync(CancellationToken cancellationToken = default) => Task.FromResult(0L);
+
         public Task<IReadOnlyList<FileChunkSummary>> ListFilesAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task<IndexSize> GetSizeAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();

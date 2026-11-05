@@ -75,6 +75,7 @@ public class ContractV14Tests
         { typeof(ApprovalRequest), nameof(ApprovalRequest.ProvenanceKind), 8 },
         { typeof(ApprovalRequest), nameof(ApprovalRequest.ChangesetId), 9 },
         { typeof(ApprovalRequest), nameof(ApprovalRequest.RequestedUtc), 10 },
+        { typeof(IndexRootStatus), nameof(IndexRootStatus.RedactedChunkCount), 13 }, // a late 1.4 addition (work item 3.2)
         { typeof(Changeset), nameof(Changeset.Creates), 3 },
         { typeof(Changeset), nameof(Changeset.Deletes), 4 },
         { typeof(Changeset), nameof(Changeset.Renames), 5 },
@@ -158,7 +159,7 @@ public class ContractV14Tests
         HandshakeResponse: ContractMajor, ContractMinor, HostVersion, HostProcessId, Accepted, Reason
         IndexInfo: IndexId, RootPath, EmbeddingModelId, ChunkerVersion, DiskBytes, LastUsedUtc, RootExists, IsInUse, IsOpen
         IndexProgress: FilesDone, FilesTotal, ChunksDone, EstimatedRemainingSeconds
-        IndexRootStatus: RootPath, IndexId, Role, IndexedFileCount, TotalFileCount, ExcludedFileCount, SecretFileCount, ChunkCount, DiskBytes, LastFullSweepUtc, EmbeddingModelId, ChunkerVersion, SchemaVersion
+        IndexRootStatus: RootPath, IndexId, Role, IndexedFileCount, TotalFileCount, ExcludedFileCount, SecretFileCount, ChunkCount, DiskBytes, LastFullSweepUtc, EmbeddingModelId, ChunkerVersion, SchemaVersion, RedactedChunkCount
         IndexStatus: IsIndexing, IsPaused, IndexedFileCount, TotalFileCount, LastUpdatedUtc, Phase, PauseReason, Roots, ExcludedSecretFileCount, LastError, Progress
         InlineEditChunk: RequestId, Text, IsFinal, Explanation, ModelId, ProviderId, PromptTokens, CompletionTokens, Error, RejectedBlocks, Warning, ResetText
         InlineEditDiagnostic: Line, Severity, Code, Message

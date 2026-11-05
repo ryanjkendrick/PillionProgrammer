@@ -1966,10 +1966,12 @@ License, Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0).
 ONNX Runtime 1.24.4 (https://github.com/microsoft/onnxruntime), packaged in the
 Visual Studio extension under Host\ as onnxruntime.dll,
 onnxruntime_providers_shared.dll and Microsoft.ML.OnnxRuntime.dll (NuGet
-packages Microsoft.ML.OnnxRuntime.DirectML and Microsoft.ML.OnnxRuntime.Managed).
-Licensed under the MIT licence. The notices of the third-party components
-compiled into ONNX Runtime ship beside it as
-Host\licenses\OnnxRuntime-ThirdPartyNotices.txt.
+packages Microsoft.ML.OnnxRuntime, the CPU-only build that is the default since
+work item 3.2, and Microsoft.ML.OnnxRuntime.Managed; a build made with
+-p:PillionOnnxRuntimeFlavor=directml takes onnxruntime.dll from
+Microsoft.ML.OnnxRuntime.DirectML instead). Licensed under the MIT licence. The
+notices of the third-party components compiled into ONNX Runtime ship beside it
+as Host\licenses\OnnxRuntime-ThirdPartyNotices.txt.
 ================================================================================
 
 MIT License
@@ -1995,14 +1997,16 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ================================================================================
 DirectML 1.15.4 (NuGet package Microsoft.AI.DirectML,
-https://github.com/microsoft/DirectML), packaged in the Visual Studio extension
-under Host\ as DirectML.dll. DirectML is NOT open-source software: it is
-redistributed under the Microsoft Software License Terms for Microsoft DirectX
-Machine Learning (DirectML), which permit distributing it inside an application
-and which ship beside it, unmodified, as Host\licenses\DirectML-LICENSE.txt,
-with its notices as Host\licenses\DirectML-ThirdPartyNotices.txt. Those terms
-state that the software may collect information and send it to Microsoft.
-Building with -p:PillionOnnxRuntimeFlavor=cpu leaves DirectML out.
+https://github.com/microsoft/DirectML). NOT in the default build: since work
+item 3.2 (the product owner's decision on issue #78) the extension ships the
+CPU-only ONNX Runtime and no DirectML.dll. A build made with
+-p:PillionOnnxRuntimeFlavor=directml packages it under Host\ as DirectML.dll.
+DirectML is NOT open-source software: it is redistributed under the Microsoft
+Software License Terms for Microsoft DirectX Machine Learning (DirectML), which
+permit distributing it inside an application and which such a build ships
+beside it, unmodified, as Host\licenses\DirectML-LICENSE.txt, with its notices
+as Host\licenses\DirectML-ThirdPartyNotices.txt. Those terms state that the
+software may collect information and send it to Microsoft.
 ================================================================================
 
 ================================================================================

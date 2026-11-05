@@ -150,7 +150,7 @@ internal static class IndexData
     public const string RootA = @"C:\src\Alpha";
     public const string RootB = @"C:\src\Beta";
 
-    public static IndexRootStatus Root(string path, int files = 40, long chunks = 320, long bytes = 480_000, string id = "", IndexRole role = IndexRole.Writer, int excluded = 6, int secret = 2) => new()
+    public static IndexRootStatus Root(string path, int files = 40, long chunks = 320, long bytes = 480_000, string id = "", IndexRole role = IndexRole.Writer, int excluded = 6, int secret = 2, long redacted = 0, string model = "bge-small-en-v1.5") => new()
     {
         RootPath = path,
         IndexId = id.Length > 0 ? id : "id-" + System.IO.Path.GetFileName(path).ToLowerInvariant(),
@@ -160,9 +160,10 @@ internal static class IndexData
         ExcludedFileCount = excluded,
         SecretFileCount = secret,
         ChunkCount = chunks,
+        RedactedChunkCount = redacted,
         DiskBytes = bytes,
         LastFullSweepUtc = new DateTime(2026, 10, 14, 9, 30, 0, DateTimeKind.Utc),
-        EmbeddingModelId = "bge-small-en-v1.5",
+        EmbeddingModelId = model,
         ChunkerVersion = "1",
         SchemaVersion = 2,
     };

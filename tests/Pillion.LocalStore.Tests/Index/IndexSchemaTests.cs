@@ -9,15 +9,16 @@ public sealed class IndexSchemaTests : IDisposable
     public void Dispose() => _temp.Dispose();
 
     [Fact]
-    public void TheMigrations_AreVersions2And3_AndChainAfterVersion1()
+    public void TheMigrations_AreVersions2To4_AndChainAfterVersion1()
     {
         var schema = IndexStorageSchema.After(IndexTestSupport.Version1);
 
         Assert.Equal("index", schema.Name);
-        Assert.Equal(3, schema.CurrentVersion);
+        Assert.Equal(4, schema.CurrentVersion);
         Assert.Equal(2, schema.CurrentMinReaderVersion);
         Assert.Same(IndexStorageSchema.Migration, schema.Migrations[1]);
         Assert.Same(IndexSymbolsSchema.Migration, schema.Migrations[2]);
+        Assert.Same(IndexRedactionSchema.Migration, schema.Migrations[3]);
     }
 
     [Fact]
@@ -37,7 +38,7 @@ public sealed class IndexSchemaTests : IDisposable
         await using var storage = await IndexTestSupport.OpenAsync(_temp);
 
         Assert.Equal(1, storage.Database.OpenedAtVersion);
-        Assert.Equal(3, storage.Database.SchemaVersion);
+        Assert.Equal(4, storage.Database.SchemaVersion);
         Assert.Equal(2, storage.Database.MinReaderVersion);
         Assert.Equal(_temp.File("index.db.v1.bak"), storage.Database.BackupPath);
         Assert.Equal(1L, await storage.CountAsync("SELECT count(*) FROM files WHERE id = 7"));
@@ -52,12 +53,12 @@ public sealed class IndexSchemaTests : IDisposable
     }
 
     [Fact]
-    public async Task ANewDatabase_GoesStraightToVersion3_WithoutABackup()
+    public async Task ANewDatabase_GoesStraightToVersion4_WithoutABackup()
     {
         await using var storage = await IndexTestSupport.OpenAsync(_temp);
 
         Assert.Equal(0, storage.Database.OpenedAtVersion);
-        Assert.Equal(3, storage.Database.SchemaVersion);
+        Assert.Equal(4, storage.Database.SchemaVersion);
         Assert.Null(storage.Database.BackupPath);
         Assert.Equal("index", await storage.Database.ScalarAsync("SELECT value FROM meta WHERE key = 'store'"));
     }
@@ -118,7 +119,7 @@ public sealed class IndexSchemaTests : IDisposable
         await using var storage = await IndexTestSupport.OpenAsync(_temp);
 
         Assert.Equal(2, storage.Database.OpenedAtVersion);
-        Assert.Equal(3, storage.Database.SchemaVersion);
+        Assert.Equal(4, storage.Database.SchemaVersion);
         Assert.Equal(2, storage.Database.MinReaderVersion);
         Assert.Equal(_temp.File("index.db.v2.bak"), storage.Database.BackupPath);
 
@@ -155,5 +156,42 @@ public sealed class IndexSchemaTests : IDisposable
         await using var v2 = await EncryptedDatabase.OpenAsync(IndexTestSupport.DatabaseOptions(_temp), IndexTestSupport.SchemaV2);
 
         Assert.Throws<InvalidOperationException>(() => IndexStorage.Create(v2, ownsDatabase: false));
+    }
+
+    [Fact]
+    public async Task AVersion3Database_GetsTheRedactedFlag_AndTheCountReadsIt()
+    {
+        var v3 = new StoreSchema(IndexStorageSchema.Name, [IndexTestSupport.Version1, IndexStorageSchema.Migration, IndexSymbolsSchema.Migration]);
+        await using (var database = await EncryptedDatabase.OpenAsync(IndexTestSupport.DatabaseOptions(_temp), v3))
+        {
+            Assert.Equal(3, database.SchemaVersion);
+            await database.WriteAsync(async (connection, transaction, token) =>
+            {
+                using var command = connection.CreateCommand();
+                command.Transaction = transaction;
+                command.CommandText = """
+                    INSERT INTO files (id, path, language, partition) VALUES (7, 'src/A.cs', 'csharp', 'src');
+                    INSERT INTO chunks (file_id, start_line, end_line, kind, text) VALUES (7, 1, 1, 'method', 'int A() => 1;');
+                    """;
+                await command.ExecuteNonQueryAsync(token);
+            });
+        }
+
+        await using var storage = await IndexTestSupport.OpenAsync(_temp);
+
+        Assert.Equal(3, storage.Database.OpenedAtVersion);
+        Assert.Equal(4, storage.Database.SchemaVersion);
+        Assert.Equal(2, storage.Database.MinReaderVersion);
+        Assert.Equal(_temp.File("index.db.v3.bak"), storage.Database.BackupPath);
+
+        // A chunk stored before version 4 is not marked; one the scanner marked is counted.
+        Assert.Equal(1L, await storage.Chunks.CountChunksAsync());
+        Assert.Equal(0L, await storage.Chunks.CountRedactedChunksAsync());
+        await storage.Chunks.ReplaceFileChunksAsync(7, [IndexTestSupport.Chunk("int A() => 1;"), IndexTestSupport.Chunk("var key = \"<redacted-index:aws-access-key>\";", start: 2) with { IsRedacted = true }]);
+        Assert.Equal(2L, await storage.Chunks.CountChunksAsync());
+        Assert.Equal(1L, await storage.Chunks.CountRedactedChunksAsync());
+        Assert.Equal(1L, await storage.CountAsync("SELECT count(*) FROM chunks WHERE redacted = 1 AND start_line = 2"));
+        await storage.Chunks.ReplaceFileChunksAsync(7, []);
+        Assert.Equal(0L, await storage.Chunks.CountRedactedChunksAsync());
     }
 }

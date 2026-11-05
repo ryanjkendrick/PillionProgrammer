@@ -69,9 +69,19 @@ that spans two repositories has two rows). A row shows:
   open the same repository, one host indexes and watches and the other only searches; if the owner goes away the other takes over.
   "Not open yet" appears before the index is opened.
 - **Files indexed** "x of y", **chunks**, **disk use** and the **embedding model** (for example `bundled/bge-small-en-v1.5`).
+- **Redacted chunks**: how many chunks the secret scanner redacted before they were stored, or "None". A secret that a
+  scanner pattern matches in an ordinary source file (an API key in a string literal, a connection string with a password)
+  never reaches the index: the stored chunk carries a placeholder such as `<redacted-index:aws-access-key>` in its place,
+  which is what a search result or a retrieved chunk shows and what a model sees; nothing restores it.
 - **Last full sweep**, or "Never".
 - **Exclusions**: "{n} excluded, {m} secret-bearing".
 - **Versions**: the chunker version and the index schema version.
+
+While the embedding model is being changed, a root has two rows: the new index (the writer, building up) and the
+**previous index**, whose role reads "Previous index (read-only; serves searches until the new index completes, then
+retires)". Searches, mentions and chat retrieval read the previous index until the new one finishes its first full sweep;
+then the previous row goes, its folder stays on the Indexes tab until the retention rule (`indexing.retentionDays`) removes
+it or you delete it there. A previous index cannot be rebuilt; it can be deleted early, after which the new index serves.
 
 Per root:
 
@@ -114,11 +124,12 @@ Every index folder on the machine (the retention view): `%LOCALAPPDATA%\PillionP
 
 **Delete** removes the folder after asking; it is not possible while another host uses it. Use it for stale indexes and for old
 indexes left behind when you changed the embedding model (the model is part of an index's identity, so a different model builds a
-new index beside the old one).
+new index beside the old one; the old one serves searches until the new one completes, then closes and waits here).
 
-Stale indexes are not deleted automatically yet: the retention rule (a root that no longer exists, or an index unused for
-`indexing.retentionDays`) is implemented in the host but not run on a schedule, so this tab is where you clean up. This is open
-issue 4 of the [Gate 2 report](gate-2-report.md).
+The host also runs the retention rule on its own (issue #99): once the solution's indexes are open and then daily it deletes an
+index whose root no longer exists or that was not opened for `indexing.retentionDays` (30 by default). An index that is open in a
+running host, or that the open solution would open under the current model, is never deleted; an old model's index of an open
+solution ages out like any other once it is closed, so this tab is where you remove it sooner.
 
 ## The status bar indicator
 

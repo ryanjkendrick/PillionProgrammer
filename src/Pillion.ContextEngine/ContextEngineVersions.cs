@@ -14,7 +14,7 @@ public static class ContextEngineVersions
     /// breadcrumbs or text, splitting, the window settings, the default token counting, the extension-to-language map,
     /// or a chunking grammar description. Symbol changes do not bump it; they bump <see cref="SymbolsVersion"/>.
     /// </summary>
-    public const string ChunkerVersion = "1";
+    public const string ChunkerVersion = "2";
 
     /// <summary>
     /// The version of the symbol rules: extraction (which definitions and references, their kinds, names, containers,

@@ -59,6 +59,7 @@ Every addition, by the work item that consumes it (the sections below give the m
 | Workspace trust | `ITrustService` (host to VSIX): `RequestTrustAsync` with `TrustRequest`, `TrustFile`, `TrustDecision` | Host: workspace trust (3.7). VSIX: the trust prompt (3.14) |
 | Workspace queries | `IWorkspaceQueryService.PlanRenameAsync` with `RenamePlan`, `RenameConflict` | VSIX: Roslyn's renamer (3.24). Host: `rename_symbol` (3.10) |
 | Routing and errors | `TaskClass.AgentPlanning` (enum value 7); `PillionErrorCode.BudgetExhausted` (enum value 9) | 3.17; 3.6 |
+| Index status (late addition) | `IndexRootStatus.RedactedChunkCount` (`long`, Order 13) | Host: the indexing pipeline (3.2). VSIX: the Index window's Roots tab (3.2) |
 
 - **Agent sessions and the ledger.** `IAgentService` keeps `StartSessionAsync`, `ApproveAsync`, `DenyAsync`, `StopAsync` and
   `RevertAsync` as they were. Approvals are session state: the ledger carries the pending `ApprovalRequest`, persisted with the
@@ -169,6 +170,11 @@ Every addition, by the work item that consumes it (the sections below give the m
 - **Stubs.** Pillion Host serves `IAgentService` (3.6), `ITerminalService` (3.11) and `IJournalService` (3.8) as stubs answering
   `NotImplemented` with `Details` `work item <id>` until those items land; the VSIX's `HostLocalTargets` answers
   `ReadDocumentAsync` (3.13), `PlanRenameAsync` (3.24) and `RequestTrustAsync` (3.14) the same way.
+
+- **Index status: redacted chunks (work item 3.2, a late 1.4 addition; 1.4 had not shipped).** `IndexRootStatus` gains
+  `RedactedChunkCount` (`long`, Order 13): how many chunks of the root the secret scanner redacted before they were stored
+  (issue #103; their text carries `<redacted-index:kind>` placeholders, which no request ever restores). A 1.3 host leaves it
+  at 0 and a 1.3 client ignores it; `ContractV14Tests` pins the order.
 
 ### 1.3 (phase 2)
 

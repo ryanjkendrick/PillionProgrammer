@@ -24,6 +24,11 @@ namespace Pillion.Common.Redaction;
 /// A placeholder is only meaningful within the session that issued it. Placeholders carry no session identifier, so
 /// the same text can map to different originals in different sessions; never restore with another request's session.
 /// </para>
+/// <para>
+/// An index placeholder (<c>&lt;redacted-index:kind&gt;</c>, written by <see cref="IndexRedactor"/> when a chunk was stored)
+/// is never a session's: <see cref="Restore"/> leaves it as it is and <see cref="FindUnresolved"/> does not report it,
+/// because the placeholder shape a session recognises starts with <c>&lt;redacted:</c>. Its original was never kept.
+/// </para>
 /// <para>This type is thread-safe.</para>
 /// </remarks>
 public sealed class RedactionSession : IDisposable

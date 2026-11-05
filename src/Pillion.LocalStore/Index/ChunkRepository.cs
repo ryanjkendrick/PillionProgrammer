@@ -194,6 +194,10 @@ public sealed class ChunkRepository : IChunkRepository
         Database.ReadAsync((connection, _) => Task.FromResult(Sql.ScalarLong(connection, null, "SELECT count(*) FROM chunks")), cancellationToken);
 
     /// <inheritdoc/>
+    public Task<long> CountRedactedChunksAsync(CancellationToken cancellationToken = default) =>
+        Database.ReadAsync((connection, _) => Task.FromResult(Sql.ScalarLong(connection, null, "SELECT count(*) FROM chunks WHERE redacted = 1")), cancellationToken);
+
+    /// <inheritdoc/>
     public Task<IReadOnlyList<FileChunkSummary>> ListFilesAsync(CancellationToken cancellationToken = default) =>
         QueryAsync(
             """
@@ -393,8 +397,8 @@ public sealed class ChunkRepository : IChunkRepository
                 connection,
                 transaction,
                 """
-                INSERT INTO chunks (file_id, start_line, end_line, kind, breadcrumb, text, token_count)
-                VALUES ($file, $start, $end, $kind, $breadcrumb, $text, $tokens) RETURNING id
+                INSERT INTO chunks (file_id, start_line, end_line, kind, breadcrumb, text, token_count, redacted)
+                VALUES ($file, $start, $end, $kind, $breadcrumb, $text, $tokens, $redacted) RETURNING id
                 """,
                 ("$file", 0L),
                 ("$start", 0),
@@ -402,7 +406,8 @@ public sealed class ChunkRepository : IChunkRepository
                 ("$kind", string.Empty),
                 ("$breadcrumb", string.Empty),
                 ("$text", string.Empty),
-                ("$tokens", 0));
+                ("$tokens", 0),
+                ("$redacted", 0));
             _insertFts = Sql.Command(
                 connection,
                 transaction,
@@ -440,6 +445,7 @@ public sealed class ChunkRepository : IChunkRepository
             parameters[4].Value = chunk.Breadcrumb ?? string.Empty;
             parameters[5].Value = chunk.Text;
             parameters[6].Value = chunk.TokenCount;
+            parameters[7].Value = chunk.IsRedacted ? 1 : 0;
             var id = Convert.ToInt64(_insertChunk.ExecuteScalar(), CultureInfo.InvariantCulture);
 
             var indexed = IndexedText(chunk.Breadcrumb, chunk.Text);

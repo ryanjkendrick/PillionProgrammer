@@ -138,14 +138,14 @@ public static class IndexStorageSchema
 
     /// <summary>
     /// Builds the index schema from version 1 (work item 2.3's <c>files</c> and identity) followed by this migration and
-    /// every later one (<see cref="IndexSymbolsSchema.Migration"/>, version 3).
+    /// every later one (<see cref="IndexSymbolsSchema.Migration"/>, version 3; <see cref="IndexRedactionSchema.Migration"/>, version 4).
     /// </summary>
     /// <param name="version1">Migration 1 of the index schema; it must create <c>files</c> with an integer <c>id</c> primary key.</param>
-    /// <returns>The schema <c>index</c> at version 3.</returns>
+    /// <returns>The schema <c>index</c> at version 4.</returns>
     public static StoreSchema After(StoreMigration version1)
     {
         ArgumentNullException.ThrowIfNull(version1);
-        return new StoreSchema(Name, [version1, Migration, IndexSymbolsSchema.Migration]);
+        return new StoreSchema(Name, [version1, Migration, IndexSymbolsSchema.Migration, IndexRedactionSchema.Migration]);
     }
 
     /// <summary>The <c>meta</c> keys this schema reads and writes, beside the store's own.</summary>

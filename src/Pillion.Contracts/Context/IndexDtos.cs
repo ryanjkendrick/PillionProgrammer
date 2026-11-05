@@ -127,6 +127,14 @@ public sealed class IndexRootStatus
     /// <summary>Gets or sets the schema version of the index database.</summary>
     [DataMember(Order = 12)]
     public int SchemaVersion { get; set; }
+
+    /// <summary>
+    /// Gets or sets the number of chunks whose text the secret scanner redacted before they were stored (design section 12;
+    /// their text carries <c>&lt;redacted-index:kind&gt;</c> placeholders that are never restored). Added in contract 1.4
+    /// (work item 3.2, issue #103); a 1.3 host leaves it at 0.
+    /// </summary>
+    [DataMember(Order = 13)]
+    public long RedactedChunkCount { get; set; }
 }
 
 /// <summary>The progress of an indexing run. Added in contract 1.3.</summary>
