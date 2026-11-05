@@ -1,9 +1,11 @@
 using System.Text.RegularExpressions;
 using Pillion.Common.Redaction;
+using Pillion.ContextEngine.Chunking;
 using Pillion.ContextEngine.Retrieval;
 using Pillion.Contracts;
 using Pillion.Host.Context.Retrieval;
 using Pillion.Host.Indexing;
+using Pillion.LocalStore.Index;
 
 namespace Pillion.Host.Tests.Indexing;
 
@@ -17,6 +19,8 @@ public sealed class IndexRedactionTests : IDisposable
     // Shaped like real credentials, fabricated here: an AWS access key id and a classic GitHub token.
     private const string AwsKey = "AKIAJ7Q2M4N6P3R5T2V7";
     private const string GitHubToken = "ghp_K3m9Xq2Lp8Rt4Wz7Yb1Nc5Vd6Fh0Jg2Sa4E9";
+    // Joined at compile time so the source never holds the key's shape: GitHub's push protection blocks a pushed file that does.
+    private const string StripeKey = "sk_live_" + "4Qx9Lm2Vb7Tn5Kp8Rz3Wc6Yd1Hf0Jg";
 
     private readonly IndexingWorkspace _workspace = new();
 
@@ -286,6 +290,162 @@ public sealed class IndexRedactionTests : IDisposable
             Assert.Equal(0, ((FakeEmbedder)again.Embedder).ChunksEmbedded);
         }
     }
+
+    [Fact]
+    public async Task ASecretInASqlStatementsFirstLine_IsRedactedInTheBreadcrumbToo_SoItReachesNeitherTheEmbedderNorTheFtsRows()
+    {
+        // PR 121 review (third round): Redact rewrote the chunk text only; the SQL chunker names a statement by its first line,
+        // so the key went unchanged into the breadcrumb, the embedding input (breadcrumb + text, also the vector-reuse key),
+        // the chunks.breadcrumb column, the FTS rows and the reranker input.
+        Fixtures.Copy("shop", _workspace.Repository);
+        File.WriteAllText(
+            _workspace.File("src/seed.sql"),
+            "INSERT INTO settings (name, value) VALUES ('currency', 'GBP');\n"
+            + $"UPDATE settings SET value = '{StripeKey}' WHERE name = 'stripe';\n"
+            + "INSERT INTO settings (name, value) VALUES ('region', 'eu-west');\n");
+        var embedder = new FakeEmbedder();
+        await using var harness = new IndexingHarness(_workspace.Data, embedder);
+        await harness.StartAsync(_workspace.Repository);
+        var status = await harness.WaitForIdleAsync();
+
+        var record = (await harness.Root.Store.Files.GetAsync("src/seed.sql"))!;
+        var chunks = await harness.Root.Storage.Chunks.GetChunksByFileAsync(record.Id);
+        Assert.NotEmpty(chunks);
+        Assert.All(chunks, c => Assert.DoesNotContain(StripeKey, c.Breadcrumb, StringComparison.Ordinal));
+        Assert.All(chunks, c => Assert.DoesNotContain(StripeKey, c.Text, StringComparison.Ordinal));
+        var statement = Assert.Single(chunks, c => c.Text.Contains("WHERE name = 'stripe'", StringComparison.Ordinal));
+        Assert.Contains("<redacted-index:stripe-key>", statement.Text, StringComparison.Ordinal);
+        Assert.Contains("<redacted-index:stripe-key>", statement.Breadcrumb, StringComparison.Ordinal);
+        Assert.Contains("UPDATE settings", statement.Breadcrumb, StringComparison.Ordinal); // the rest of the breadcrumb stays
+        Assert.True(status.Roots[0].RedactedChunkCount >= 1, "the statement's chunk is counted as redacted");
+        Assert.Equal(status.Roots[0].RedactedChunkCount, await harness.Root.Storage.Chunks.CountRedactedChunksAsync());
+        Assert.All(chunks, c => Assert.Equal(TokenCounters.ApproximateWordPiece(c.Breadcrumb + "\n" + c.Text), c.TokenCount)); // counted on what is stored
+
+        // The embedder saw the redacted breadcrumb (the first line of its input), and the FTS rows hold no key.
+        Assert.DoesNotContain(embedder.Texts, t => t.Contains(StripeKey, StringComparison.Ordinal));
+        Assert.Contains(embedder.Texts, t => t.Split('\n')[0].Contains("<redacted-index:stripe-key>", StringComparison.Ordinal));
+        Assert.Empty(await harness.Root.Storage.Chunks.SearchLexicalAsync(StripeKey, 5));
+        Assert.Equal(0L, await CountFtsMatchesAsync(harness.Root.Storage, StripeKey));
+        Assert.NotEmpty(await harness.Root.Storage.Chunks.SearchLexicalAsync("settings stripe", 5));
+    }
+
+    [Fact]
+    public async Task ASecretInACssSelector_IsRedactedInTheBreadcrumbToo_EvenWhereTheBreadcrumbCutIt()
+    {
+        // PR 121 review (third round), the CSS case: a rule's header up to the brace (here an attribute selector with a URL) is
+        // the breadcrumb, cut at the segment limit. The token is cut inside, so it no longer matches its own pattern there;
+        // the span found over the file is mapped into the breadcrumb as a prefix.
+        Fixtures.Copy("shop", _workspace.Repository);
+        var selector = $"a[href=\"https://cdn.example-assets.com/static/fonts/inter/v3/inter-latin-subset.css?token={GitHubToken}\"]";
+        File.WriteAllText(_workspace.File("web/theme.css"), selector + " {\n  color: red;\n  padding: 4px;\n}\n\n.button {\n  color: blue;\n}\n\n.button:hover {\n  color: darkblue;\n}\n");
+        var embedder = new FakeEmbedder();
+        await using var harness = new IndexingHarness(_workspace.Data, embedder);
+        await harness.StartAsync(_workspace.Repository);
+        var status = await harness.WaitForIdleAsync();
+
+        var record = (await harness.Root.Store.Files.GetAsync("web/theme.css"))!;
+        var chunks = await harness.Root.Storage.Chunks.GetChunksByFileAsync(record.Id);
+        Assert.NotEmpty(chunks);
+        var prefix = GitHubToken[..IndexPass.MinBreadcrumbSecretPrefix];
+        Assert.All(chunks, c => Assert.DoesNotContain(prefix, c.Breadcrumb, StringComparison.Ordinal));
+        Assert.All(chunks, c => Assert.DoesNotContain(prefix, c.Text, StringComparison.Ordinal));
+        var rule = Assert.Single(chunks, c => c.Text.Contains("a[href=", StringComparison.Ordinal));
+        Assert.Contains("<redacted-index:github-token>", rule.Text, StringComparison.Ordinal);
+        Assert.Contains("<redacted-index:github-token>", rule.Breadcrumb, StringComparison.Ordinal);
+        Assert.Contains("a[href=", rule.Breadcrumb, StringComparison.Ordinal);
+        Assert.DoesNotContain("…", rule.Breadcrumb, StringComparison.Ordinal); // the cut fell inside the token: the placeholder replaces the ellipsis too
+        Assert.True(status.Roots[0].RedactedChunkCount >= 1, "the rule's chunk is counted as redacted");
+        Assert.All(chunks, c => Assert.Equal(TokenCounters.ApproximateWordPiece(c.Breadcrumb + "\n" + c.Text), c.TokenCount));
+        Assert.DoesNotContain(embedder.Texts, t => t.Contains(prefix, StringComparison.Ordinal));
+        Assert.Contains(embedder.Texts, t => t.Split('\n')[0].Contains("<redacted-index:github-token>", StringComparison.Ordinal));
+        Assert.Empty(await harness.Root.Storage.Chunks.SearchLexicalAsync(GitHubToken, 5));
+        Assert.Equal(0L, await CountFtsMatchesAsync(harness.Root.Storage, GitHubToken));
+    }
+
+    [Fact]
+    public void Redact_WithholdsAChunkThatASecretSpanOverlaps_WhenItsTextIsNotTheFileSliceItsLinesName()
+    {
+        // PR 121 review (third round): when the chunk was not the file's text at its first line, the spans found over the file
+        // were silently skipped and only the chunk's own scan ran, which misses the body of a split secret. No chunker produces
+        // such a chunk today; the chunks here are built by hand.
+        var text = "namespace Shop;\n" + $"const string Key = \"{AwsKey}\";\n" + "const int Count = 1;\n";
+        var spans = SecretScanner.Scan(text);
+        Assert.Single(spans);
+        var displaced = NewChunk(startLine: 2, endLine: 2, text: "const string Key = \"(not the slice)\";", breadcrumb: "a.cs > Key");
+        var elsewhere = NewChunk(startLine: 3, endLine: 3, text: "const int Count = 2;", breadcrumb: "a.cs > Count"); // not the slice either, but no span in its lines
+        var notMapped = new List<Chunk>();
+
+        var result = IndexPass.Redact(text, spans, [displaced, elsewhere], TokenCounters.ApproximateWordPiece, out var redacted, notMapped.Add);
+
+        Assert.Equal(IndexRedactor.ScanFailedPlaceholder, result[0].Text);
+        Assert.Equal(IndexRedactor.ScanFailedPlaceholder, result[0].Breadcrumb);
+        Assert.Equal((2, 2), (result[0].StartLine, result[0].EndLine));
+        Assert.True(redacted[0]);
+        Assert.Same(displaced, Assert.Single(notMapped));
+        Assert.Same(elsewhere, result[1]); // stored as it is: its own scan found nothing, and no secret lies in its lines
+        Assert.False(redacted[1]);
+    }
+
+    [Fact]
+    public void Redact_CountsTheTokensOfTheRedactedEmbeddingText()
+    {
+        // PR 121 review (third round): a redacted chunk kept the original count, so one near the cap with several short secrets,
+        // each replaced by a longer placeholder, could exceed the model's input.
+        var text = string.Concat("ABCD".Select(c => $"var key{c} = \"{AwsKey[..^1]}{c}\";\n")); // four keys, base32 like the real ones
+        var spans = SecretScanner.Scan(text);
+        Assert.Equal(4, spans.Count);
+        var chunk = NewChunk(startLine: 1, endLine: 4, text: text[..^1], breadcrumb: "keys.cs");
+
+        var result = IndexPass.Redact(text, spans, [chunk], TokenCounters.ApproximateWordPiece, out var redacted);
+
+        var stored = Assert.Single(result);
+        Assert.True(redacted[0]);
+        Assert.DoesNotContain(AwsKey[..^1], stored.EmbeddingText, StringComparison.Ordinal);
+        Assert.True(stored.EmbeddingText.Length > chunk.EmbeddingText.Length, "four 20-character keys became four 31-character placeholders");
+        Assert.Equal(TokenCounters.ApproximateWordPiece(stored.EmbeddingText), stored.TokenCount);
+        Assert.NotEqual(chunk.TokenCount, stored.TokenCount);
+    }
+
+    [Fact]
+    public void Redact_ReplacesTheStartOfASecret_WhereTheBreadcrumbWasCutInsideIt()
+    {
+        // The chunker cuts a breadcrumb segment at its limit, so a breadcrumb can hold the first characters of a secret and
+        // nothing a pattern matches; the span found over the file is matched as a prefix.
+        var text = $"@import url(\"https://cdn.example.com/a.css?token={GitHubToken}\");\n";
+        var spans = SecretScanner.Scan(text);
+        Assert.Single(spans);
+        var cut = $"web/theme.css > @import url(\"https://cdn.example.com/a.css?token={GitHubToken[..20]}…";
+        var chunk = NewChunk(startLine: 1, endLine: 1, text: text[..^1], breadcrumb: cut);
+
+        var result = IndexPass.Redact(text, spans, [chunk], TokenCounters.ApproximateWordPiece, out var redacted);
+
+        Assert.True(redacted[0]);
+        Assert.Equal("web/theme.css > @import url(\"https://cdn.example.com/a.css?token=<redacted-index:github-token>", result[0].Breadcrumb);
+        Assert.Equal("@import url(\"https://cdn.example.com/a.css?token=<redacted-index:github-token>\");", result[0].Text);
+    }
+
+    private static Chunk NewChunk(int startLine, int endLine, string text, string breadcrumb) => new()
+    {
+        FilePath = "a.cs",
+        StartLine = startLine,
+        EndLine = endLine,
+        Kind = ChunkKind.Statement,
+        Breadcrumb = breadcrumb,
+        Text = text,
+        TokenCount = TokenCounters.ApproximateWordPiece(breadcrumb + "\n" + text),
+    };
+
+    /// <summary>How many FTS rows match a value (the FTS table has its own copy of the breadcrumb and the text).</summary>
+    private static Task<long> CountFtsMatchesAsync(IndexStorage storage, string value) =>
+        storage.Database.ReadAsync(
+            (connection, _) =>
+            {
+                using var command = connection.CreateCommand();
+                command.CommandText = "SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH $needle";
+                command.Parameters.AddWithValue("$needle", "\"" + value + "\"");
+                return Task.FromResult((long)command.ExecuteScalar()!);
+            },
+            CancellationToken.None);
 
     /// <summary>The signature carries the private-key placeholder and no line of the key's body, not even the start of one (a signature is cut to 200 characters).</summary>
     private static void AssertRedactedPrivateKeySignature(string? signature, List<string> body)

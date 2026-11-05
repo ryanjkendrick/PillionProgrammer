@@ -49,8 +49,12 @@ internal sealed class RootIndex : IAsyncDisposable
     /// <summary>Gets the chunk, vector and symbol storage over the index's database.</summary>
     public IndexStorage Storage { get; }
 
-    /// <summary>Gets the embedding model of the index.</summary>
-    public IndexEmbeddingModel Model { get; }
+    /// <summary>
+    /// Gets or sets the embedding model of the index: the descriptor it was opened with, replaced by the freshly resolved one
+    /// when a previous index is reinstated (an index adopted from disk after a restart knows its model id, not its token
+    /// counter, input size or tokenizer family; PR 121 review). Set on the pipeline loop only.
+    /// </summary>
+    public IndexEmbeddingModel Model { get; set; }
 
     /// <summary>Gets the partition of each file (the project, else the top-level folder).</summary>
     public PartitionResolver Partitions { get; }

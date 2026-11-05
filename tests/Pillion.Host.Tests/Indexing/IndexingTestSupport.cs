@@ -25,6 +25,12 @@ internal sealed class FakeEmbedder : IIndexEmbedder
 
     public string ModelId { get; set; } = "fake/hashed-words";
 
+    /// <summary>Gets or sets the resolved model's input size (tests of a switch between models whose descriptors differ in more than the id).</summary>
+    public int MaxTokens { get; set; } = 512;
+
+    /// <summary>Gets or sets the resolved model's tokenizer family.</summary>
+    public string TokenizerFamily { get; set; } = "bert-wordpiece";
+
     /// <summary>Gets or sets a delay per batch (status tests slow the run down so several notifications are sent).</summary>
     public TimeSpan Delay { get; set; }
 
@@ -56,7 +62,7 @@ internal sealed class FakeEmbedder : IIndexEmbedder
 
     public void ReleaseMemory() => MemoryReleases++;
 
-    public IndexEmbeddingModel ResolveModel() => new(ModelId, TokenCounters.ApproximateWordPiece, 512, "bert-wordpiece");
+    public IndexEmbeddingModel ResolveModel() => new(ModelId, TokenCounters.ApproximateWordPiece, MaxTokens, TokenizerFamily);
 
     public async Task<IReadOnlyList<EmbeddedVector>> EmbedAsync(IndexEmbeddingModel model, IReadOnlyList<string> texts, CancellationToken cancellationToken)
     {

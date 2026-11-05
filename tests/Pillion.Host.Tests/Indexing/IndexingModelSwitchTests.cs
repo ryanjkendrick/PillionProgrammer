@@ -1,8 +1,12 @@
+using Pillion.Common;
 using Pillion.Common.Settings;
+using Pillion.ContextEngine;
 using Pillion.ContextEngine.Retrieval;
 using Pillion.Contracts;
 using Pillion.Host.Context.Retrieval;
 using Pillion.Host.Indexing;
+using Pillion.Indexing.Ownership;
+using Pillion.LocalStore.Index;
 using IndexRole = Pillion.Contracts.IndexRole;
 
 namespace Pillion.Host.Tests.Indexing;
@@ -354,6 +358,164 @@ public sealed class IndexingModelSwitchTests : IDisposable
         Assert.Equal(reader.Root.Store.Identity.Id, Assert.Single(await catalog.GetIndexesAsync([], CancellationToken.None)).IndexId);
         Assert.Equal(0, readerEmbedder.ChunksEmbedded);
     }
+
+    [Fact]
+    public async Task AnIndexBuiltBeforeIndexTimeRedaction_IsNeitherAdoptedNorServedReadOnly_AndIsDeletedWhenTheNewIndexCompletes()
+    {
+        // PR 121 review (third round): on the first start after this build every root opens a new, incomplete chunker-"2" index
+        // with no previous one open, so the complete chunker-"1" index of the same model (built with no redaction) was adopted
+        // and served until the rebuild completed, and the read-only fallback could open it as well.
+        Fixtures.Copy("shop", _workspace.Repository);
+        var paths = new PillionPaths(_workspace.Data);
+        var flags = new AllFlags();
+        string unscannedId;
+        string unscannedFolder;
+        await using (var unscanned = await new IndexStoreFactory(paths, flags).OpenAsync(new IndexRequest(_workspace.Repository, FirstModel, "1", "pillion-earlier-build")))
+        {
+            unscanned.RecordFullSweep(); // complete, as a build before work item 3.2 left it
+            unscannedId = unscanned.Identity.Id;
+            unscannedFolder = unscanned.Folder.Directory;
+        }
+
+        Assert.False(IndexRedactionSchema.IsScannedChunkerVersion("1"));
+
+        // The read-only catalog does not open it for the root, even with nothing else there.
+        await using (var fallback = new ReadOnlyIndexCatalog(paths, flags))
+        {
+            Assert.Empty(await fallback.GetIndexesAsync([_workspace.Repository], CancellationToken.None));
+            Assert.Equal(0, fallback.OpenCount);
+        }
+
+        var embedder = new FakeEmbedder();
+        await using var harness = new IndexingHarness(_workspace.Data, embedder, Options());
+        harness.Service.SetUserPause(true);
+        await harness.StartAsync(_workspace.Repository);
+
+        // The run of the new index has started (so the reconcile that opened it, adoption included, is over) and waits paused.
+        var status = await harness.WaitForAsync(s => s.Roots.Length >= 1 && s.Progress is not null, what: "the new index's run to start");
+        var only = Assert.Single(status.Roots);
+        Assert.Equal(IndexRole.Writer, only.Role);
+        Assert.Equal(ContextEngineVersions.ChunkerVersion, only.ChunkerVersion);
+        Assert.Null(only.LastFullSweepUtc);
+        Assert.NotEqual(unscannedId, only.IndexId);
+        Assert.Empty(harness.Service.RetiringRoots);
+        Assert.Same(harness.Root, Assert.Single(harness.Service.ServingRoots));
+        await using var catalog = new LiveIndexCatalog(harness.Service, harness.Flags, new ReadOnlyIndexCatalog(harness.Paths, harness.Flags));
+        var served = Assert.Single(await catalog.GetIndexesAsync([], CancellationToken.None));
+        Assert.Equal(only.IndexId, served.IndexId);
+        Assert.True(Directory.Exists(unscannedFolder));
+        Assert.Contains(harness.Service.ListIndexes(), i => i.IndexId == unscannedId && !i.IsOpen && !i.IsInUse && i.ChunkerVersion == "1");
+
+        // The new index completes: the unscanned one is deleted at once, not left to the age rule.
+        harness.Service.SetUserPause(false);
+        status = await harness.WaitForIdleAsync();
+        Assert.NotNull(Assert.Single(status.Roots).LastFullSweepUtc);
+        await harness.WaitForAsync(_ => !Directory.Exists(unscannedFolder), what: "the unscanned index to be deleted");
+        Assert.DoesNotContain(harness.Service.ListIndexes(), i => i.IndexId == unscannedId);
+        Assert.Equal(only.IndexId, Assert.Single(harness.Service.ListIndexes()).IndexId);
+    }
+
+    [Fact]
+    public async Task SwitchingBackToAnAdoptedPreviousIndex_ReinstatesItWithItsOwnModelDescriptor()
+    {
+        // PR 121 review (third round): an index adopted from disk was built with the current model's descriptor under its own
+        // model id (token counter, input size and tokenizer family of the wrong model); reinstating it made that the root's
+        // model, and the next run chunked with it.
+        Fixtures.Copy("shop", _workspace.Repository);
+        string aId;
+        await using (var first = new IndexingHarness(_workspace.Data, new FakeEmbedder(), Options()))
+        {
+            await first.StartAsync(_workspace.Repository);
+            await first.WaitForIdleAsync();
+            aId = first.Root.Store.Identity.Id;
+        }
+
+        // A new session under model B, whose descriptor differs from A's in more than the id; A is adopted from disk.
+        var embedder = new FakeEmbedder { ModelId = SecondModel, MaxTokens = 256, TokenizerFamily = "fake/second-tokenizer" };
+        await using var harness = new IndexingHarness(_workspace.Data, embedder, Options());
+        harness.Service.SetUserPause(true);
+        await harness.StartAsync(_workspace.Repository);
+        await harness.WaitForAsync(s => s.Roots.Length == 2, what: "the adopted previous index beside the new one");
+        var adopted = Assert.Single(harness.Service.RetiringRoots);
+        Assert.Equal(aId, adopted.Store.Identity.Id);
+        Assert.Equal(FirstModel, adopted.Model.ModelId);
+
+        // Back to A before B completes: the adopted index is reinstated with A's descriptor, and its sweep records A's input size.
+        embedder.ModelId = FirstModel;
+        embedder.MaxTokens = 512;
+        embedder.TokenizerFamily = "bert-wordpiece";
+        harness.Settings.Update(new PillionSettings());
+        await harness.WaitForAsync(s => s.Roots.Length == 1 && s.Roots[0].EmbeddingModelId == FirstModel, what: "the first model's index alone");
+        Assert.Same(adopted, harness.Root);
+        Assert.False(adopted.IsRetiring);
+        Assert.Equal(FirstModel, adopted.Model.ModelId);
+        Assert.Equal(512, adopted.Model.MaxTokens);
+        Assert.Equal("bert-wordpiece", adopted.Model.TokenizerFamily);
+
+        harness.Service.SetUserPause(false);
+        await harness.WaitForAsync(s => s.Phase == IndexPhase.Idle && harness.Service.FullRuns >= 1 && s.Roots.Length == 1, what: "the reinstated index's sweep");
+        Assert.Equal("512", await ReadMetaAsync(adopted, "embedding_max_tokens"));
+        Assert.Equal("bert-wordpiece", await ReadMetaAsync(adopted, "embedding_tokenizer"));
+        Assert.Equal("512", await ReadMetaAsync(adopted, "chunk_max_tokens"));
+        Assert.Empty(harness.Service.RetiringRoots);
+    }
+
+    [Fact]
+    public async Task AHostThatOnlyReadsThePreviousIndex_CannotDeleteIt_AndKeepsServingIt()
+    {
+        // PR 121 review (third round): the previous-index branch of DeleteIndexAsync had no owner check, so a reader removed
+        // and closed the previous index it was serving from, then retention refused the delete, and the root was left without
+        // its serving fallback.
+        Fixtures.Copy("shop", _workspace.Repository);
+        var ownerEmbedder = new FakeEmbedder();
+        var readerEmbedder = new FakeEmbedder();
+        await using var owner = new IndexingHarness(_workspace.Data, ownerEmbedder, Options(), pipeName: "pillion-owner");
+        await owner.StartAsync(_workspace.Repository);
+        await owner.WaitForIdleAsync();
+        var ownerPrevious = owner.Root;
+        await using var reader = new IndexingHarness(_workspace.Data, readerEmbedder, Options(), pipeName: "pillion-other");
+        await reader.StartAsync(_workspace.Repository);
+        await reader.WaitForAsync(s => s.Roots.Length == 1 && s.Roots[0].Role == IndexRole.Reader, what: "the other host to read the first index");
+        var readerPrevious = reader.Root;
+
+        owner.Service.SetUserPause(true);
+        ownerEmbedder.ModelId = SecondModel;
+        owner.Settings.Update(new PillionSettings());
+        await owner.WaitForAsync(s => s.Roots.Length == 2 && s.Roots.Any(r => r.EmbeddingModelId == SecondModel && r.Role == IndexRole.Writer), what: "the owner to open the second index");
+        readerEmbedder.ModelId = SecondModel;
+        reader.Settings.Update(new PillionSettings());
+        await reader.WaitForAsync(s => s.Roots.Length == 2 && s.Roots.Any(r => r.EmbeddingModelId == SecondModel), what: "the other host to read the second index");
+        Assert.Same(readerPrevious, Assert.Single(reader.Service.RetiringRoots));
+
+        var denied = await Assert.ThrowsAsync<PillionRpcException>(() => reader.Service.DeleteIndexAsync(readerPrevious.Store.Identity.Id, CancellationToken.None));
+        Assert.Equal(PillionErrorCode.PolicyDenied, denied.Error.Code);
+
+        // Nothing was removed or closed: the other host still serves the root from its previous index.
+        Assert.Same(readerPrevious, Assert.Single(reader.Service.RetiringRoots));
+        Assert.Same(readerPrevious, Assert.Single(reader.Service.ServingRoots));
+        var catalog = new LiveIndexCatalog(reader.Service, reader.Flags);
+        var served = Assert.Single(await catalog.GetIndexesAsync([], CancellationToken.None));
+        Assert.Equal(readerPrevious.Store.Identity.Id, served.IndexId);
+        Assert.Same(readerPrevious.Storage, served.Storage);
+        Assert.Contains(reader.Service.GetStatus().Roots, r => r.IndexId == readerPrevious.Store.Identity.Id && r.Role == IndexRole.Reader);
+        Assert.True(Directory.Exists(readerPrevious.Store.Folder.Directory));
+        Assert.True(ownerPrevious.Store.HoldsWriterLock(), "the owner still holds the previous index");
+        Assert.Same(ownerPrevious, Assert.Single(owner.Service.RetiringRoots));
+
+        owner.Service.SetUserPause(false);
+        await owner.WaitForIdleAsync();
+    }
+
+    private static Task<string?> ReadMetaAsync(RootIndex root, string key) =>
+        root.Storage.Database.ReadAsync(
+            (connection, _) =>
+            {
+                using var command = connection.CreateCommand();
+                command.CommandText = "SELECT value FROM meta WHERE key = $key";
+                command.Parameters.AddWithValue("$key", key);
+                return Task.FromResult(command.ExecuteScalar() as string);
+            },
+            CancellationToken.None);
 
     private static IndexingOptions Options() => new()
     {

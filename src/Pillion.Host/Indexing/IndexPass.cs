@@ -182,6 +182,12 @@ internal sealed class PassStatistics
 /// </summary>
 internal sealed partial class IndexPass
 {
+    /// <summary>
+    /// The shortest prefix of a secret that is replaced in a breadcrumb cut inside the secret (PR 121 review): shorter ones are
+    /// the kind's own marker (<c>sk_live_</c>, <c>AKIA</c>) rather than key material.
+    /// </summary>
+    internal const int MinBreadcrumbSecretPrefix = 8;
+
     private static readonly FileChunker Chunker = new();
     private static readonly FileSymbolExtractor Extractor = new();
 
@@ -617,10 +623,16 @@ internal sealed partial class IndexPass
         // The secret scanner runs here, before anything else is built from the text: the embedding input, the vector-reuse
         // lookup, the FTS rows, the stored row and the symbol signatures all see the redacted text (design section 12, work
         // item 3.2, issue #103). Secrets are found once over the whole file, so one that the chunker split (a long PEM block)
-        // is redacted in every chunk it touches and in the source the symbol extractor reads; then each chunk's text is
-        // scanned again for anything that shows only in chunk context.
+        // is redacted in every chunk it touches, in its breadcrumb and in the source the symbol extractor reads; then each
+        // chunk's text and breadcrumb are scanned again for anything that shows only in that text.
         var spans = ScanFile(record.Path, text);
-        var chunks = Redact(text, spans, Chunker.Chunk(record.Path, text, _chunkOptions), out var redacted);
+        var chunks = Redact(
+            text,
+            spans,
+            Chunker.Chunk(record.Path, text, _chunkOptions),
+            _chunkOptions.TokenCounter,
+            out var redacted,
+            chunk => LogChunkNotMapped(_logger, _root.Store.Identity.Id, record.Path, chunk.StartLine, chunk.EndLine));
         var symbols = Extract(record.Path, text, spans);
         _options.OnFilePrepared?.Invoke(record.Path);
         var file = new PreparedFile(record, chunks, symbols, CountLines(text), redacted);
@@ -671,19 +683,28 @@ internal sealed partial class IndexPass
     /// Redacts a file's chunks (work item 3.2, issue #103): first the spans found over the whole file text, so a secret the
     /// chunker split across chunks (a PEM block longer than the chunk cap, whose later chunks hold key material without the
     /// header the pattern needs) is redacted in every chunk it overlaps, by character offset; then each chunk's own text is
-    /// scanned, for anything that shows only in chunk context. A chunk with a secret gets a copy whose text carries
-    /// <c>&lt;redacted-index:kind&gt;</c> placeholders; its line range and token count (counted on the original, so the chunk
-    /// still fits the model's input) are kept. When the whole-file scan timed out (<paramref name="spans"/> is
-    /// <see langword="null"/>) the file is unverified and every chunk fails closed, as a chunk whose own scan times out does:
-    /// its text is <see cref="IndexRedactor.ScanFailedPlaceholder"/> and it is counted as redacted. The per-chunk scans are no
-    /// fallback: they miss the body of a split secret, which is what the whole-file scan is for.
+    /// scanned, for anything that shows only in chunk context. The breadcrumb is redacted with the text (PR 121 review): a
+    /// SQL statement's or a CSS rule's breadcrumb is built from its first line, so a key in it would otherwise reach the
+    /// embedding input, the vector-reuse key, the <c>chunks.breadcrumb</c> column, the FTS rows and the reranker; a secret
+    /// span of the chunk is looked for in the breadcrumb whole and as a prefix (the chunker cuts a name at 80 or 120
+    /// characters), and the breadcrumb is scanned on its own as well. A chunk with a secret gets a copy whose text and
+    /// breadcrumb carry <c>&lt;redacted-index:kind&gt;</c> placeholders and whose token count is counted again on the redacted
+    /// embedding text (a placeholder can be longer than a short secret); its line range is kept. When the whole-file scan
+    /// timed out (<paramref name="spans"/> is <see langword="null"/>) the file is unverified and every chunk fails closed, as
+    /// a chunk whose own scan times out does: its text and breadcrumb are <see cref="IndexRedactor.ScanFailedPlaceholder"/>
+    /// and it is counted as redacted. So does a chunk that a secret span overlaps by line range but whose text is not the
+    /// file's slice at its first line (no chunker produces one today): the span cannot be mapped into it, so it is withheld
+    /// rather than stored on the strength of its own scan, which misses the body of a split secret. The per-chunk scans are
+    /// no fallback: that is what the whole-file scan is for.
     /// </summary>
     /// <param name="text">The file text the chunks were cut from.</param>
     /// <param name="spans">The secret spans of <paramref name="text"/> from <see cref="ScanFile"/>, or <see langword="null"/> when that scan timed out.</param>
     /// <param name="chunks">The chunks as the chunker produced them.</param>
+    /// <param name="tokenCounter">The embedding model's token counter, for the redacted chunks' counts.</param>
     /// <param name="redacted">Per chunk, whether anything was replaced.</param>
+    /// <param name="notMapped">Called for each chunk withheld because a secret span could not be mapped into it (the caller logs it). Optional.</param>
     /// <returns>The same list when nothing was redacted, else a list with the redacted chunks replaced.</returns>
-    private static IReadOnlyList<Chunk> Redact(string text, IReadOnlyList<SecretMatch>? spans, IReadOnlyList<Chunk> chunks, out bool[] redacted)
+    internal static IReadOnlyList<Chunk> Redact(string text, IReadOnlyList<SecretMatch>? spans, IReadOnlyList<Chunk> chunks, Pillion.ContextEngine.Chunking.TokenCounter tokenCounter, out bool[] redacted, Action<Chunk>? notMapped = null)
     {
         redacted = new bool[chunks.Count];
         if (spans is null)
@@ -691,7 +712,7 @@ internal sealed partial class IndexPass
             var withheld = new Chunk[chunks.Count];
             for (var i = 0; i < chunks.Count; i++)
             {
-                withheld[i] = chunks[i] with { Text = IndexRedactor.ScanFailedPlaceholder };
+                withheld[i] = Withhold(chunks[i]);
                 redacted[i] = true;
             }
 
@@ -704,16 +725,16 @@ internal sealed partial class IndexPass
         {
             var chunk = chunks[i];
             var current = chunk.Text;
+            var breadcrumb = chunk.Breadcrumb;
             var changed = false;
 
-            // Spans found over the whole file, mapped into this chunk by offset. The chunk's text is the file's text from the
-            // start of its first line (a prefix of it when truncated), which is checked before any offset is trusted.
-            if (spans.Count > 0 && chunk.StartLine >= 1 && chunk.StartLine <= lineStarts.Length)
+            if (spans.Count > 0)
             {
-                var start = lineStarts[chunk.StartLine - 1];
-                var end = start + current.Length;
-                if (end <= text.Length && string.CompareOrdinal(text, start, current, 0, current.Length) == 0)
+                // Spans found over the whole file, mapped into this chunk by offset. The chunk's text is the file's text from
+                // the start of its first line (a prefix of it when truncated), which is checked before any offset is trusted.
+                if (TryLocate(text, lineStarts, chunk, out var start))
                 {
+                    var end = start + current.Length;
                     StringBuilder? builder = null;
                     var position = 0;
                     foreach (var span in spans)
@@ -728,6 +749,13 @@ internal sealed partial class IndexPass
                         builder ??= new StringBuilder(current.Length);
                         builder.Append(current, position, from - position).Append(IndexRedactor.PlaceholderPrefix).Append(span.KindId).Append('>');
                         position = to;
+
+                        // The breadcrumb was built from the same lines: the secret, or the start of it where the name was cut.
+                        if (RedactBreadcrumb(breadcrumb, text, span, out var redactedBreadcrumb))
+                        {
+                            breadcrumb = redactedBreadcrumb;
+                            changed = true;
+                        }
                     }
 
                     if (builder is not null)
@@ -737,13 +765,30 @@ internal sealed partial class IndexPass
                         changed = true;
                     }
                 }
+                else if (OverlapsLines(spans, text, lineStarts, chunk))
+                {
+                    // A secret lies in this chunk's lines and cannot be mapped into its text: withheld, never stored on the
+                    // strength of the chunk's own scan.
+                    notMapped?.Invoke(chunk);
+                    copy ??= [.. chunks];
+                    copy[i] = Withhold(chunk);
+                    redacted[i] = true;
+                    continue;
+                }
             }
 
-            // Then the chunk's own text: what shows only in chunk context.
+            // Then the chunk's own text and breadcrumb: what shows only in that text.
             var result = IndexRedactor.Redact(current);
             if (result.IsRedacted)
             {
                 current = result.Text;
+                changed = true;
+            }
+
+            var crumb = IndexRedactor.Redact(breadcrumb);
+            if (crumb.IsRedacted)
+            {
+                breadcrumb = crumb.Text;
                 changed = true;
             }
 
@@ -752,12 +797,104 @@ internal sealed partial class IndexPass
                 continue;
             }
 
+            // The count is of the embedding text; a placeholder can be longer than the short secret it replaced.
+            var replacement = chunk with { Text = current, Breadcrumb = breadcrumb };
             copy ??= [.. chunks];
-            copy[i] = chunk with { Text = current };
+            copy[i] = replacement with { TokenCount = tokenCounter(replacement.EmbeddingText) };
             redacted[i] = true;
         }
 
         return copy ?? chunks;
+    }
+
+    /// <summary>A chunk whose scan failed, or into which a found secret could not be mapped: its text and breadcrumb are the scan-failed placeholder; its line range and token count are kept.</summary>
+    private static Chunk Withhold(Chunk chunk) => chunk with { Text = IndexRedactor.ScanFailedPlaceholder, Breadcrumb = IndexRedactor.ScanFailedPlaceholder };
+
+    /// <summary>Finds the chunk's text in the file: the file's text from the start of its first line, which is checked before the offset is trusted.</summary>
+    private static bool TryLocate(string text, int[] lineStarts, Chunk chunk, out int start)
+    {
+        start = 0;
+        if (chunk.StartLine < 1 || chunk.StartLine > lineStarts.Length)
+        {
+            return false;
+        }
+
+        start = lineStarts[chunk.StartLine - 1];
+        var length = chunk.Text.Length;
+        return start + length <= text.Length && string.CompareOrdinal(text, start, chunk.Text, 0, length) == 0;
+    }
+
+    /// <summary>
+    /// Whether any secret span lies in the lines the chunk names (<see cref="Chunk.StartLine"/> to <see cref="Chunk.EndLine"/>);
+    /// a chunk whose lines cannot be placed in the file counts as overlapping, since nothing about it can be checked.
+    /// </summary>
+    private static bool OverlapsLines(IReadOnlyList<SecretMatch> spans, string text, int[] lineStarts, Chunk chunk)
+    {
+        if (chunk.StartLine < 1 || chunk.StartLine > lineStarts.Length || chunk.EndLine < chunk.StartLine)
+        {
+            return true;
+        }
+
+        var start = lineStarts[chunk.StartLine - 1];
+        var end = chunk.EndLine < lineStarts.Length ? lineStarts[chunk.EndLine] : text.Length;
+        foreach (var span in spans)
+        {
+            if (span.Start < end && span.End > start)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Replaces a secret span's value in a breadcrumb built from the chunk's lines. The chunker makes a breadcrumb segment
+    /// from source text with <see cref="Breadcrumbs.Sanitize"/> (white space collapsed, cut with an ellipsis at the segment
+    /// limit), so the value is looked for sanitized the same way: whole, or as a prefix of at least
+    /// <see cref="MinBreadcrumbSecretPrefix"/> characters where the segment was cut inside it (a cut secret no longer matches
+    /// its own pattern, which is why the breadcrumb's own scan is not enough).
+    /// </summary>
+    private static bool RedactBreadcrumb(string breadcrumb, string text, SecretMatch span, out string redacted)
+    {
+        redacted = breadcrumb;
+        if (breadcrumb.Length == 0)
+        {
+            return false;
+        }
+
+        var secret = Breadcrumbs.Sanitize(text.Substring(span.Start, span.End - span.Start), int.MaxValue);
+        if (secret.Length == 0)
+        {
+            return false;
+        }
+
+        var placeholder = IndexRedactor.PlaceholderPrefix + span.KindId + ">";
+        if (breadcrumb.Contains(secret, StringComparison.Ordinal))
+        {
+            redacted = breadcrumb.Replace(secret, placeholder, StringComparison.Ordinal);
+            return true;
+        }
+
+        // Cut inside the secret: the breadcrumb holds a prefix of it (the span is the whole match, so a prefix of it that the
+        // rest does not follow can only be where the segment was cut), with the ellipsis after it when the limit cut it.
+        for (var length = Math.Min(secret.Length - 1, breadcrumb.Length); length >= MinBreadcrumbSecretPrefix; length--)
+        {
+            var at = breadcrumb.AsSpan().IndexOf(secret.AsSpan(0, length), StringComparison.Ordinal);
+            if (at >= 0)
+            {
+                var after = at + length;
+                if (after < breadcrumb.Length && breadcrumb[after] == '…')
+                {
+                    after++;
+                }
+
+                redacted = string.Concat(breadcrumb.AsSpan(0, at), placeholder, breadcrumb.AsSpan(after));
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>The offset of the first character of each line, by the chunker's own rule (CR, LF, CRLF, NEL, LS and PS end a line).</summary>
@@ -1258,6 +1395,9 @@ internal sealed partial class IndexPass
 
     [LoggerMessage(EventId = 2908, Level = LogLevel.Warning, Message = "Index {IndexId}: the secret scan of {Path} timed out; the file could not be verified, so its chunks and symbol signatures are stored as scan-failed placeholders, not as its text.")]
     private static partial void LogScanTimedOut(ILogger logger, string indexId, string path);
+
+    [LoggerMessage(EventId = 2909, Level = LogLevel.Warning, Message = "Index {IndexId}: a secret found in {Path} lies in lines {StartLine}-{EndLine}, but the chunk of those lines is not the file's text there, so the secret could not be mapped into it; the chunk is stored as a scan-failed placeholder, not as its text.")]
+    private static partial void LogChunkNotMapped(ILogger logger, string indexId, string path, int startLine, int endLine);
 
     /// <summary>A file read, chunked and extracted, waiting for its vectors.</summary>
     private sealed class PreparedFile(FileRecord record, IReadOnlyList<Chunk> chunks, SymbolExtraction? symbols, int lines, bool[]? redacted = null)

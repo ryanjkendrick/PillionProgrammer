@@ -14,7 +14,8 @@ namespace Pillion.Host.Context.Retrieval;
 /// The simple <see cref="IIndexCatalog"/>: finds index folders under <see cref="PillionPaths.IndexDirectory"/> by their
 /// <c>state.json</c> and opens their databases read-only (the reader path of <see cref="IndexStoreFactory"/>: nothing is
 /// created, migrated or locked, so it never competes with the index's owner). For a root with several indexes (another
-/// embedding model or chunker version) the most recently opened one is used. Databases stay open until the catalog is
+/// embedding model or chunker version) the most recently opened one is used, never one built before the secret scanner ran
+/// at index time (<see cref="IndexRedactionSchema.FirstScannedChunkerVersion"/>). Databases stay open until the catalog is
 /// disposed, and each one's vector cache is warmed in the background when it opens. Serves nothing while
 /// <c>features.indexing</c> or <c>features.localStore</c> is off.
 /// </summary>
@@ -182,6 +183,15 @@ internal sealed partial class ReadOnlyIndexCatalog : IIndexCatalog, IAsyncDispos
                 continue;
             }
 
+            // An index built before the secret scanner ran at index time (chunker version below 2) holds its files' text as
+            // it was, secrets included: never served, and deleted by the pipeline once the root's current index completes
+            // (PR 121 review).
+            if (!IndexRedactionSchema.IsScannedChunkerVersion(state.ChunkerVersion))
+            {
+                LogUnscannedSkipped(_logger, folder.Id, state.RootPath, state.ChunkerVersion);
+                continue;
+            }
+
             yield return (folder, state, IndexIdentity.NormalizeRoot(state.RootPath));
         }
     }
@@ -248,4 +258,7 @@ internal sealed partial class ReadOnlyIndexCatalog : IIndexCatalog, IAsyncDispos
 
     [LoggerMessage(EventId = 2924, Level = LogLevel.Debug, Message = "Index {IndexId}: the vector cache could not be warmed.")]
     private static partial void LogWarmFailed(ILogger logger, string indexId, Exception exception);
+
+    [LoggerMessage(EventId = 2925, Level = LogLevel.Debug, Message = "Retrieval skips index {IndexId} for {Root}: chunker version {ChunkerVersion} stored its chunks unscanned; the pipeline deletes it once the root's current index completes.")]
+    private static partial void LogUnscannedSkipped(ILogger logger, string indexId, string root, string chunkerVersion);
 }

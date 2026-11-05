@@ -13,6 +13,7 @@ using Pillion.Indexing.Retention;
 using Pillion.Indexing.Roots;
 using Pillion.Indexing.Sweep;
 using Pillion.LocalStore;
+using Pillion.LocalStore.Index;
 using Pillion.ModelGateway;
 
 namespace Pillion.Host.Indexing;
@@ -73,6 +74,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     private readonly Dictionary<string, RootIndex> _retiring = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _rebuild = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _suppressed = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _unscannedSwept = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _stopping = new();
     private WorkspaceDescription? _workspace;
     private string[] _workspaceRoots = [];
@@ -574,12 +576,19 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             }
 
             // A root's previous index (issue #104) can be deleted before the switch completes: searches then read the new one.
+            // Not one another host owns (PR 121 review): it would be closed here, then refused by retention, and this host
+            // would be left without the index that serves its searches.
             if (open is null)
             {
                 foreach (var (key, previous) in _retiring)
                 {
                     if (string.Equals(previous.Store.Identity.Id, indexId, StringComparison.Ordinal))
                     {
+                        if (!previous.IsWriter)
+                        {
+                            throw Denied("Another Visual Studio instance owns this index; it cannot be deleted while that instance has it open.");
+                        }
+
                         open = previous;
                         _retiring.Remove(key);
                         break;
@@ -1007,6 +1016,14 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
                         }
                     }
                 }
+
+                // The retiring index moves between the maps under the same lock (PR 121 review): a search in between would
+                // find the root in neither, and the read-only catalog would open its folder a second time, for good.
+                if (retire is not null)
+                {
+                    retire.IsRetiring = true;
+                    _retiring[key] = retire;
+                }
             }
 
             foreach (var old in closing)
@@ -1024,12 +1041,12 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
 
             if (retire is not null)
             {
-                await RetireAsync(key, retire, stopping).ConfigureAwait(false);
+                await RetireAsync(retire, stopping).ConfigureAwait(false);
             }
 
             if (reinstate is not null)
             {
-                Reinstate(key, reinstate);
+                Reinstate(key, reinstate, model);
                 await CloseRetiredAsync(key, stopping).ConfigureAwait(false);
                 continue;
             }
@@ -1063,6 +1080,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             {
                 // Built to the end in an earlier session: nothing to wait for.
                 await CloseRetiredAsync(key, stopping).ConfigureAwait(false);
+                DeleteUnscannedIndexes(opened);
             }
             else if (!hasPrevious)
             {
@@ -1094,28 +1112,30 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     /// <summary>
     /// Turns the root's current index into its previous one (issue #104): its run is stopped, its watcher closed and its
     /// queued changes dropped; it is never indexed again, only searched, until <see cref="CloseRetiredAsync"/> closes it.
+    /// <see cref="ReconcileAsync"/> has already moved it into <see cref="_retiring"/>, under the lock that took it out of
+    /// <see cref="_roots"/>, so it serves searches throughout.
     /// </summary>
-    private async Task RetireAsync(string key, RootIndex root, CancellationToken stopping)
+    private async Task RetireAsync(RootIndex root, CancellationToken stopping)
     {
         await StopRunAsync(root, stopping).ConfigureAwait(false);
         root.Watcher?.Dispose();
         root.Watcher = null;
         root.ClearPending();
-        root.IsRetiring = true;
         root.NeedsRun = false;
-        lock (_gate)
-        {
-            _retiring[key] = root;
-        }
-
         LogRetiring(_logger, root.Store.Identity.Id, root.Path, root.Model.ModelId);
     }
 
-    /// <summary>Makes a previous index the root's current index again (the model was switched back while it was still open).</summary>
-    private void Reinstate(string key, RootIndex root)
+    /// <summary>
+    /// Makes a previous index the root's current index again (the model was switched back while it was still open). The
+    /// root takes the freshly resolved model descriptor (PR 121 review): an index adopted from disk after a restart carried
+    /// the then-current model's token counter, input size and tokenizer family under its own model id, and a run chunks with
+    /// them.
+    /// </summary>
+    private void Reinstate(string key, RootIndex root, IndexEmbeddingModel model)
     {
         root.IsRetiring = false;
         root.NeedsRun = true;
+        root.Model = model;
         lock (_gate)
         {
             _roots[key] = root;
@@ -1157,7 +1177,10 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
     /// model or chunker version, if no live host holds it, as the root's previous index. Failing to is not an error: the new
     /// index simply serves from its first stored batch, as before issue #104. A previous index the root already has open is
     /// never replaced (it would be left open and detached, holding its lock, while an older index served in its place): with
-    /// one present nothing is opened, and one that appears meanwhile keeps its place.
+    /// one present nothing is opened, and one that appears meanwhile keeps its place. An index built by a chunker version
+    /// before <see cref="IndexRedactionSchema.FirstScannedChunkerVersion"/> is never adopted (PR 121 review): its chunks were
+    /// not scanned, so serving it would hand retrieval the secrets this build keeps out of the index;
+    /// <see cref="DeleteUnscannedIndexes"/> removes it once the root's current index completes.
     /// </summary>
     private async Task AdoptPreviousAsync(string key, RepositoryRoot repository, IndexEmbeddingModel model, IReadOnlyList<IndexedProject> projects, CancellationToken stopping)
     {
@@ -1176,6 +1199,7 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             candidate = _retention.GetUsage()
                 .Where(u => !u.InUse && !string.IsNullOrEmpty(u.EmbeddingModel) && !string.IsNullOrEmpty(u.ChunkerVersion) && !string.IsNullOrWhiteSpace(u.RootPath))
                 .Where(u => !(string.Equals(u.EmbeddingModel, model.ModelId, StringComparison.Ordinal) && string.Equals(u.ChunkerVersion, ContextEngineVersions.ChunkerVersion, StringComparison.Ordinal)))
+                .Where(u => IndexRedactionSchema.IsScannedChunkerVersion(u.ChunkerVersion))
                 .Where(u => SameRoot(u.RootPath!, normalized))
                 .Where(u => IndexStateFile.Read(Path.Combine(u.Directory, IndexFolder.StateFileName))?.LastFullSweepUtc is not null)
                 .OrderByDescending(u => u.LastUsedUtc)
@@ -1217,16 +1241,66 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
             LogPreviousNotAdopted(_logger, repository.Path, ex.Message);
         }
 
-        static bool SameRoot(string rootPath, string normalized)
+    }
+
+    /// <summary>
+    /// Deletes the root's indexes built before index-time redaction (a chunker version below
+    /// <see cref="IndexRedactionSchema.FirstScannedChunkerVersion"/>; PR 121 review) once the root's current index is complete
+    /// and this host owns it: they hold unscanned text, are never adopted or served, and would otherwise wait for the age
+    /// rule (thirty days by default). Once per root and session; an index a live host still holds is left alone (retention
+    /// refuses it) and tried again in the next session.
+    /// </summary>
+    private void DeleteUnscannedIndexes(RootIndex current)
+    {
+        var key = Key(current.Path);
+        lock (_gate)
         {
-            try
+            if (!current.IsWriter || !_unscannedSwept.Add(key))
             {
-                return string.Equals(IndexIdentity.NormalizeRoot(rootPath), normalized, StringComparison.Ordinal);
+                return;
             }
-            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        }
+
+        try
+        {
+            var normalized = current.Store.Identity.NormalizedRoot;
+            foreach (var usage in _retention.GetUsage())
             {
-                return false;
+                if (usage.InUse
+                    || string.IsNullOrWhiteSpace(usage.RootPath)
+                    || string.Equals(usage.Id, current.Store.Identity.Id, StringComparison.Ordinal)
+                    || IndexRedactionSchema.IsScannedChunkerVersion(usage.ChunkerVersion)
+                    || !SameRoot(usage.RootPath, normalized))
+                {
+                    continue;
+                }
+
+                var outcome = _retention.Delete(usage.Id);
+                if (outcome == IndexDeleteOutcome.Deleted)
+                {
+                    LogUnscannedDeleted(_logger, usage.Id, current.Path, usage.ChunkerVersion ?? "(none)", usage.DiskBytes / 1048576.0);
+                }
+                else if (outcome != IndexDeleteOutcome.NotFound)
+                {
+                    LogUnscannedNotDeleted(_logger, usage.Id, current.Path, outcome.ToString());
+                }
             }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            LogUnscannedNotDeleted(_logger, "(any)", current.Path, ex.Message);
+        }
+    }
+
+    private static bool SameRoot(string rootPath, string normalized)
+    {
+        try
+        {
+            return string.Equals(IndexIdentity.NormalizeRoot(rootPath), normalized, StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
         }
     }
 
@@ -1510,8 +1584,10 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
                     LastRunStatistics = pass.Statistics;
                     Interlocked.Increment(ref _fullRuns);
 
-                    // The first full sweep of a root's new index completed: its previous index has served its purpose.
+                    // The first full sweep of a root's new index completed: its previous index has served its purpose, and
+                    // the root's indexes from before index-time redaction go.
                     await CloseRetiredAsync(Key(root.Path), stopping).ConfigureAwait(false);
+                    DeleteUnscannedIndexes(root);
                 }
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested && !stopping.IsCancellationRequested)
@@ -1951,6 +2027,12 @@ internal sealed partial class IndexingService : IHostedService, IAsyncDisposable
 
     [LoggerMessage(EventId = 2980, Level = LogLevel.Information, Message = "The owner of index {IndexId} for {Root} completed its first full sweep; this host stops serving the root's previous index.")]
     private static partial void LogOwnerCompleted(ILogger logger, string indexId, string root);
+
+    [LoggerMessage(EventId = 2981, Level = LogLevel.Information, Message = "Index {IndexId} for {Root} was built by chunker version {ChunkerVersion}, before the secret scanner ran at index time, and the root's current index is complete: deleted ({Megabytes:F1} MB).")]
+    private static partial void LogUnscannedDeleted(ILogger logger, string indexId, string root, string chunkerVersion, double megabytes);
+
+    [LoggerMessage(EventId = 2982, Level = LogLevel.Warning, Message = "Index {IndexId} for {Root}, built before the secret scanner ran at index time, could not be deleted ({Reason}); it is tried again in the next session.")]
+    private static partial void LogUnscannedNotDeleted(ILogger logger, string indexId, string root, string reason);
 
     [LoggerMessage(EventId = 2914, Level = LogLevel.Debug, Message = "The battery saver state could not be read; indexing is not paused for it.")]
     private static partial void LogPowerFailed(ILogger logger, Exception exception);

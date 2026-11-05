@@ -33,16 +33,19 @@ before anything is written to logs, the audit trail or the index. In practice:
    asks for it.
 6. Logs and audit writes call `LogRedactor.Redact` and cannot restore. Do not put a `RedactionSession`
    in a log call.
-7. The indexing pipeline calls `IndexRedactor.Redact` on every chunk's text before the chunk is written (its row, its
-   FTS5 rows and the text the embedding is computed from), so no secret from an ordinary source file reaches `index.db`.
+7. The indexing pipeline scans every file whole and calls `IndexRedactor.Redact` on every chunk's text and breadcrumb
+   before the chunk is written (its row, its FTS5 rows and the text the embedding is computed from: breadcrumb and
+   text), so no secret from an ordinary source file reaches `index.db`. An index built before this (chunker version
+   below `"2"`) is never served and is deleted once the root's current index completes.
    The placeholder is marked as the index's, `<redacted-index:kind>`, and is never restored by any session: a
    retrieved chunk that carries one is sent to the model as is (the scanner at the model boundary allow-lists it, so it is
    not counted again), and an edit that carries one is bounced to the model (work item 3.10), since only text read from a
    file is literal. The Index window shows how many chunks of each root were redacted.
 
 If scanning throws `RegexMatchTimeoutException`, the text could not be verified. The gateway must not send it.
-`LogRedactor` fails closed too: it returns `<redacted:scan-failed>` instead of the text, and `IndexRedactor` stores
-`<redacted-index:scan-failed>` in place of the chunk's text.
+`LogRedactor` fails closed too: it returns `<redacted:scan-failed>` instead of the text, and the index stores
+`<redacted-index:scan-failed>` in place of the chunk's text and breadcrumb (for every chunk and signature of a file whose
+whole-file scan timed out, and for a chunk into which a secret found over the file cannot be mapped).
 
 ## Placeholders
 
